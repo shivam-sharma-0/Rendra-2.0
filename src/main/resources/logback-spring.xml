@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logging layout:
+    logs/
+      04-12-2026/            <- one folder per day (dd-MM-yyyy)
+        12-13.log            <- one file per hour (start-end), live-written
+        13-14.log
+
+  A SiftingAppender + HourFolderDiscriminator picks the folder/file per event; the
+  FILE appender is wrapped in an AsyncAppender so request threads never block on disk I/O.
+-->
+<configuration>
+
+    <property name="LOG_DIR" value="logs"/>
+    <property name="PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"/>
+
+    <!-- Console: readable output during development. -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Per-day-folder / per-hour-file, routed by the event timestamp. -->
+    <appender name="FILE" class="ch.qos.logback.classic.sift.SiftingAppender">
+        <discriminator class="com.code.pal.shared.logging.HourFolderDiscriminator">
+            <key>logfile</key>
+        </discriminator>
+        <sift>
+            <appender name="FILE-${logfile}" class="ch.qos.logback.core.FileAppender">
+                <file>${LOG_DIR}/${logfile}.log</file>
+                <append>true</append>
+                <immediateFlush>true</immediateFlush>
+                <encoder>
+                    <pattern>${PATTERN}</pattern>
+                </encoder>
+            </appender>
+        </sift>
+        <!-- Close a nested (hour) appender once it has been idle > 70 min, freeing the file
+             handle; cap concurrent appenders so memory stays bounded. -->
+        <timeout>70 minutes</timeout>
+        <maxAppenderCount>48</maxAppenderCount>
+    </appender>
+
+    <!-- Non-blocking bridge to FILE: keeps logging off the request thread's critical path. -->
+    <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="FILE"/>
+        <queueSize>4096</queueSize>
+        <discardingThreshold>0</discardingThreshold> <!-- 0 = never drop events, even at INFO -->
+        <neverBlock>false</neverBlock>                <!-- block briefly if full rather than lose logs -->
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE"/>
+    </root>
+
+</configuration>

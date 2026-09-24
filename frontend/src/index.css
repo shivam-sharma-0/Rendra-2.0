@@ -1,0 +1,293 @@
+@import "tailwindcss";
+
+/* Class-based dark mode: `dark:` applies when <html> has `.dark`. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── Code·Pal design system — "Cobalt & Ember" ───────────────────────────────
+   Our own identity, not a clone of any reference:
+   • Neutral porcelain base (faintly warm — between cold and cream).
+   • A cool, confident COBALT primary paired with a warm EMBER spark used only
+     for highlights. The cool-base / warm-spark duality is the signature.
+   • Every accent carries a tonal ramp (hover / active / strong / subtle) so
+     interaction states are principled, not one-off.
+   • Flat, crisp surfaces + hairline borders. Depth from restraint, not glass.
+   • A mono voice for code-native touches — this is a coding agent. */
+:root {
+  color-scheme: light;
+
+  /* Surfaces — porcelain neutrals */
+  --bg-solid: #f8f7f4;
+  --surface: #fffffe;
+  --card: #ffffff;
+  --border: #e7e4dc;
+  --border-strong: #d6d1c6;
+
+  /* Ink */
+  --text: #181a1f;
+  --muted: #63656e;
+  --faint: #9a9ba3;
+
+  /* Primary — cobalt indigo, with ramp */
+  --accent: #3d5af1;
+  --accent-hover: #2f49d0;
+  --accent-active: #2740b4;
+  --accent-strong: #7d8ff7;
+  --accent-subtle: #eef0fe;
+  --accent-contrast: #ffffff;
+
+  /* Spark — ember coral, highlights only, with ramp */
+  --spark: #f2603a;
+  --spark-hover: #d94e29;
+  --spark-subtle: #fdece6;
+  --spark-contrast: #ffffff;
+
+  /* Semantic status */
+  --success: #12855a;
+  --warning: #c76a09;
+  --danger: #d63b30;
+
+  /* Focus + elevation (cool-neutral shadows) */
+  --ring: rgba(61, 90, 241, 0.30);
+  --shadow-sm: 0 1px 2px rgba(20, 22, 35, 0.06);
+  --shadow-pop: 0 8px 24px -14px rgba(20, 22, 35, 0.22);
+  --shadow-lg: 0 24px 60px -32px rgba(20, 22, 35, 0.28);
+
+  /* Ambient glow — a single still cobalt field + a faint ember trace */
+  --glow-1: rgba(61, 90, 241, 0.10);
+  --glow-2: rgba(242, 96, 58, 0.06);
+
+  /* Radius scale */
+  --radius-field: 10px;
+  --radius-panel: 16px;
+  --radius-chip: 8px;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --bg-solid: #0c0d10;
+  --surface: #16171a;
+  --card: #16171a;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  --text: #eceef2;
+  --muted: #9a9ca6;
+  --faint: #6a6c76;
+
+  --accent: #6b82ff;
+  --accent-hover: #5670f5;
+  --accent-active: #4860e0;
+  --accent-strong: #9aa9ff;
+  --accent-subtle: rgba(107, 130, 255, 0.14);
+  --accent-contrast: #0c0d10;
+
+  --spark: #ff7a52;
+  --spark-hover: #f2603a;
+  --spark-subtle: rgba(255, 122, 82, 0.15);
+  --spark-contrast: #0c0d10;
+
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+
+  --ring: rgba(107, 130, 255, 0.40);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 12px 32px -16px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 30px 64px -30px rgba(0, 0, 0, 0.72);
+
+  --glow-1: rgba(107, 130, 255, 0.13);
+  --glow-2: rgba(255, 122, 82, 0.07);
+}
+
+/* Expose tokens as Tailwind utilities (bg-surface, text-muted, text-accent,
+   text-spark, rounded-panel …). */
+@theme inline {
+  --color-bg-solid: var(--bg-solid);
+  --color-surface: var(--surface);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-spark: var(--spark);
+  --color-spark-hover: var(--spark-hover);
+  --color-spark-subtle: var(--spark-subtle);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Inter Tight", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-brand: "Space Grotesk", "Inter Tight", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --radius-chip: var(--radius-chip);
+  --radius-field: var(--radius-field);
+  --radius-panel: var(--radius-panel);
+
+  --animate-fade-up: fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-pop-in: pop-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-pulse-soft: pulse-soft 2.4s ease-in-out infinite;
+}
+
+/* ── Base ────────────────────────────────────────────────────────────────── */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-solid);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  transition: background-color 0.4s ease, color 0.25s ease;
+}
+
+/* Display headings: tighter, denser — editorial hierarchy. */
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* Brand wordmark — Rendra logotype. */
+.font-brand {
+  font-family: var(--font-brand);
+  letter-spacing: -0.01em;
+}
+
+/* Mono voice — code-native touches (labels, chips, snippets). */
+.font-mono {
+  font-family: var(--font-mono);
+  font-feature-settings: normal;
+}
+
+/* ── Surfaces (flat & crisp, not glassy) ─────────────────────────────────── */
+.surface {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+}
+
+.hairline {
+  border-color: var(--border);
+}
+
+/* Restrained accent text — cobalt→ember, no shimmer. */
+.text-accent-gradient {
+  background: linear-gradient(100deg, var(--accent), var(--spark));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ── Celestial cycle (realistic sunset / moonrise on theme switch) ───────────
+   The sun and moon share ONE resting spot (center of the sky) and ONE diagonal
+   arc toward the horizon. `.dark` flips which body is risen. Only transform and
+   opacity animate, so the browser tweens a smooth, natural rise/set — no JS. */
+.celestial {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6.5rem;
+  height: 6.5rem;
+  transform: translate(-50%, -50%);
+}
+.sun,
+.moon-group {
+  position: absolute;
+  inset: 0;
+  transition:
+    transform 1.7s cubic-bezier(0.45, 0, 0.15, 1),
+    opacity 1.3s ease;
+  will-change: transform, opacity;
+}
+
+/* The discs themselves are hand-built SVGs (see AuroraBackground.tsx); these
+   wrappers only carry position + the rise/set transform. */
+.moon {
+  position: absolute;
+  inset: 0;
+}
+
+/* Clouds flanking the moon — lit on the moon-facing (upper) edge, dark below. */
+.cloud {
+  position: absolute;
+  width: 8.5rem;
+  height: 3rem;
+  border-radius: 9999px;
+  filter: blur(9px);
+  background: radial-gradient(
+    120% 190% at 50% -25%,
+    rgba(188, 202, 240, 0.55),
+    rgba(40, 46, 70, 0.85) 52%,
+    rgba(10, 12, 22, 0.95) 100%
+  );
+}
+.cloud-a { left: -4.5rem; top: 4.2rem; transform: rotate(-6deg); }
+.cloud-b { left: 1.5rem; top: 5rem; width: 7rem; transform: rotate(5deg); }
+
+/* Shared arc endpoints. Risen = center (0,0). Set = sunk down-and-right toward
+   the horizon, shrunk + faded — the angle a real sun sets at. */
+.sun { transform: translate(0, 0) scale(1); opacity: 1; }
+.moon-group { transform: translate(42%, 200%) scale(0.82); opacity: 0; }
+
+.dark .sun { transform: translate(42%, 200%) scale(0.82); opacity: 0; }
+.dark .moon-group { transform: translate(0, 0) scale(1); opacity: 1; }
+
+/* Thin custom scrollbar. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* ── Keyframes ───────────────────────────────────────────────────────────── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.85); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

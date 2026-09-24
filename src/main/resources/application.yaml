@@ -1,0 +1,102 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: Code-Pal
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:5432/${POSTGRES_DB:codepal}?TimeZone=UTC
+    username: ${POSTGRES_USER:admin}
+    password: ${POSTGRES_PASSWORD:admin1234}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 10000
+      max-lifetime: 1800000
+      leak-detection-threshold: 30000
+
+  # ── Redis (cross-instance realtime Pub/Sub fan-out) ──────────────────────────
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  # ── JPA / Hibernate ──────────────────────────────────────────────────────────
+  jpa:
+    hibernate:
+      ddl-auto: update          # dev: Hibernate manages the schema. Switch to 'validate' + migrations for prod.
+    show-sql: false
+    open-in-view: false         # avoid lazy-loading in the view layer; keep tx boundaries in services
+    properties:
+      hibernate:
+        format_sql: false
+        jdbc:
+          time_zone: UTC
+
+  # ── OAuth2 login (Google) ────────────────────────────────────────────────────
+  # client-id is a public identifier (safe to default); the SECRET is env-only — never
+  # commit it. Rotate any secret that has ever been pasted into source control.
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            # client-id is public (appears in the browser during the OAuth flow) → safe to default.
+            client-id: ${GOOGLE_CLIENT_ID:350758092723-d1kgrbg01mtmgve9ujrfo3kq4ffiidd1.apps.googleusercontent.com}
+            client-secret: ${GOOGLE_CLIENT_SECRET:}   # SECRET — must be provided via env; never commit.
+            scope: [ email, profile ]
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+        provider:
+          google:
+            authorization-uri: https://accounts.google.com/o/oauth2/v2/auth
+            token-uri: https://oauth2.googleapis.com/token
+            user-info-uri: https://www.googleapis.com/oauth2/v3/userinfo
+            user-name-attribute: email
+
+# ── JWT (RS256, asymmetric) ──────────────────────────────────────────────────
+# Only this service holds the private key (signs tokens); any other service verifies
+# with the public key alone — so a future microservice split needs no shared secret.
+jwt:
+  access-expiry: ${JWT_ACCESS_EXPIRY:900000}      # 15 minutes (ms)
+  refresh-expiry: ${JWT_REFRESH_EXPIRY:604800000} # 7 days (ms)
+  rsa:
+    private-key: ${JWT_PRIVATE_KEY:classpath:jwt/private_key.pem}
+    public-key: ${JWT_PUBLIC_KEY:classpath:jwt/public_key.pem}
+
+# ── App / OAuth redirect ──────────────────────────────────────────────────────
+# After a successful Google login the backend mints our own JWTs and redirects the
+# browser back to the SPA here (tokens appended as query params). Point this at the
+# frontend origin/route. Only these exact URLs are honoured (open-redirect guard).
+app:
+  oauth2:
+    success-redirect: ${OAUTH_SUCCESS_REDIRECT:http://localhost:5173/oauth/callback}
+    failure-redirect: ${OAUTH_FAILURE_REDIRECT:http://localhost:5173/oauth/callback}
+
+  # ── Agent (LLM coding agent) ──────────────────────────────────────────────────
+  # LLM provider is OpenAI-compatible (Groq now, OpenRouter/others later — just swap base-url/key).
+  # api-key is a SECRET → env-only, no default. Rotate any key ever pasted into chat/source.
+  agent:
+    llm:
+      base-url: ${GROQ_BASE_URL:https://api.groq.com/openai}
+      api-key: ${GROQ_API_KEY:}
+      temperature: 0.2
+    # Model per mode: fast/cheap for chat, stronger for build/plan.
+    models:
+      build: ${AGENT_MODEL_BUILD:llama-3.3-70b-versatile}
+      chat: ${AGENT_MODEL_CHAT:llama-3.1-8b-instant}
+      plan: ${AGENT_MODEL_PLAN:llama-3.3-70b-versatile}
+    # Per-project code lives here (one dir per project).
+    workspace-base-path: ${AGENT_WORKSPACE_PATH:./workspaces}
+    # Safety limits for a single run.
+    max-iterations: ${AGENT_MAX_ITERATIONS:25}
+    run-timeout-ms: ${AGENT_RUN_TIMEOUT_MS:300000}
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+# Rolling file config (datewise folder -> hourwise files) lives in logback-spring.xml.
+logging:
+  level:
+    '[com.code.pal]': ${LOG_LEVEL:INFO}
+    '[org.springframework.security]': WARN
