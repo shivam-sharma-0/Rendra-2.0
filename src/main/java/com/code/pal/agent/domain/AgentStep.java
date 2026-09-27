@@ -18,7 +18,9 @@ import java.util.UUID;
 @Entity
 @Table(
         name = "agent_steps",
-        indexes = @Index(name = "ix_agent_steps_run_seq", columnList = "run_id, seq")
+        // Unique (run_id, seq) guarantees timeline integrity and also serves ordered range scans, so
+        // two concurrent emits can never persist the same sequence number.
+        uniqueConstraints = @UniqueConstraint(name = "uq_agent_steps_run_seq", columnNames = {"run_id", "seq"})
 )
 @Getter
 @Setter

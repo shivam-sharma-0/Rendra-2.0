@@ -37,6 +37,12 @@
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
 
+		<!-- ── Observability (health, metrics, info via /actuator) ─ -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+
 		<!-- ── WebSocket (realtime agent stream on /realtime) ───── -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -58,6 +64,16 @@
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
+		</dependency>
+
+		<!-- ── Schema migrations (Flyway) — replaces ddl-auto for a validated, versioned schema ─ -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
 
 		<!-- ── Security ─────────────────────────────────────────── -->

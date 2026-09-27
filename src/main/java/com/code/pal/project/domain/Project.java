@@ -75,6 +75,10 @@ public class Project {
     @Column(name = "published_url", length = 512)
     String publishedUrl;
 
+    /** Stable public slug used in the published URL ({@code /p/{slug}}). Assigned on first publish. */
+    @Column(name = "public_slug", length = 64, unique = true)
+    String publicSlug;
+
     /** Mirrors the deployment lifecycle. */
     @Enumerated(EnumType.STRING)
     @Column(name = "deployment_status", nullable = false, length = 16)

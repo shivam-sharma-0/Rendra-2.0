@@ -282,6 +282,13 @@ body {
   50% { opacity: 0.55; transform: scale(0.85); }
 }
 
+/* Shared primitives (components/ui/States.tsx): spinner + skeleton shimmer. */
+@keyframes kiln-spin { to { transform: rotate(360deg); } }
+@keyframes kiln-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   ::before,

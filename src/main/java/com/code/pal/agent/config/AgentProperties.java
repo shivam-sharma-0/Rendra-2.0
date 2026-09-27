@@ -6,10 +6,11 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
-/**
- * Agent configuration ({@code app.agent.*}). Kept provider-agnostic: the LLM block is any
- * OpenAI-compatible endpoint (Groq today, OpenRouter/OpenAI later) — only base-url/key/models change.
- */
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/** Configuration for agent execution and its provider connection. */
 @Component
 @ConfigurationProperties(prefix = "app.agent")
 @Getter
@@ -21,40 +22,88 @@ public class AgentProperties {
 
     /** Root directory holding one sub-folder per project's code. */
     private String workspaceBasePath = "./workspaces";
-
-    /** Hard cap on LLM↔tool iterations in a single run (runaway-loop guard). */
     private int maxIterations = 25;
-
-    /** Wall-clock budget for a single run. */
+    /** Hard caps independent of iterations because one response may request several tools. */
+    private int maxModelCalls = 25;
+    private int maxToolCalls = 60;
+    /** Approximate character budget for prompt context plus accumulated tool results. */
+    private int contextBudgetChars = 80_000;
+    private int projectMapBudgetChars = 18_000;
+    private int conversationBudgetChars = 20_000;
+    private int projectScanMaxFiles = 5_000;
+    private int projectScanMaxDepth = 12;
+    private int projectInstructionMaxChars = 4_000;
     private long runTimeoutMs = 300_000;
-
-    /** Max concurrent runs on this instance (worker threads) — global backpressure. */
     private int workerConcurrency = 2;
+    /** Maximum readonly calls from one model response to run at once. */
+    private int toolConcurrency = 4;
+    /** Coalesce model token deltas before broadcasting a live socket delta. */
+    private int streamBatchChars = 96;
+    private long streamBatchIntervalMs = 250;
+    /** Coarser cadence for persisting the growing assistant text, so streaming stays O(n) not O(n²). */
+    private int streamPersistChars = 4_000;
+    private long streamPersistIntervalMs = 3_000;
+    /** How often a crashed/lost run is recovered. */
+    private long staleSweepIntervalMs = 30_000;
+    /** A live worker renews its run's heartbeat + project lock at this interval. */
+    private long heartbeatIntervalMs = 15_000;
+    /** Restore the pre-run Git snapshot when a BUILD run fails. */
+    private boolean rollbackOnFailure = true;
+    /** Maximum fix/validate cycles after the first failed validation. */
+    private int maxRepairAttempts = 3;
+    /** Per controlled package validation process. */
+    private long validationTimeoutMs = 120_000;
+    /** Bound structured diagnostics returned to the model. */
+    private int maxValidationDiagnostics = 40;
+    /** Bound captured process output before parsing, independent of model context limits. */
+    private int validationOutputMaxChars = 80_000;
+
+    /**
+     * How long a project lock / run heartbeat stays valid without renewal. A running worker renews
+     * every {@link #heartbeatIntervalMs}, so a run is only reclaimed once several heartbeats are
+     * missed (i.e. the worker actually died) â€” never while it is merely busy in a long LLM stream.
+     */
+    public long leaseMs() {
+        return Math.max(30_000, heartbeatIntervalMs * 3);
+    }
 
     @Getter
     @Setter
     public static class Llm {
-        /** OpenAI-compatible base URL (e.g. https://api.groq.com/openai). */
         private String baseUrl;
-        /** Secret API key — supplied via env, never committed. */
         private String apiKey;
         private double temperature = 0.2;
+        /** Initial request plus this many retry attempts are bounded by maxAttempts. */
+        private int maxAttempts = 3;
+        private long retryInitialBackoffMs = 500;
+        private long retryMaxBackoffMs = 5_000;
     }
 
     @Getter
     @Setter
     public static class Models {
-        private String build;
-        private String chat;
+        /** Free-tier models often rate-limit individually; round-robin spreads calls across all of them. */
+        private List<String> build = new ArrayList<>();
+        private List<String> chat = new ArrayList<>();
         private String plan;
+
+        private final AtomicInteger buildIndex = new AtomicInteger();
+        private final AtomicInteger chatIndex = new AtomicInteger();
+
+        String nextBuild() { return roundRobin(build, buildIndex); }
+        String nextChat() { return roundRobin(chat, chatIndex); }
+
+        private static String roundRobin(List<String> options, AtomicInteger index) {
+            if (options == null || options.isEmpty()) return null;
+            return options.get(Math.floorMod(index.getAndIncrement(), options.size()));
+        }
     }
 
-    /** Model id for a given working mode. */
     public String modelFor(ProjectType mode) {
         return switch (mode) {
-            case CHAT -> models.getChat();
+            case CHAT -> models.nextChat();
             case PLAN -> models.getPlan();
-            case BUILD -> models.getBuild();
+            case BUILD -> models.nextBuild();
         };
     }
 }

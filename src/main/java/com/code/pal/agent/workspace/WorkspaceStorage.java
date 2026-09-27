@@ -13,8 +13,8 @@ import java.util.UUID;
 
 /**
  * Owns each project's on-disk code directory ({@code <base>/<projectId>}). Central place for
- * creating, deleting, and — crucially — <b>safely resolving</b> a relative path so a tool can never
- * escape its project's folder (path-traversal guard).
+ * creating and deleting a project's workspace. Path safety for tool access is enforced by
+ * {@link com.code.pal.agent.tool.AgentContext#resolveSafe} (traversal + symlink + protected-path guard).
  */
 @Slf4j
 @Service
@@ -40,19 +40,6 @@ public class WorkspaceStorage {
             throw new UncheckedIOException("Could not create workspace " + projectId, e);
         }
         return dir;
-    }
-
-    /**
-     * Resolve a caller-supplied relative path inside the project, rejecting anything that escapes
-     * the project directory (e.g. {@code ../}, absolute paths, symlink tricks after normalize).
-     */
-    public Path resolveSafe(UUID projectId, String relativePath) {
-        Path dir = projectDir(projectId);
-        Path resolved = dir.resolve(relativePath).normalize();
-        if (!resolved.startsWith(dir)) {
-            throw new IllegalArgumentException("Path escapes the project workspace: " + relativePath);
-        }
-        return resolved;
     }
 
     /** Recursively delete the project's directory (workspace cleanup on project delete). */

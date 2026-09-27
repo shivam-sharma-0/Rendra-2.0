@@ -19,7 +19,12 @@ public class ToolRegistry {
     private final Map<String, AgentTool> byName;
 
     public ToolRegistry(List<AgentTool> tools) {
-        this.byName = tools.stream().collect(Collectors.toMap(AgentTool::name, Function.identity()));
+        this.byName = tools.stream().collect(Collectors.toUnmodifiableMap(
+                AgentTool::name,
+                Function.identity(),
+                (first, duplicate) -> {
+                    throw new IllegalStateException("Duplicate agent tool name: " + first.name());
+                }));
     }
 
     public AgentTool get(String name) {

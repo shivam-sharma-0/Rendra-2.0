@@ -4,6 +4,7 @@ import com.code.pal.project.domain.ProjectType;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.FieldDefaults;
+import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 import org.springframework.data.domain.Persistable;
@@ -68,6 +69,11 @@ public class Message implements Persistable<String> {
     @Column(name = "reply_to_id", length = 40)
     String replyToId;
 
+    /** The reacting user's thumbs up/down on this message, if any. */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 8)
+    MessageFeedback feedback;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     Instant createdAt;
@@ -75,6 +81,13 @@ public class Message implements Persistable<String> {
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     Instant updatedAt;
+
+    /** Tie-breaker for display order: a user turn and its assistant placeholder are created back to
+     * back and can land on the exact same {@code createdAt} instant (JVM clock resolution), which
+     * otherwise leaves their relative order to chance on a re-fetch. Assigned by {@link
+     * com.code.pal.message.MessageSequence}, not the database, so it stays correct across a restart
+     * (a fresh counter still sorts after every pre-restart row, since createdAt is compared first). */
+    @Column(name = "seq", nullable = false) @ColumnDefault("0") @Builder.Default long seq = 0;
 
     /** New until persisted (id is assigned, so Hibernate can't infer this itself). */
     @Override

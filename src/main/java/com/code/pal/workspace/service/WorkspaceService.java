@@ -3,7 +3,9 @@ package com.code.pal.workspace.service;
 import com.code.pal.workspace.domain.WorkspaceMember;
 import com.code.pal.workspace.domain.WorkspaceRole;
 import com.code.pal.workspace.dto.CreateWorkspaceRequest;
+import com.code.pal.workspace.dto.InvitePreviewResponse;
 import com.code.pal.workspace.dto.MemberResponse;
+import com.code.pal.workspace.dto.WorkspaceInviteResponse;
 import com.code.pal.workspace.dto.WorkspaceResponse;
 
 import java.util.List;
@@ -47,6 +49,9 @@ public interface WorkspaceService {
      */
     WorkspaceMember requireMembership(Long userId, UUID workspaceId);
 
+    /** Non-throwing membership check — used by other modules to combine with project-level access. */
+    boolean isMember(Long userId, UUID workspaceId);
+
     /* ── Members (collaboration) ─────────────────────────────────────────────── */
 
     /** List the workspace's members (caller must be a member). */
@@ -60,4 +65,15 @@ public interface WorkspaceService {
 
     /** Remove a member (caller must be OWNER/ADMIN; the OWNER can't be removed). */
     void removeMember(Long actorId, UUID workspaceId, UUID memberId);
+
+    /* ── Invite links (accept flow) ──────────────────────────────────────────── */
+
+    /** Create a shareable invite link (caller must be OWNER/ADMIN). */
+    WorkspaceInviteResponse createInvite(Long actorId, UUID workspaceId, String email, WorkspaceRole role);
+
+    /** Preview an invite for the accept screen (caller must be signed in). Never throws for a bad token. */
+    InvitePreviewResponse previewInvite(Long userId, String token);
+
+    /** Accept an invite, joining the workspace (caller must be signed in). */
+    void acceptInvite(Long userId, String token);
 }

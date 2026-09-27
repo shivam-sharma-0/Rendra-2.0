@@ -12,8 +12,9 @@
 <configuration>
 
     <property name="LOG_DIR" value="logs"/>
+    <!-- [%X{requestId:-}] carries the per-request correlation id set by CorrelationIdFilter. -->
     <property name="PATTERN"
-              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"/>
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{requestId:-}] %-5level %logger{36} - %msg%n"/>
 
     <!-- Console: readable output during development. -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">

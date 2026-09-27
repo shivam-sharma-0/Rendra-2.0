@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import AuroraBackground from '../components/AuroraBackground'
 import Logo from '../components/Logo'
+import { startProject, type ProjectType } from '../api/projects'
 
 /**
  * Landing spot for the backend's post-OAuth redirect. The refresh token was set as an
@@ -13,6 +14,9 @@ export default function OAuthCallback() {
   const { isAuthenticated, loading } = useAuth()
   const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
+  // Ensure the post-auth routing (which consumes the one-shot pending prompt) runs exactly once,
+  // even under React StrictMode's double-invoked effects in development.
+  const handled = useRef(false)
 
   useEffect(() => {
     // Surface a provider error passed back in the fragment (#error=…).
@@ -23,8 +27,27 @@ export default function OAuthCallback() {
       return
     }
     if (loading) return
-    if (isAuthenticated) navigate('/dashboard', { replace: true })
-    else setError('Could not complete sign-in. Please try again.')
+    if (!isAuthenticated) {
+      setError('Could not complete sign-in. Please try again.')
+      return
+    }
+    if (handled.current) return
+    handled.current = true
+    // Carry a guest's pending prompt through the OAuth round-trip: start their project and open it,
+    // otherwise land on the dashboard.
+    let cancelled = false
+    const pending = sessionStorage.getItem('kiln_pending_prompt')
+    if (pending) {
+      const mode = (sessionStorage.getItem('kiln_pending_mode') || 'BUILD') as ProjectType
+      sessionStorage.removeItem('kiln_pending_prompt')
+      sessionStorage.removeItem('kiln_pending_mode')
+      startProject(pending, mode)
+        .then((project) => { if (!cancelled) navigate(`/project/${project.id}`, { replace: true }) })
+        .catch(() => { if (!cancelled) navigate('/dashboard', { replace: true }) })
+    } else {
+      navigate('/dashboard', { replace: true })
+    }
+    return () => { cancelled = true }
   }, [isAuthenticated, loading, navigate])
 
   return (

@@ -3,33 +3,56 @@ package com.code.pal.identity.security;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.oauth2.client.web.AuthorizationRequestRepository;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.ObjectMapper;
 
-import java.io.*;
+import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.Base64;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 /**
- * Stores the in-flight {@link OAuth2AuthorizationRequest} in a short-lived, HttpOnly
- * cookie instead of an HTTP session — so the whole app stays session-less (the API's
- * core guarantee) even during the OAuth handshake.
+ * Stores the in-flight {@link OAuth2AuthorizationRequest} server-side in Redis. The browser gets
+ * only a random, short-lived opaque state handle, so it never supplies serialized Java objects.
  *
  * <p>The cookie exists only for the few seconds between redirecting to Google and the
- * callback, is {@code SameSite=Lax} (survives the provider's top-level GET redirect),
- * and is deleted the moment it is consumed.
+ * callback, is {@code SameSite=Lax} (survives the provider's top-level GET redirect), and is
+ * deleted the moment it is consumed.
  */
 @Component
 public class HttpCookieOAuth2AuthorizationRequestRepository
         implements AuthorizationRequestRepository<OAuth2AuthorizationRequest> {
 
-    private static final String COOKIE_NAME = "cp_oauth2_auth_request";
+    private static final String COOKIE_NAME = "cp_oauth2_state";
+    private static final String KEY_PREFIX = "oauth2:authorization-request:";
     private static final int MAX_AGE_SECONDS = 180;
+    private static final SecureRandom RANDOM = new SecureRandom();
+
+    private final StringRedisTemplate redis;
+    private final ObjectMapper objectMapper;
+    private final boolean secure;
+
+    public HttpCookieOAuth2AuthorizationRequestRepository(
+            StringRedisTemplate redis,
+            ObjectMapper objectMapper,
+            @Value("${app.auth.cookie-secure}") boolean secure) {
+        this.redis = redis;
+        this.objectMapper = objectMapper;
+        this.secure = secure;
+    }
 
     @Override
     public OAuth2AuthorizationRequest loadAuthorizationRequest(HttpServletRequest request) {
-        return readCookie(request).map(HttpCookieOAuth2AuthorizationRequestRepository::deserialize).orElse(null);
+        return readCookie(request)
+                .flatMap(this::load)
+                .orElse(null);
     }
 
     @Override
@@ -39,23 +62,25 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
             deleteCookie(response);
             return;
         }
-        ResponseCookie cookie = baseCookie(serialize(authorizationRequest), MAX_AGE_SECONDS);
+        String stateId = newStateId();
+        store(stateId, authorizationRequest);
+        ResponseCookie cookie = baseCookie(stateId, MAX_AGE_SECONDS);
         response.addHeader("Set-Cookie", cookie.toString());
     }
 
     @Override
     public OAuth2AuthorizationRequest removeAuthorizationRequest(HttpServletRequest request,
                                                                  HttpServletResponse response) {
-        OAuth2AuthorizationRequest authRequest = loadAuthorizationRequest(request);
-        if (authRequest != null) {
-            deleteCookie(response);
-        }
+        String stateId = readCookie(request).orElse(null);
+        OAuth2AuthorizationRequest authRequest = stateId == null ? null : load(stateId).orElse(null);
+        if (stateId != null) redis.delete(redisKey(stateId));
+        deleteCookie(response);
         return authRequest;
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    private static java.util.Optional<String> readCookie(HttpServletRequest request) {
+    private static Optional<String> readCookie(HttpServletRequest request) {
         Cookie[] cookies = request.getCookies();
         if (cookies == null) return java.util.Optional.empty();
         for (Cookie c : cookies) {
@@ -64,11 +89,11 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
         return java.util.Optional.empty();
     }
 
-    private static ResponseCookie baseCookie(String value, int maxAge) {
+    private ResponseCookie baseCookie(String value, int maxAge) {
         return ResponseCookie.from(COOKIE_NAME, value)
                 .path("/")
                 .httpOnly(true)
-                .secure(false)          // dev over http; flip to true behind TLS
+                .secure(secure)
                 .sameSite("Lax")
                 .maxAge(maxAge)
                 .build();
@@ -78,24 +103,62 @@ public class HttpCookieOAuth2AuthorizationRequestRepository
         response.addHeader("Set-Cookie", baseCookie("", 0).toString());
     }
 
-    private static String serialize(OAuth2AuthorizationRequest obj) {
-        try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
-             ObjectOutputStream oos = new ObjectOutputStream(bos)) {
-            oos.writeObject(obj);
-            return Base64.getUrlEncoder().encodeToString(bos.toByteArray());
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to serialize authorization request", e);
+    private void store(String stateId, OAuth2AuthorizationRequest request) {
+        try {
+            redis.opsForValue().set(
+                    redisKey(stateId),
+                    objectMapper.writeValueAsString(StoredAuthorizationRequest.from(request)),
+                    Duration.ofSeconds(MAX_AGE_SECONDS));
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not store OAuth2 authorization request", e);
         }
     }
 
-    private static OAuth2AuthorizationRequest deserialize(String value) {
+    private Optional<OAuth2AuthorizationRequest> load(String stateId) {
         try {
-            byte[] data = Base64.getUrlDecoder().decode(value);
-            try (ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(data))) {
-                return (OAuth2AuthorizationRequest) ois.readObject();
-            }
+            String json = redis.opsForValue().get(redisKey(stateId));
+            if (json == null) return Optional.empty();
+            return Optional.of(objectMapper.readValue(json, StoredAuthorizationRequest.class).toRequest());
         } catch (Exception e) {
-            return null;   // tampered / stale cookie → treat as absent
+            return Optional.empty();
+        }
+    }
+
+    private static String newStateId() {
+        byte[] bytes = new byte[32];
+        RANDOM.nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    private static String redisKey(String stateId) {
+        return KEY_PREFIX + stateId;
+    }
+
+    private record StoredAuthorizationRequest(
+            String authorizationUri,
+            String clientId,
+            String redirectUri,
+            Set<String> scopes,
+            String state,
+            Map<String, Object> additionalParameters,
+            Map<String, Object> attributes) {
+
+        static StoredAuthorizationRequest from(OAuth2AuthorizationRequest request) {
+            return new StoredAuthorizationRequest(
+                    request.getAuthorizationUri(), request.getClientId(), request.getRedirectUri(),
+                    request.getScopes(), request.getState(), request.getAdditionalParameters(), request.getAttributes());
+        }
+
+        OAuth2AuthorizationRequest toRequest() {
+            return OAuth2AuthorizationRequest.authorizationCode()
+                    .authorizationUri(authorizationUri)
+                    .clientId(clientId)
+                    .redirectUri(redirectUri)
+                    .scopes(scopes == null ? Set.of() : scopes)
+                    .state(state)
+                    .additionalParameters(additionalParameters == null ? Map.of() : additionalParameters)
+                    .attributes(attributes == null ? Map.of() : attributes)
+                    .build();
         }
     }
 }

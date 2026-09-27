@@ -15,6 +15,29 @@ export type SessionResponse = { accessToken: string; user: AuthUser }
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
 export const BACKEND_ORIGIN = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8080'
 
+/** Fail a request that hangs rather than leaving the UI stuck forever. */
+const DEFAULT_TIMEOUT_MS = 30_000
+
+/** A short correlation id the backend echoes in logs (X-Request-Id) — pairs client + server traces. */
+function newRequestId(): string {
+  return (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)).replace(/-/g, '').slice(0, 24)
+}
+
+/**
+ * Merge a caller's abort signal (e.g. React Query cancellation) with a timeout signal, so requests
+ * abort on whichever fires first. Falls back gracefully where AbortSignal.any is unavailable.
+ */
+function withRequestDefaults(init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers)
+  if (!headers.has('X-Request-Id')) headers.set('X-Request-Id', newRequestId())
+  const timeout = AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
+  const signal =
+    init?.signal && typeof AbortSignal.any === 'function'
+      ? AbortSignal.any([init.signal, timeout])
+      : (init?.signal ?? timeout)
+  return { ...init, headers, signal }
+}
+
 /** Full-page redirect target that kicks off Google login on the backend. */
 export const googleLoginUrl = () => `${BACKEND_ORIGIN}/oauth2/authorization/google`
 
@@ -65,12 +88,12 @@ async function toError(res: Response): Promise<ApiClientError> {
 }
 
 async function postPublic<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${API_BASE}${path}`, withRequestDefaults({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include', // let the browser store the refresh cookie
     body: JSON.stringify(body),
-  })
+  }))
   if (!res.ok) throw await toError(res)
   return res.json() as Promise<T>
 }
@@ -84,7 +107,8 @@ export const authApi = {
 
   /** Exchange the refresh cookie for a fresh access token (no body). */
   async refresh(): Promise<SessionResponse> {
-    const res = await fetch(`${API_BASE}/api/auth/refresh`, { method: 'POST', credentials: 'include' })
+    const res = await fetch(`${API_BASE}/api/auth/refresh`,
+      withRequestDefaults({ method: 'POST', credentials: 'include' }))
     if (!res.ok) throw await toError(res)
     return res.json() as Promise<SessionResponse>
   },
@@ -92,7 +116,8 @@ export const authApi = {
   /** Clear the refresh cookie server-side. */
   async logout(): Promise<void> {
     try {
-      await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', credentials: 'include' })
+      await fetch(`${API_BASE}/api/auth/logout`,
+        withRequestDefaults({ method: 'POST', credentials: 'include' }))
     } catch {
       /* best-effort */
     }
@@ -104,10 +129,11 @@ export const authApi = {
  * via the cookie once before retrying. Always sends credentials so the cookie rides along.
  */
 async function authFetch(path: string, init?: RequestInit, allowRetry = true): Promise<Response> {
-  const headers = new Headers(init?.headers)
+  const withDefaults = withRequestDefaults(init)
+  const headers = withDefaults.headers as Headers
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: 'include' })
+  const res = await fetch(`${API_BASE}${path}`, { ...withDefaults, credentials: 'include' })
   if (res.status !== 401 || !allowRetry) return res
 
   try {
@@ -119,19 +145,30 @@ async function authFetch(path: string, init?: RequestInit, allowRetry = true): P
   return authFetch(path, init, false)
 }
 
-/** GET a JSON resource behind auth. */
-export async function apiGet<T>(path: string): Promise<T> {
-  const res = await authFetch(path)
+/** GET a JSON resource behind auth. Pass a signal (e.g. from React Query) to allow cancellation. */
+export async function apiGet<T>(path: string, opts?: { signal?: AbortSignal }): Promise<T> {
+  const res = await authFetch(path, { signal: opts?.signal })
   if (!res.ok) throw await toError(res)
   return res.json() as Promise<T>
 }
 
-/** Send a JSON body (POST/PATCH/PUT) behind auth. Returns undefined for 204 responses. */
-export async function apiSend<T>(method: string, path: string, body?: unknown): Promise<T> {
+/**
+ * Send a JSON body (POST/PATCH/PUT) behind auth. Returns undefined for 204 responses.
+ * An {@link opts.idempotencyKey} makes a create/mutation safe to retry (backend de-dupes on it).
+ */
+export async function apiSend<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  opts?: { signal?: AbortSignal; idempotencyKey?: string },
+): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (opts?.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey
   const res = await authFetch(path, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: opts?.signal,
   })
   if (!res.ok) throw await toError(res)
   return (res.status === 204 ? undefined : await res.json()) as T

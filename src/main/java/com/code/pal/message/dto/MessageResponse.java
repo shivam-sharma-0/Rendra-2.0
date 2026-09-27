@@ -1,6 +1,7 @@
 package com.code.pal.message.dto;
 
 import com.code.pal.message.domain.Message;
+import com.code.pal.message.domain.MessageFeedback;
 import com.code.pal.message.domain.MessageRole;
 import com.code.pal.message.domain.MessageStatus;
 import com.code.pal.project.domain.ProjectType;
@@ -17,6 +18,7 @@ public record MessageResponse(
         MessageStatus status,
         ProjectType mode,
         String replyToId,
+        MessageFeedback feedback,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -24,6 +26,6 @@ public record MessageResponse(
     public static MessageResponse from(Message m) {
         return new MessageResponse(
                 m.getId(), m.getProjectId(), m.getRole(), m.getContent(), m.getStatus(),
-                m.getMode(), m.getReplyToId(), m.getCreatedAt(), m.getUpdatedAt());
+                m.getMode(), m.getReplyToId(), m.getFeedback(), m.getCreatedAt(), m.getUpdatedAt());
     }
 }

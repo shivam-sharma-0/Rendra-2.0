@@ -1,8 +1,11 @@
 package com.code.pal.message.service.impl;
 
+import com.code.pal.message.MessageSequence;
 import com.code.pal.message.domain.Message;
+import com.code.pal.message.domain.MessageFeedback;
 import com.code.pal.message.dto.CreateMessageRequest;
 import com.code.pal.message.dto.MessageResponse;
+import com.code.pal.message.exception.MessageNotFoundException;
 import com.code.pal.message.repository.MessageRepository;
 import com.code.pal.message.service.MessageService;
 import com.code.pal.project.domain.Project;
@@ -35,26 +38,29 @@ public class MessageServiceImpl implements MessageService {
     private final ProjectService projectService;
     private final RealtimeService realtimeService;
     private final ApplicationEventPublisher events;
+    private final MessageSequence sequence;
 
     @Override
     @Transactional
     public List<MessageResponse> post(Long userId, UUID projectId, CreateMessageRequest request) {
-        Project project = projectService.requireAccessible(userId, projectId);
+        // Posting drives the agent (a write), so VIEWER-only collaborators are read-only here.
+        Project project = projectService.requireCanEdit(userId, projectId);
 
-        // Idempotent retry: the id already landed — return it instead of inserting a duplicate.
-        if (messageRepository.existsById(request.id())) {
-            return messageRepository.findById(request.id())
-                    .map(m -> List.of(MessageResponse.from(m)))
-                    .orElseGet(List::of);
-        }
+        // Idempotent retries may return only a message from this project. A global id lookup here
+        // would expose a message from another project to a caller who merely knows its client id.
+        var existing = messageRepository.findByIdAndProjectId(request.id(), projectId);
+        if (existing.isPresent()) return List.of(MessageResponse.from(existing.get()));
 
         ProjectType mode = request.mode() != null ? request.mode() : project.getType();
 
         List<Message> created = new ArrayList<>(2);
-        created.add(messageRepository.save(Message.user(projectId, request.id(), request.message(), mode, userId)));
+        Message userMessage = Message.user(projectId, request.id(), request.message(), mode, userId);
+        userMessage.setSeq(sequence.next());
+        created.add(messageRepository.save(userMessage));
         if (request.aiMessageId() != null && !request.aiMessageId().isBlank()) {
-            created.add(messageRepository.save(
-                    Message.assistantPlaceholder(projectId, request.aiMessageId(), request.id(), mode)));
+            Message assistantMessage = Message.assistantPlaceholder(projectId, request.aiMessageId(), request.id(), mode);
+            assistantMessage.setSeq(sequence.next());
+            created.add(messageRepository.save(assistantMessage));
             // Kick off the agent to fill this assistant placeholder (runs AFTER_COMMIT).
             events.publishEvent(new AssistantTurnRequested(projectId, userId, mode, request.aiMessageId()));
         }
@@ -74,6 +80,18 @@ public class MessageServiceImpl implements MessageService {
     public Page<MessageResponse> list(Long userId, UUID projectId, Pageable pageable) {
         projectService.requireAccessible(userId, projectId);   // authorize
         return messageRepository.findByProjectId(projectId, pageable).map(MessageResponse::from);
+    }
+
+    @Override
+    @Transactional
+    public MessageResponse setFeedback(Long userId, UUID projectId, String messageId, MessageFeedback feedback) {
+        projectService.requireAccessible(userId, projectId);
+        Message message = messageRepository.findByIdAndProjectId(messageId, projectId)
+                .orElseThrow(() -> new MessageNotFoundException("Message not found"));
+        message.setFeedback(feedback);
+        MessageResponse response = MessageResponse.from(messageRepository.save(message));
+        broadcastAfterCommit(projectId, List.of(response));
+        return response;
     }
 
     /** Fire the room broadcast once the surrounding transaction commits (falls back to inline if none). */

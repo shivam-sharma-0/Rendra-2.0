@@ -1,5 +1,6 @@
 package com.code.pal.message.service;
 
+import com.code.pal.message.domain.MessageFeedback;
 import com.code.pal.message.dto.CreateMessageRequest;
 import com.code.pal.message.dto.MessageResponse;
 import org.springframework.data.domain.Page;
@@ -22,4 +23,7 @@ public interface MessageService {
 
     /** A project's conversation, oldest-first. */
     Page<MessageResponse> list(Long userId, UUID projectId, Pageable pageable);
+
+    /** Set (or clear, when {@code feedback} is null) the caller's reaction to a message. */
+    MessageResponse setFeedback(Long userId, UUID projectId, String messageId, MessageFeedback feedback);
 }

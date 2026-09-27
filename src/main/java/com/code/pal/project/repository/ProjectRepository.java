@@ -7,6 +7,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Collection;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -25,4 +26,7 @@ public interface ProjectRepository extends JpaRepository<Project, UUID> {
      * {@code (workspace_id, type, last_activity_at)} index.
      */
     Page<Project> findByWorkspaceIdAndTypeIn(UUID workspaceId, Collection<ProjectType> types, Pageable pageable);
+
+    /** Resolve a published project by its public slug (for the public {@code /p/{slug}} serving). */
+    Optional<Project> findByPublicSlug(String publicSlug);
 }

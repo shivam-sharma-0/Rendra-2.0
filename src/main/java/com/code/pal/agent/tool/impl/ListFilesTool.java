@@ -1,5 +1,6 @@
 package com.code.pal.agent.tool.impl;
 
+import com.code.pal.agent.context.ContextSelectionReason;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.tool.AgentTool;
 import org.springframework.stereotype.Component;
@@ -19,7 +20,7 @@ public class ListFilesTool implements AgentTool {
 
     @Override
     public String name() {
-        return "list_files";
+        return "listFiles";
     }
 
     @Override
@@ -39,7 +40,8 @@ public class ListFilesTool implements AgentTool {
     public String execute(Map<String, Object> args, AgentContext context) throws Exception {
         String path = args.get("path") == null ? "." : args.get("path").toString();
         Path dir = context.resolveSafe(path);
-        if (!Files.isDirectory(dir)) return "Error: not a directory: " + path;
+        if (!Files.isDirectory(dir)) throw new IllegalArgumentException("Not a directory: " + path);
+        context.contextTrace().selected(path, ContextSelectionReason.DIRECTORY_DISCOVERY, 0);
 
         List<String> entries = new ArrayList<>();
         try (Stream<Path> list = Files.list(dir)) {

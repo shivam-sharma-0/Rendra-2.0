@@ -24,7 +24,7 @@ public class AuthCookieService {
 
     public AuthCookieService(
             @Value("${jwt.refresh-expiry:604800000}") long refreshExpiryMs,
-            @Value("${app.auth.cookie-secure:false}") boolean secure) {
+            @Value("${app.auth.cookie-secure}") boolean secure) {
         this.maxAge = Duration.ofMillis(refreshExpiryMs);
         this.secure = secure;
     }

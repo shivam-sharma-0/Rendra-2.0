@@ -34,3 +34,13 @@ build/
 
 ### Agent workspaces (generated project code) ###
 workspaces/
+.env
+.env.*
+!.env.example
+.secrets/
+
+### Secrets â€” never commit keys/credentials ###
+src/main/resources/jwt/
+*.pem
+
+logs/

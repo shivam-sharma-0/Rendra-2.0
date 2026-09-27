@@ -1,33 +1,24 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
-import { useAuth } from './auth/AuthContext'
-import ChatsPage from './pages/Chats'
-import Dashboard from './pages/Dashboard'
-import Landing from './pages/Landing'
-import OAuthCallback from './pages/OAuthCallback'
-import ProjectPage from './pages/Project'
-import ProjectsPage from './pages/Projects'
-import SettingsWorkspace from './pages/SettingsWorkspace'
-import Workspace from './pages/Workspace'
+import { lazy, Suspense } from 'react'
+import { Route, Routes } from 'react-router-dom'
+import { WorkspaceProvider } from './workspace/WorkspaceContext'
+import KilnApp from './kiln/KilnApp'
+import { LoadingState } from './components/ui/States'
 
-/** Root: the marketing landing for guests; signed-in users get the dashboard as their home. */
-function Home() {
-  const { isAuthenticated, loading } = useAuth()
-  if (loading) return null // wait for the silent refresh before deciding
-  return isAuthenticated ? <Navigate to="/dashboard" replace /> : <Landing />
-}
+// Code-split the heavy, rarely-first-viewed routes so the initial (landing/auth) payload stays small.
+const ProjectPage = lazy(() => import('./pages/Project'))
+const OAuthCallback = lazy(() => import('./pages/OAuthCallback'))
 
+/** Top-level routes. The Kiln design system renders the bulk of the app under the catch-all. */
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Home />} />
-      <Route path="/dashboard" element={<Dashboard />} />
-      <Route path="/projects" element={<ProjectsPage />} />
-      <Route path="/chats" element={<ChatsPage />} />
-      <Route path="/settings/workspace" element={<SettingsWorkspace />} />
-      <Route path="/project/:id" element={<ProjectPage />} />
-      <Route path="/app" element={<Workspace />} />
-      <Route path="/oauth/callback" element={<OAuthCallback />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <WorkspaceProvider>
+      <Suspense fallback={<LoadingState label="Loading…" />}>
+        <Routes>
+          <Route path="/project/:id/*" element={<ProjectPage />} />
+          <Route path="/oauth/callback" element={<OAuthCallback />} />
+          <Route path="*" element={<KilnApp />} />
+        </Routes>
+      </Suspense>
+    </WorkspaceProvider>
   )
 }

@@ -5,6 +5,7 @@ import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.RunStatus;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
+import com.code.pal.agent.runtime.AgentRuntime;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -31,7 +32,7 @@ public class AgentWorker {
     private final AgentProperties props;
     private final AgentJobQueue queue;
     private final AgentRunRepository runRepository;
-    private final AgentRunner runner;
+    private final AgentRuntime runtime;
 
     private volatile boolean running = true;
     private ExecutorService pool;
@@ -70,15 +71,15 @@ public class AgentWorker {
         if (run == null || run.getStatus() != RunStatus.QUEUED) return; // already handled / gone
 
         if (!queue.tryLock(run.getProjectId(), runId)) {
-            // Project busy with another run — retry a bit later without hot-looping.
+            // Project busy with another run â€” retry a bit later without hot-looping.
             queue.requeue(runId);
             sleep(300);
             return;
         }
         try {
-            runner.run(run);
+            runtime.run(run);
         } finally {
-            queue.unlock(run.getProjectId());
+            queue.unlock(run.getProjectId(), runId);
         }
     }
 

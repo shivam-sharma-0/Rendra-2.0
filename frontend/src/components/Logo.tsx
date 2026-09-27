@@ -1,12 +1,12 @@
 type Props = { className?: string; showWordmark?: boolean }
 
-/** Brand mark: the Rendra logo image, plus an optional wordmark. */
+/** Kiln's rotating spectrum mark and wordmark. */
 export default function Logo({ className = '', showWordmark = true }: Props) {
   return (
     <span className={`inline-flex items-center gap-2.5 ${className}`}>
-      <img src="/rendra-logo.svg" alt="Rendra" className="h-[18px] w-[18px] object-contain" />
+      <span aria-label="Kiln" className="k-mark !h-[24px] !w-[24px]"><i className="!h-[9px] !w-[9px]" /></span>
       {showWordmark && (
-        <span className="font-brand text-[17px] font-bold text-text">Rendra</span>
+        <span className="font-brand text-[17px] font-bold text-text">Kiln</span>
       )}
     </span>
   )

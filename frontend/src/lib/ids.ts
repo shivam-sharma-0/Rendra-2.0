@@ -26,3 +26,6 @@ function ulid(prefix: string): string {
 
 export const newUserMessageId = () => ulid('umsg')
 export const newAiMessageId = () => ulid('aimsg')
+
+/** Opaque key for making a mutation idempotent (Idempotency-Key header) and correlating requests. */
+export const newRequestId = () => ulid('req')

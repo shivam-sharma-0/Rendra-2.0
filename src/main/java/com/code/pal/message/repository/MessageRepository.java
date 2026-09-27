@@ -6,6 +6,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.UUID;
+import java.util.Optional;
 
 /**
  * Message persistence. Listing is keyed on {@code project_id} and rides the
@@ -14,4 +15,9 @@ import java.util.UUID;
 public interface MessageRepository extends JpaRepository<Message, String> {
 
     Page<Message> findByProjectId(UUID projectId, Pageable pageable);
+
+    /** A client retry is idempotent only inside the project that originally created the message. */
+    Optional<Message> findByIdAndProjectId(String id, UUID projectId);
+
+    long countByProjectId(UUID projectId);
 }

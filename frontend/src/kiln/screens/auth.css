@@ -1,0 +1,124 @@
+/* Log in / Sign up — pixel-faithful to Figma "03 · Log in Sign up". Scoped under .kau.
+   Fonts load once in index.html. Self-contained tokens keep it exact and isolated. */
+.kau {
+  --ink: #16151A; --muted: #4A4852; --faint: #6E6B74; --dim: #8A8791;
+  --bg: #F6F4EF; --card: #FFFFFF; --line: #E8E4DB; --line-2: #CFCBC0;
+  --accent: #FF5B2E; --violet: #5B4CF5; --violet-soft: #F1EEFF; --violet-ink: #3D30C9;
+  --tab-bg: #F1EEE8;
+  position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 999;
+  display: flex; align-items: center; justify-content: center; color: var(--ink);
+  font-family: 'Geist', system-ui, sans-serif;
+  animation: kau-fade .26s ease both;
+  backdrop-filter: blur(2px);
+}
+@keyframes kau-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes kau-spin { to { transform: rotate(360deg) } }
+@keyframes kau-floaty { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-10px) } }
+@keyframes kau-fill { from { width: 0 } to { width: 100% } }
+@keyframes kau-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+@keyframes kau-rise { from { opacity: 0; transform: translateY(14px) } to { opacity: 1; transform: none } }
+@media (prefers-reduced-motion: reduce) { .kau, .kau * { animation: none !important } }
+.kau *, .kau *::before, .kau *::after { box-sizing: border-box; }
+.kau button { font-family: inherit; cursor: pointer; transition: background .2s, color .2s, border-color .2s, transform .2s, box-shadow .2s; }
+.kau button:active { transform: scale(.98); }
+.kau input { font-family: inherit; }
+.kau input::placeholder { color: var(--dim); }
+.kau a { text-decoration: none; color: var(--ink); }
+
+/* ── Form panel ─────────────────────────────────────────────── */
+.kau-form { width: 440px; padding: 40px; display: flex; flex-direction: column;
+  background: var(--card); border-radius: 20px; box-shadow: 0 30px 60px -15px rgba(0,0,0,.3);
+  position: relative; max-height: 95vh; overflow-y: auto; }
+.kau-close { position: absolute; right: 20px; top: 20px; width: 32px; height: 32px; border-radius: 16px; border: none; background: transparent; color: var(--faint); font-size: 20px; display: flex; align-items: center; justify-content: center; }
+.kau-close:hover { background: var(--bg); color: var(--ink); }
+.kau-brand { display: flex; align-items: center; gap: 10px; }
+.kau-brand-orb { width: 30px; height: 30px; border-radius: 12px; display: grid; place-items: center;
+  background: conic-gradient(from 0deg, #FF5B2E, #FFB23E, #5B4CF5, #FF5B2E); animation: kau-spin 7s linear infinite; }
+.kau-brand-orb i { width: 12px; height: 12px; border-radius: 50%; background: var(--card); }
+.kau-brand b { display: none; }
+
+.kau-center { flex-grow: 1; display: flex; flex-direction: column; justify-content: center; gap: 20px; }
+.kau-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 14px; background: var(--tab-bg); align-self: flex-start; }
+.kau-tabs button { height: 38px; padding: 0 18px; border: none; border-radius: 10px; font-size: 14px; font-weight: 600;
+  background: transparent; color: var(--faint); }
+.kau-tabs button.on { background: var(--card); color: var(--ink); box-shadow: 0 2px 8px rgba(22,21,26,.12); }
+
+.kau-head { display: flex; flex-direction: column; margin-top: 14px; gap: 4px; }
+.kau-kicker { font-size: 18px; font-weight: 600; color: #B9B6AE; }
+.kau-head h1 { margin: 0; font-family: 'Geist', system-ui, sans-serif; font-weight: 700; font-size: 20px; line-height: 1.2; letter-spacing: -0.02em; }
+
+.kau-pending { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 14px; background: var(--violet-soft); border: 1px solid var(--line-2); }
+.kau-pending-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); }
+.kau-pending-text { font-size: 13.5px; line-height: 1.45; color: var(--violet-ink); }
+
+.kau-providers { display: flex; flex-direction: column; gap: 8px; }
+.kau-provider { position: relative; height: 44px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--card);
+  color: var(--ink); font-size: 14px; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.kau-provider:hover:not(:disabled) { background: var(--bg); border-color: #CFCAC0; }
+.kau-provider:disabled { cursor: not-allowed; opacity: .62; }
+.kau-badge { width: 24px; height: 24px; border-radius: 7px; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+.kau-badge.google { background: #FFEDE6; color: #B23A12; }
+.kau-badge.github { background: #16151A; color: #F6F4EF; }
+.kau-badge.apple { background: #F1EEE8; color: #16151A; }
+.kau-lastused { position: absolute; right: 14px; font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 8px; background: var(--violet-soft); color: var(--violet-ink); }
+.kau-soon { position: absolute; right: 14px; font-size: 11px; color: var(--dim); }
+
+.kau-or { display: flex; align-items: center; gap: 14px; color: #8A8791; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; margin: -2px 0; }
+.kau-or::before, .kau-or::after { content: ''; flex-grow: 1; height: 1px; background: var(--line); }
+
+.kau-fields { display: flex; flex-direction: column; gap: 10px; }
+.kau-field { display: flex; flex-direction: column; gap: 6px; }
+.kau-field label { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.kau-input { height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line-2); background: #FBFAF7;
+  font-size: 14px; color: var(--ink); outline-color: var(--violet); }
+.kau-input[aria-invalid="true"] { border-color: #C63B2B; background: #FDF3F1; }
+.kau-field-error { color: #C63B2B; font-size: 12px; font-weight: 500; }
+.kau-cta { height: 46px; border-radius: 12px; background: var(--ink); color: var(--bg); font-size: 14px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center; gap: 8px; border: none; box-shadow: 0 14px 26px -14px rgba(22,21,26,.6); }
+.kau-cta:disabled { opacity: .6; cursor: not-allowed; }
+.kau-note { font-size: 13px; color: var(--faint); display: flex; align-items: center; gap: 8px; }
+.kau-form-error { margin: 0; color: #C63B2B; font-size: 13px; }
+
+.kau-footer { display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--faint); line-height: 1.4; padding-top: 4px; }
+.kau-footer a { text-decoration: underline; }
+
+/* Email-first: read-only email row + back link on the password step. */
+.kau-emailrow { display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 0 14px;
+  border-radius: 12px; border: 1px solid var(--line-2); background: #FBFAF7; font-size: 14px; color: var(--muted); }
+.kau-emailrow button { border: none; background: none; color: var(--violet-ink); font-size: 13px; font-weight: 600; padding: 0; }
+.kau-backlink { align-self: flex-start; border: none; background: none; color: var(--faint); font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; gap: 6px; padding: 0; }
+
+/* ── Visual panel ───────────────────────────────────────────── */
+.kau-visual { display: none; }
+.kau-orb { position: absolute; right: 90px; top: 80px; width: 120px; height: 120px; border-radius: 50%; opacity: .9;
+  background: conic-gradient(from 0deg, #FF5B2E, #FFB23E, #5B4CF5, #FF5B2E); animation: kau-spin 7s linear infinite, kau-floaty 7s ease-in-out infinite; }
+.kau-orb-mask { position: absolute; right: 118px; top: 108px; width: 64px; height: 64px; border-radius: 50%; background: var(--bg); }
+.kau-demo { width: 560px; display: flex; flex-direction: column; gap: 16px; position: relative; }
+.kau-bubble { align-self: flex-end; max-width: 420px; padding: 14px 18px; border-radius: 20px 20px 6px 20px; background: var(--ink);
+  color: var(--bg); font-size: 15px; line-height: 1.5; box-shadow: 0 20px 40px -24px rgba(22,21,26,.6); animation: kau-rise .7s cubic-bezier(.2,.8,.2,1) both; }
+.kau-card { padding: 18px; border-radius: 22px; background: var(--card); border: 1px solid var(--line);
+  box-shadow: 0 30px 60px -34px rgba(22,21,26,.4); display: flex; flex-direction: column; gap: 12px; animation: kau-rise .7s cubic-bezier(.2,.8,.2,1) .2s both; }
+.kau-card-head { display: flex; align-items: center; gap: 10px; }
+.kau-card-orb { width: 24px; height: 24px; border-radius: 50%; background: conic-gradient(from 0deg, #FF5B2E, #FFB23E, #5B4CF5, #FF5B2E); }
+.kau-card-head b { font-size: 14px; font-weight: 600; }
+.kau-card-time { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--faint); }
+.kau-bar { height: 6px; border-radius: 3px; background: var(--tab-bg); overflow: hidden; }
+.kau-bar i { display: block; height: 6px; border-radius: 3px; background: var(--accent); animation: kau-fill 2.6s cubic-bezier(.4,0,.2,1) .4s both; }
+.kau-step { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+.kau-step-check { width: 20px; height: 20px; border-radius: 50%; background: #E7F8EF; color: #0E7A4E; display: grid; place-items: center; flex-shrink: 0; }
+.kau-step span:nth-child(2) { flex-grow: 1; }
+.kau-step-file { font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 3px 8px; border-radius: 6px; background: var(--bg); color: var(--muted); }
+.kau-live { align-self: flex-start; display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); animation: kau-rise .7s cubic-bezier(.2,.8,.2,1) .5s both; }
+.kau-live-dot { width: 9px; height: 9px; border-radius: 50%; background: #3DD68C; animation: kau-pulse 1.6s infinite; }
+.kau-live b { font-size: 14px; font-weight: 600; }
+.kau-live code { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--muted); }
+.kau-quote { position: absolute; left: 60px; bottom: 48px; max-width: 420px; font-family: 'Instrument Serif', serif; font-style: italic; font-size: 30px; line-height: 1.2; color: var(--ink); }
+
+/* ── Dark + responsive ──────────────────────────────────────── */
+.dark .kau { --bg: #17161B; --card: #201F25; --ink: #F4F1E9; --muted: #C9C6CE; --faint: #AAA6AF; --line: #3A373F; --line-2: #3A373F; --tab-bg: #2B2930; }
+.dark .kau-input { background: #19181D; }
+.dark .kau-cta { background: #F6F4EF; color: #16151A; }
+@media (max-width: 600px) {
+  .kau-form { width: 90%; padding: 28px; }
+}

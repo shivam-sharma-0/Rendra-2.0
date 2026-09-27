@@ -1,18 +1,33 @@
 package com.code.pal.project.service.impl;
 
+import com.code.pal.identity.dto.UserSummary;
+import com.code.pal.identity.service.UserDirectory;
+import com.code.pal.notification.domain.NotificationType;
+import com.code.pal.notification.service.NotificationService;
+import com.code.pal.message.MessageSequence;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.dto.CreateMessageRequest;
 import com.code.pal.message.repository.MessageRepository;
+import com.code.pal.project.domain.DeploymentStatus;
 import com.code.pal.project.domain.Project;
+import com.code.pal.project.domain.ProjectMember;
+import com.code.pal.project.domain.ProjectRole;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.dto.CreateProjectRequest;
+import com.code.pal.project.dto.ProjectMemberResponse;
 import com.code.pal.project.dto.ProjectResponse;
 import com.code.pal.project.dto.UpdateProjectRequest;
 import com.code.pal.project.event.AssistantTurnRequested;
+import com.code.pal.project.exception.AlreadyProjectMemberException;
+import com.code.pal.project.exception.ProjectMemberNotFoundException;
 import com.code.pal.project.exception.ProjectNotFoundException;
+import com.code.pal.project.repository.ProjectMemberRepository;
 import com.code.pal.project.repository.ProjectRepository;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.workspace.service.WorkspaceService;
+import com.code.pal.workspace.domain.WorkspaceMember;
+import com.code.pal.workspace.domain.WorkspaceRole;
+import com.code.pal.workspace.exception.WorkspaceAccessDeniedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -23,12 +38,17 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
- * Project logic. Access is authorized once via {@link WorkspaceService#requireMembership}; reads
- * and writes are single indexed operations, and mutations dirty a managed entity so JPA flushes
- * on commit — no redundant {@code save()}.
+ * Project logic. Access is authorized once via
+ * {@link WorkspaceService#requireMembership}; reads
+ * and writes are single indexed operations, and mutations dirty a managed
+ * entity so JPA flushes
+ * on commit â€” no redundant {@code save()}.
  */
 @Slf4j
 @Service
@@ -36,11 +56,19 @@ import java.util.UUID;
 public class ProjectServiceImpl implements ProjectService {
 
     private static final int NAME_FROM_PROMPT_MAX = 60;
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
 
     private final ProjectRepository projectRepository;
+    private final ProjectMemberRepository projectMemberRepository;
     private final MessageRepository messageRepository;
+    private final MessageSequence messageSequence;
     private final WorkspaceService workspaceService;
+    private final UserDirectory userDirectory;
+    private final NotificationService notificationService;
     private final ApplicationEventPublisher events;
+
+    @org.springframework.beans.factory.annotation.Value("${app.public-base-url:http://localhost:8080}")
+    private String publicBaseUrl;
 
     @Override
     @Transactional
@@ -86,13 +114,16 @@ public class ProjectServiceImpl implements ProjectService {
     @Override
     @Transactional
     public ProjectResponse update(Long userId, UUID projectId, UpdateProjectRequest request) {
-        Project project = requireAccessible(userId, projectId);
+        Project project = requireManageable(userId, projectId);
 
-        if (request.name() != null) project.setName(request.name().trim());
-        if (request.isPublic() != null) project.setIsPublic(request.isPublic());
-        if (request.type() != null) project.setType(request.type());
+        if (request.name() != null)
+            project.setName(request.name().trim());
+        if (request.isPublic() != null)
+            project.setIsPublic(request.isPublic());
+        if (request.type() != null)
+            project.setType(request.type());
 
-        // Managed entity — changes flush on commit; no explicit save() needed.
+        // Managed entity â€” changes flush on commit; no explicit save() needed.
         log.info("Project updated id={} owner={}", projectId, userId);
         return ProjectResponse.from(project);
     }
@@ -100,38 +131,205 @@ public class ProjectServiceImpl implements ProjectService {
     @Override
     @Transactional
     public void delete(Long userId, UUID projectId) {
-        Project project = requireAccessible(userId, projectId);
-        project.setDeletedAt(Instant.now());   // soft delete — hidden by @SQLRestriction thereafter
+        Project project = requireManageable(userId, projectId);
+        project.setDeletedAt(Instant.now()); // soft delete â€” hidden by @SQLRestriction thereafter
         log.info("Project soft-deleted id={} owner={}", projectId, userId);
     }
 
+    /**
+     * Read access: any workspace member, or anyone the project was explicitly
+     * shared with.
+     */
     @Override
     @Transactional(readOnly = true)
     public Project requireAccessible(Long userId, UUID projectId) {
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(ProjectNotFoundException::new);
-        workspaceService.requireMembership(userId, project.getWorkspaceId());
+        if (workspaceService.isMember(userId, project.getWorkspaceId())
+                || projectMemberRepository.existsByProjectIdAndUserId(projectId, userId)) {
+            return project;
+        }
+        throw new WorkspaceAccessDeniedException();
+    }
+
+    /**
+     * Write access: workspace members, or a project collaborator with OWNER/EDITOR
+     * (not VIEWER).
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Project requireCanEdit(Long userId, UUID projectId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(ProjectNotFoundException::new);
+        if (workspaceService.isMember(userId, project.getWorkspaceId()))
+            return project;
+        ProjectRole role = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
+                .map(ProjectMember::getRole).orElse(null);
+        if (role == ProjectRole.OWNER || role == ProjectRole.EDITOR)
+            return project;
+        throw new WorkspaceAccessDeniedException();
+    }
+
+    /**
+     * Project creators may manage their own projects; workspace owners/admins may
+     * manage all.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Project requireManageable(Long userId, UUID projectId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(ProjectNotFoundException::new);
+        WorkspaceMember membership = workspaceService.requireMembership(userId, project.getWorkspaceId());
+        boolean canManage = project.getOwnerId().equals(userId)
+                || membership.getRole() == WorkspaceRole.OWNER
+                || membership.getRole() == WorkspaceRole.ADMIN;
+        if (!canManage)
+            throw new WorkspaceAccessDeniedException();
         return project;
     }
 
-    /** Insert the first user message and, if reserved, an empty assistant reply to stream into. */
-    private void seedConversation(UUID projectId, CreateMessageRequest initial, ProjectType projectType, Long authorId) {
+    /* ── Per-project sharing ─────────────────────────────────────────────────── */
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ProjectMemberResponse> listMembers(Long actorId, UUID projectId) {
+        requireAccessible(actorId, projectId);
+        List<ProjectMember> members = projectMemberRepository.findByProjectId(projectId);
+        Map<Long, UserSummary> byId = userDirectory
+                .findByIds(members.stream().map(ProjectMember::getUserId).toList())
+                .stream().collect(Collectors.toMap(UserSummary::id, u -> u));
+        return members.stream()
+                .map(m -> ProjectMemberResponse.from(m, byId.get(m.getUserId())))
+                .sorted((a, b) -> a.sharedAt().compareTo(b.sharedAt()))
+                .toList();
+    }
+
+    @Override
+    @Transactional
+    public ProjectMemberResponse share(Long actorId, UUID projectId, String email, ProjectRole role) {
+        Project project = requireManageable(actorId, projectId);
+        UserSummary user = userDirectory.findByEmail(email)
+                .orElseThrow(() -> new ProjectMemberNotFoundException("No Kiln account for that email"));
+        if (projectMemberRepository.existsByProjectIdAndUserId(projectId, user.id())) {
+            throw new AlreadyProjectMemberException("They already have access to this project");
+        }
+        ProjectMember member = projectMemberRepository.save(ProjectMember.builder()
+                .projectId(projectId)
+                .userId(user.id())
+                .role(role != null ? role : ProjectRole.VIEWER)
+                .build());
+        notificationService.notify(user.id(), NotificationType.PROJECT_SHARED,
+                "A project was shared with you", project.getName(), projectId, actorId);
+        log.info("Project shared id={} with user={} role={} by={}", projectId, user.id(), member.getRole(), actorId);
+        return ProjectMemberResponse.from(member, user);
+    }
+
+    @Override
+    @Transactional
+    public ProjectMemberResponse updateMemberRole(Long actorId, UUID projectId, UUID memberId, ProjectRole role) {
+        requireManageable(actorId, projectId);
+        ProjectMember member = requireMemberInProject(projectId, memberId);
+        member.setRole(role);
+        UserSummary user = userDirectory.findByIds(List.of(member.getUserId())).stream().findFirst().orElse(null);
+        log.info("Project member role updated project={} member={} role={} by={}", projectId, memberId, role, actorId);
+        return ProjectMemberResponse.from(member, user);
+    }
+
+    @Override
+    @Transactional
+    public void removeMember(Long actorId, UUID projectId, UUID memberId) {
+        requireManageable(actorId, projectId);
+        projectMemberRepository.delete(requireMemberInProject(projectId, memberId));
+        log.info("Project member removed project={} member={} by={}", projectId, memberId, actorId);
+    }
+
+    private ProjectMember requireMemberInProject(UUID projectId, UUID memberId) {
+        ProjectMember member = projectMemberRepository.findById(memberId)
+                .orElseThrow(() -> new ProjectMemberNotFoundException("Collaborator not found"));
+        if (!member.getProjectId().equals(projectId)) {
+            throw new ProjectMemberNotFoundException("Collaborator not found");
+        }
+        return member;
+    }
+
+    /* ── Publish lifecycle ───────────────────────────────────────────────────── */
+
+    @Override
+    @Transactional
+    public ProjectResponse publish(Long actorId, UUID projectId) {
+        Project project = requireManageable(actorId, projectId);
+        if (project.getPublicSlug() == null)
+            project.setPublicSlug(uniqueSlug(project.getName()));
+        project.setDeploymentStatus(DeploymentStatus.LIVE);
+        project.setIsPublic(true);
+        project.setPublishedUrl(publicBaseUrl + "/p/" + project.getPublicSlug());
+        log.info("Project published id={} slug={} by={}", projectId, project.getPublicSlug(), actorId);
+        return ProjectResponse.from(project);
+    }
+
+    @Override
+    @Transactional
+    public ProjectResponse unpublish(Long actorId, UUID projectId) {
+        Project project = requireManageable(actorId, projectId);
+        project.setDeploymentStatus(DeploymentStatus.NONE);
+        project.setIsPublic(false);
+        log.info("Project unpublished id={} by={}", projectId, actorId);
+        return ProjectResponse.from(project);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public UUID resolvePublishedProject(String slug) {
+        return projectRepository.findByPublicSlug(slug)
+                .filter(p -> p.getDeploymentStatus() == DeploymentStatus.LIVE)
+                .map(Project::getId)
+                .orElseThrow(ProjectNotFoundException::new);
+    }
+
+    private String uniqueSlug(String name) {
+        String base = slugify(name);
+        for (int i = 0; i < 5; i++) {
+            String candidate = base + "-" + Integer.toHexString(RANDOM.nextInt(0x10000));
+            if (projectRepository.findByPublicSlug(candidate).isEmpty())
+                return candidate;
+        }
+        return base + "-" + UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    private static String slugify(String value) {
+        String base = value.toLowerCase().replaceAll("[^a-z0-9]+", "-").replaceAll("(^-|-$)", "");
+        if (base.isBlank())
+            base = "app";
+        return base.length() > 40 ? base.substring(0, 40) : base;
+    }
+
+    /**
+     * Insert the first user message and, if reserved, an empty assistant reply to
+     * stream into.
+     */
+    private void seedConversation(UUID projectId, CreateMessageRequest initial, ProjectType projectType,
+            Long authorId) {
         ProjectType mode = initial.mode() != null ? initial.mode() : projectType;
-        messageRepository.save(Message.user(projectId, initial.id(), initial.message(), mode, authorId));
+        Message userMessage = Message.user(projectId, initial.id(), initial.message(), mode, authorId);
+        userMessage.setSeq(messageSequence.next());
+        messageRepository.save(userMessage);
         if (initial.aiMessageId() != null && !initial.aiMessageId().isBlank()) {
-            messageRepository.save(Message.assistantPlaceholder(projectId, initial.aiMessageId(), initial.id(), mode));
+            Message assistantMessage = Message.assistantPlaceholder(projectId, initial.aiMessageId(), initial.id(), mode);
+            assistantMessage.setSeq(messageSequence.next());
+            messageRepository.save(assistantMessage);
             // Kick off the agent for the first turn (runs AFTER_COMMIT).
             events.publishEvent(new AssistantTurnRequested(projectId, authorId, mode, initial.aiMessageId()));
         }
     }
 
     private static String deriveName(String name, CreateMessageRequest initial) {
-        if (name != null && !name.isBlank()) return name.trim();
+        if (name != null && !name.isBlank())
+            return name.trim();
         if (initial != null && !initial.message().isBlank()) {
             String prompt = initial.message().trim();
             return prompt.length() <= NAME_FROM_PROMPT_MAX
                     ? prompt
-                    : prompt.substring(0, NAME_FROM_PROMPT_MAX).trim() + "…";
+                    : prompt.substring(0, NAME_FROM_PROMPT_MAX).trim() + "â€¦";
         }
         return "Untitled project";
     }
