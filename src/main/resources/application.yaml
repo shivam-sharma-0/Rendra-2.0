@@ -7,7 +7,7 @@ spring:
 
   # â”€â”€ Local secrets (gitignored) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   # Loaded from .secrets/secrets.properties regardless of shell/IDE env, so a restart always picks up
-  # secrets (GOOGLE_CLIENT_SECRET, AGENT_LLM_API_KEY). Both candidate working directories are tried;
+  # secrets (GOOGLE_CLIENT_SECRET, NVIDIA_API_KEY, AGENT_LLM_API_KEY). Both candidate working directories are tried;
   # each is optional. Deployment injects the same keys from its own env/secret manager instead.
   config:
     import:
@@ -34,6 +34,9 @@ spring:
       port: ${REDIS_PORT:6379}
       repositories:
         enabled: false
+  mongodb:
+    uri: ${MONGO_URI:mongodb://localhost:27017/codepal}
+    database: ${MONGO_DATABASE:codepal}
 
   # â”€â”€ JPA / Hibernate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   jpa:
@@ -124,22 +127,37 @@ app:
     failure-redirect: ${OAUTH_FAILURE_REDIRECT:http://localhost:5173/oauth/callback}
 
   # â”€â”€ Agent (LLM coding agent) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  # LLM provider is OpenAI-compatible (OpenRouter now â€” swap AGENT_LLM_BASE_URL/API_KEY for another).
+  # LLM providers are OpenAI-compatible. NVIDIA and Groq are the active model pool;
+  # OpenRouter remains available as a fallback provider.
   # api-key is a SECRET â†’ env-only, no default. All models below must support tool/function calling.
   agent:
     llm:
-      base-url: ${AGENT_LLM_BASE_URL:https://openrouter.ai/api}
+      base-url: ${AGENT_LLM_BASE_URL:https://integrate.api.nvidia.com/v1}
       api-key: ${AGENT_LLM_API_KEY:}
       temperature: 0.2
       max-attempts: ${AGENT_LLM_MAX_ATTEMPTS:3}
       retry-initial-backoff-ms: ${AGENT_LLM_RETRY_INITIAL_BACKOFF_MS:500}
       retry-max-backoff-ms: ${AGENT_LLM_RETRY_MAX_BACKOFF_MS:5000}
-    # Model per mode (OpenRouter free, tool-calling capable). build/chat each round-robin across a
-    # comma-separated list, so one free model's rate limit doesn't stall every call.
+    # Provider-specific OpenAI-compatible endpoints. The model routes below are selected one at a
+    # time in round-robin order; no LLM requests from a single run are sent in parallel.
+    providers:
+      openrouter:
+        base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api}
+        api-key: ${OPENROUTER_API_KEY:${AGENT_LLM_API_KEY:}}
+      nvidia:
+        base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
+        api-key: ${NVIDIA_API_KEY:}
+      groq:
+        base-url: ${GROQ_BASE_URL:https://api.groq.com/openai/v1}
+        api-key: ${GROQ_API_KEY:}
+    # Only chat-generation models are included. Prompt-guard, safeguard, speech-to-text and
+    # text-to-speech models are intentionally excluded from the software agent pool.
     models:
-      build: "${AGENT_MODEL_BUILD:nvidia/nemotron-3-ultra-550b-a55b:free,inclusionai/ling-3.0-flash-fin:free,poolside/laguna-s-2.1:free}"
-      chat: "${AGENT_MODEL_CHAT:dots-studio/dots-3-note-preview:free,nvidia/nemotron-3.5-lightning:free,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-26b-a4b-it:free}"
-      plan: "${AGENT_MODEL_PLAN:qwen/qwen3.8-27b:free}"
+      # Only software-agent models are used: coding, planning, reasoning and fast code iteration.
+      # Safety, embedding, vision, speech, structured-data and unrelated general models are excluded.
+      build: "${AGENT_MODEL_BUILD:nvidia:nvidia/nemotron-3-ultra-550b-a55b,groq:openai/gpt-oss-120b,nvidia:nvidia/nemotron-3-super-120b-a12b,groq:qwen/qwen3.8-27b}"
+      chat: "${AGENT_MODEL_CHAT:nvidia:nvidia/nemotron-3.5-lightning-30b-a3b,groq:openai/gpt-oss-20b,groq:qwen/qwen3.8-27b,nvidia:deepseek-ai/deepseek-v4.1-flash}"
+      plan: "${AGENT_MODEL_PLAN:nvidia:nvidia/nemotron-3-super-120b-a12b,groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b,nvidia:deepseek-ai/deepseek-v4.1-flash}"
     # Per-project code lives here (one dir per project).
     workspace-base-path: ${AGENT_WORKSPACE_PATH:./workspaces}
     # Safety limits for a single run.

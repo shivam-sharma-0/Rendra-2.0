@@ -42,11 +42,15 @@ import com.code.pal.notification.domain.NotificationType;
 import com.code.pal.notification.service.NotificationService;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.domain.Project;
+import com.code.pal.project.domain.ProjectStage;
+import com.code.pal.project.artifact.ProjectArtifactService;
+import com.code.pal.project.database.GeneratedDatabaseService;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.realtime.RealtimeService;
 import com.code.pal.realtime.dto.RealtimeMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -64,7 +68,6 @@ import java.util.concurrent.TimeUnit;
 /** Runs a bounded, recoverable agent turn without holding a database transaction across LLM I/O. */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AgentRunner implements AgentRuntime {
 
     private static final int HISTORY_CANDIDATE_LIMIT = 100;
@@ -93,6 +96,52 @@ public class AgentRunner implements AgentRuntime {
     private final ChangeSetService changeSets;
     private final ProjectValidationService validation;
     private final NotificationService notifications;
+    private final ProjectArtifactService artifacts;
+    private final GeneratedDatabaseService databases;
+
+    @Autowired
+    public AgentRunner(LlmClient llm, IntentClassifier intentClassifier, ToolRegistry tools,
+                       AgentToolExecutor toolExecutor, AgentEvents events, AgentProperties props,
+                       ProjectContextService projectContexts, AgentRunRepository runRepository,
+                       ProjectService projects, MessageRepository messageRepository, RealtimeService realtime,
+                       WorkspaceStorage workspace, AgentHeartbeat heartbeat, AgentJobQueue queue,
+                       ObjectMapper objectMapper, ChangeSetService changeSets,
+                       ProjectValidationService validation, NotificationService notifications,
+                       ProjectArtifactService artifacts, GeneratedDatabaseService databases) {
+        this.llm = llm;
+        this.intentClassifier = intentClassifier;
+        this.tools = tools;
+        this.toolExecutor = toolExecutor;
+        this.events = events;
+        this.props = props;
+        this.projectContexts = projectContexts;
+        this.runRepository = runRepository;
+        this.projects = projects;
+        this.messageRepository = messageRepository;
+        this.realtime = realtime;
+        this.workspace = workspace;
+        this.heartbeat = heartbeat;
+        this.queue = queue;
+        this.objectMapper = objectMapper;
+        this.changeSets = changeSets;
+        this.validation = validation;
+        this.notifications = notifications;
+        this.artifacts = artifacts;
+        this.databases = databases;
+    }
+
+    /** Keeps focused runner tests and small embedders source-compatible as workflow sinks evolve. */
+    public AgentRunner(LlmClient llm, IntentClassifier intentClassifier, ToolRegistry tools,
+                       AgentToolExecutor toolExecutor, AgentEvents events, AgentProperties props,
+                       ProjectContextService projectContexts, AgentRunRepository runRepository,
+                       ProjectService projects, MessageRepository messageRepository, RealtimeService realtime,
+                       WorkspaceStorage workspace, AgentHeartbeat heartbeat, AgentJobQueue queue,
+                       ObjectMapper objectMapper, ChangeSetService changeSets,
+                       ProjectValidationService validation, NotificationService notifications) {
+        this(llm, intentClassifier, tools, toolExecutor, events, props, projectContexts, runRepository, projects,
+                messageRepository, realtime, workspace, heartbeat, queue, objectMapper, changeSets, validation,
+                notifications, null, null);
+    }
 
     /** Execute a read-only run end to end; every terminal outcome is persisted and returned. */
     @Override
@@ -121,6 +170,7 @@ public class AgentRunner implements AgentRuntime {
             Project project = run.getMode() == ProjectType.BUILD
                     ? projects.requireManageable(run.getUserId(), run.getProjectId())
                     : projects.requireAccessible(run.getUserId(), run.getProjectId());
+            if (run.getMode() == ProjectType.BUILD) moveProject(run, ProjectStage.BUILDING);
             Path liveWorkspace = workspace.ensure(run.getProjectId());
             Path ws = run.getMode() == ProjectType.BUILD
                     ? changeSets.start(run.getId(), run.getProjectId(), liveWorkspace)
@@ -158,13 +208,13 @@ public class AgentRunner implements AgentRuntime {
                 runtime.recordModelCall();
                 boolean finalRepairReportCall = run.getMode() == ProjectType.BUILD
                         && changeSets.validationProgress(ctx).repairLimitExhausted();
-                String model = props.modelFor(run.getMode());
-                log.info("model_called runId={} iteration={} modelCall={} model={}", run.getId(), runtime.iteration(),
-                        runtime.modelCallCount(), model);
+                AgentProperties.ModelSelection selection = props.modelFor(run.getMode());
+                log.info("model_called runId={} iteration={} modelCall={} provider={} model={}", run.getId(), runtime.iteration(),
+                        runtime.modelCallCount(), selection.provider(), selection.model());
                 events.emit(run, AgentStepType.STATUS, "Model called", Map.of(
                         "iteration", runtime.iteration(), "modelCall", runtime.modelCallCount()));
                 LlmResult res = llm.chatStreaming(new LlmRequest(
-                        model, runtime.messages(), specs, props.getLlm().getTemperature()), stream::append);
+                        selection.provider(), selection.model(), runtime.messages(), specs, props.getLlm().getTemperature()), stream::append);
                 stream.flush();
                 accountTokens(run, res);
 
@@ -193,8 +243,11 @@ public class AgentRunner implements AgentRuntime {
                             stream.append("\n\nChanged files:\n" + committed.changedPaths().stream()
                                     .map(path -> "- " + path).collect(java.util.stream.Collectors.joining("\n")));
                             events.emit(run, AgentStepType.STATUS, "Change set committed", Map.of(
-                                    "changedFiles", committed.changedPaths(), "snapshotRef", committed.snapshotRef()));
-                        }
+                                "changedFiles", committed.changedPaths(), "snapshotRef", committed.snapshotRef()));
+                        if (artifacts != null) artifacts.writeBuild(run, "COMMITTED", committed.changedPaths());
+                        if (databases != null) databases.ensure(run.getProjectId());
+                        moveProject(run, ProjectStage.REVIEW);
+                    }
                     }
                     runtime.transitionPhase(AgentPhase.FINISH);
                     stream.complete();
@@ -226,6 +279,8 @@ public class AgentRunner implements AgentRuntime {
             if (runtime != null) runtime.transitionTo(AgentRuntimeStatus.CANCELLED);
             run.setError("Cancelled by user");
             setStatus(run, RunStatus.CANCELLED);
+            moveProject(run, ProjectStage.FAILED);
+            if (artifacts != null) artifacts.writeBuild(run, "CANCELLED", List.of());
             updateAssistant(run, "Run cancelled.", MessageStatus.FAILED);
             events.emit(run, AgentStepType.STATUS, "Agent cancelled", safeCounters(runtime));
             emitContextUsage(run, projectContext, runtime);
@@ -235,6 +290,8 @@ public class AgentRunner implements AgentRuntime {
             if (runtime != null) runtime.transitionTo(AgentRuntimeStatus.FAILED);
             run.setError(e.getMessage());
             setStatus(run, RunStatus.FAILED);
+            moveProject(run, ProjectStage.FAILED);
+            if (artifacts != null) artifacts.writeBuild(run, "FAILED", List.of());
             notifyBuild(run, false);
             updateAssistant(run, e.getMessage(), MessageStatus.FAILED);
             events.emit(run, AgentStepType.STATUS, "Agent validation failed", Map.of(
@@ -246,6 +303,8 @@ public class AgentRunner implements AgentRuntime {
             if (runtime != null) runtime.transitionTo(AgentRuntimeStatus.FAILED);
             run.setError(safeError(e));
             setStatus(run, RunStatus.FAILED);
+            moveProject(run, ProjectStage.FAILED);
+            if (artifacts != null) artifacts.writeBuild(run, "FAILED", List.of());
             notifyBuild(run, false);
             updateAssistant(run, "Something went wrong while running the agent.", MessageStatus.FAILED);
             events.emit(run, AgentStepType.STATUS, "Agent failed", safeCounters(runtime));
@@ -288,9 +347,9 @@ public class AgentRunner implements AgentRuntime {
         convo.add(LlmMessage.user(userRequest));
 
         requireBeforeDeadline(deadlineNanos);
-        String model = props.modelFor(ProjectType.CHAT);
-        log.info("model_called runId={} conversational=true model={}", run.getId(), model);
-        LlmResult res = llm.chatStreaming(new LlmRequest(model, convo, List.of(),
+        AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
+        log.info("model_called runId={} conversational=true provider={} model={}", run.getId(), selection.provider(), selection.model());
+        LlmResult res = llm.chatStreaming(new LlmRequest(selection.provider(), selection.model(), convo, List.of(),
                 props.getLlm().getTemperature()), stream::append);
         stream.flush();
         accountTokens(run, res);
@@ -627,6 +686,12 @@ public class AgentRunner implements AgentRuntime {
                 ok ? NotificationType.BUILD_FINISHED : NotificationType.BUILD_FAILED,
                 ok ? "Your build finished" : "Your build failed",
                 null, run.getProjectId(), null);
+    }
+
+    private void moveProject(AgentRun run, ProjectStage stage) {
+        if (run.getMode() != ProjectType.BUILD) return;
+        try { projects.advanceLifecycle(run.getUserId(), run.getProjectId(), stage); }
+        catch (RuntimeException error) { log.warn("project_stage_update_failed project={} stage={}: {}", run.getProjectId(), stage, error.getMessage()); }
     }
 
     private void accountTokens(AgentRun run, LlmResult result) {

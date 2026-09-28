@@ -2,6 +2,9 @@ import { apiGet, apiSend } from '../auth/api'
 import { newAiMessageId, newUserMessageId } from '../lib/ids'
 
 export type ProjectType = 'BUILD' | 'CHAT' | 'PLAN'
+export type ProjectStage = 'REQUIREMENTS' | 'DESIGN' | 'BUILDING' | 'REVIEW' | 'DEPLOYING' | 'LIVE' | 'FAILED'
+export type RequirementStatus = 'DRAFT' | 'IN_PROGRESS' | 'APPROVAL_REQUIRED' | 'APPROVED'
+export type RequirementQuestionType = 'SINGLE_SELECT' | 'MULTI_SELECT' | 'TEXT'
 export type DeploymentStatus = 'NONE' | 'PENDING' | 'LIVE' | 'FAILED'
 export type MessageRole = 'USER' | 'ASSISTANT' | 'SYSTEM'
 export type MessageStatus = 'PENDING' | 'STREAMING' | 'COMPLETE' | 'FAILED'
@@ -12,6 +15,7 @@ export type AgentStepType = 'THINKING' | 'TOOL_CALL' | 'TOOL_RESULT' | 'ASK_USER
 export type Workspace = { id: string; name: string; personal: boolean; role: WorkspaceRole; createdAt: string }
 export type Project = {
   id: string; workspaceId: string; name: string; initialPrompt: string | null; type: ProjectType
+  lifecycleStage: ProjectStage
   isPublic: boolean; publishedUrl: string | null; deploymentStatus: DeploymentStatus
   lastActivityAt: string; createdAt: string; updatedAt: string
 }
@@ -27,6 +31,7 @@ export type AgentRun = {
   createdAt: string; updatedAt: string; respondingAt: string | null
 }
 export type AgentStep = { seq: number; type: AgentStepType; content: string | null; data: string | null; createdAt: string }
+export type StagedFile = { path: string; content: string | null; deleted: boolean }
 export type FileNode = { name: string; path: string; dir: boolean; size: number; children: FileNode[] | null }
 export type FileContent = { path: string; content: string; truncated: boolean; binary: boolean }
 
@@ -91,6 +96,29 @@ export const projectApi = {
   unpublish: (id: string) => apiSend<Project>('POST', `/api/projects/${id}/unpublish`),
 }
 
+export type RequirementOption = { id: string; label: string; description: string; recommended: boolean }
+export type RequirementQuestion = {
+  id: string; sequence: number; key: string; prompt: string; type: RequirementQuestionType; required: boolean
+  options: RequirementOption[]; recommendedOption: string | null; selectedOption: string | null; otherText: string | null
+}
+export type RequirementSession = {
+  id: string | null; projectId: string; status: RequirementStatus; questions: RequirementQuestion[]
+  complete: boolean; approvedAt: string | null
+}
+export type DatabaseSnapshot = { provider: string; database: string; reachable: boolean; collections: string[]; error: string | null; checkedAt: string }
+
+export const requirementsApi = {
+  get: (projectId: string, opts?: ReadOpts) => apiGet<RequirementSession>(`/api/projects/${projectId}/requirements`, opts),
+  start: (projectId: string) => apiSend<RequirementSession>('POST', `/api/projects/${projectId}/requirements/start`),
+  answer: (projectId: string, questionId: string, body: { selectedOption?: string | null; otherText?: string | null }) =>
+    apiSend<RequirementSession>('PUT', `/api/projects/${projectId}/requirements/questions/${questionId}`, body),
+  approve: (projectId: string) => apiSend<RequirementSession>('POST', `/api/projects/${projectId}/requirements/approve`),
+}
+
+export const databaseApi = {
+  get: (projectId: string, opts?: ReadOpts) => apiGet<DatabaseSnapshot>(`/api/projects/${projectId}/database`, opts),
+}
+
 export type CreateMessageBody = { id: string; message: string; mode?: ProjectType; aiMessageId?: string }
 export const messageApi = {
   list: (projectId: string, page = 0, size = 50, opts?: ReadOpts) =>
@@ -107,6 +135,7 @@ export const agentApi = {
   list: (projectId: string, opts?: ReadOpts) => apiGet<AgentRun[]>(`/api/projects/${projectId}/agent-runs`, opts),
   steps: (projectId: string, runId: string, afterSeq = -1, opts?: ReadOpts) =>
     apiGet<AgentStep[]>(`/api/projects/${projectId}/agent-runs/${runId}/steps?afterSeq=${afterSeq}`, opts),
+  stagedFiles: (projectId: string, runId: string, opts?: ReadOpts) => apiGet<StagedFile[]>(`/api/projects/${projectId}/agent-runs/${runId}/staged-files`, opts),
   cancel: (projectId: string, runId: string) => apiSend<void>('POST', `/api/projects/${projectId}/agent-runs/${runId}/cancel`),
   rollback: (projectId: string, runId: string) => apiSend<void>('POST', `/api/projects/${projectId}/agent-runs/${runId}/rollback`),
 }

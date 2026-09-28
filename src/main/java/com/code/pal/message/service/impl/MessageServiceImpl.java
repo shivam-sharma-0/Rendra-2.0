@@ -9,9 +9,11 @@ import com.code.pal.message.exception.MessageNotFoundException;
 import com.code.pal.message.repository.MessageRepository;
 import com.code.pal.message.service.MessageService;
 import com.code.pal.project.domain.Project;
+import com.code.pal.project.domain.ProjectStage;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.event.AssistantTurnRequested;
 import com.code.pal.project.service.ProjectService;
+import com.code.pal.project.exception.RequirementApprovalRequiredException;
 import com.code.pal.realtime.RealtimeService;
 import com.code.pal.realtime.dto.RealtimeMessage;
 import lombok.RequiredArgsConstructor;
@@ -52,6 +54,14 @@ public class MessageServiceImpl implements MessageService {
         if (existing.isPresent()) return List.of(MessageResponse.from(existing.get()));
 
         ProjectType mode = request.mode() != null ? request.mode() : project.getType();
+        if (mode == ProjectType.BUILD && project.getLifecycleStage() == ProjectStage.REQUIREMENTS) {
+            if (isConversationalPrompt(request.message())) {
+                project.setLifecycleStage(ProjectStage.DESIGN);
+                mode = ProjectType.CHAT;
+            } else {
+                throw new RequirementApprovalRequiredException();
+            }
+        }
 
         List<Message> created = new ArrayList<>(2);
         Message userMessage = Message.user(projectId, request.id(), request.message(), mode, userId);
@@ -92,6 +102,13 @@ public class MessageServiceImpl implements MessageService {
         MessageResponse response = MessageResponse.from(messageRepository.save(message));
         broadcastAfterCommit(projectId, List.of(response));
         return response;
+    }
+
+    private static boolean isConversationalPrompt(String message) {
+        if (message == null) return true;
+        String prompt = message.trim().toLowerCase();
+        if (prompt.isBlank() || prompt.matches("^(hi|hello|hey|yo|good morning|good evening|ok|okay)[.! ]*$")) return true;
+        return !prompt.matches(".*\\b(build|create|make|develop|design|implement|generate|clone|app|application|website|dashboard|todo|tool|platform|system|project|page|portal|crm|portfolio|store|shop|blog|mern)\\b.*");
     }
 
     /** Fire the room broadcast once the surrounding transaction commits (falls back to inline if none). */

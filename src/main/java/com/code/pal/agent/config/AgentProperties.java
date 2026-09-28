@@ -7,7 +7,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Configuration for agent execution and its provider connection. */
@@ -19,6 +22,8 @@ public class AgentProperties {
 
     private final Llm llm = new Llm();
     private final Models models = new Models();
+    /** Provider-specific endpoints. The legacy {@code llm} block remains the compatibility fallback. */
+    private Map<String, Provider> providers = new LinkedHashMap<>();
 
     /** Root directory holding one sub-folder per project's code. */
     private String workspaceBasePath = "./workspaces";
@@ -81,17 +86,26 @@ public class AgentProperties {
 
     @Getter
     @Setter
+    public static class Provider {
+        private String baseUrl;
+        private String apiKey;
+    }
+
+    @Getter
+    @Setter
     public static class Models {
         /** Free-tier models often rate-limit individually; round-robin spreads calls across all of them. */
         private List<String> build = new ArrayList<>();
         private List<String> chat = new ArrayList<>();
-        private String plan;
+        private List<String> plan = new ArrayList<>();
 
         private final AtomicInteger buildIndex = new AtomicInteger();
         private final AtomicInteger chatIndex = new AtomicInteger();
+        private final AtomicInteger planIndex = new AtomicInteger();
 
         String nextBuild() { return roundRobin(build, buildIndex); }
         String nextChat() { return roundRobin(chat, chatIndex); }
+        String nextPlan() { return roundRobin(plan, planIndex); }
 
         private static String roundRobin(List<String> options, AtomicInteger index) {
             if (options == null || options.isEmpty()) return null;
@@ -99,11 +113,30 @@ public class AgentProperties {
         }
     }
 
-    public String modelFor(ProjectType mode) {
-        return switch (mode) {
+    public ModelSelection modelFor(ProjectType mode) {
+        String configured = switch (mode) {
             case CHAT -> models.nextChat();
-            case PLAN -> models.getPlan();
+            case PLAN -> models.nextPlan();
             case BUILD -> models.nextBuild();
         };
+        if (configured == null || configured.isBlank()) return new ModelSelection(defaultProvider(), configured);
+
+        // Provider-qualified entries look like "nvidia:deepseek-ai/deepseek-v4.1-flash". Preserve
+        // legacy model ids such as "nvidia/...:free", where the colon belongs to the model.
+        int separator = configured.indexOf(':');
+        if (separator > 0) {
+            String candidate = configured.substring(0, separator).toLowerCase(Locale.ROOT);
+            if (candidate.equals("openrouter") || candidate.equals("nvidia")
+                    || providers.containsKey(candidate)) {
+                return new ModelSelection(candidate, configured.substring(separator + 1));
+            }
+        }
+        return new ModelSelection(defaultProvider(), configured);
     }
+
+    private String defaultProvider() {
+        return providers.containsKey("nvidia") ? "nvidia" : "openrouter";
+    }
+
+    public record ModelSelection(String provider, String model) {}
 }

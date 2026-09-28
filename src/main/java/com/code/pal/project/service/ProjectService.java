@@ -3,6 +3,7 @@ package com.code.pal.project.service;
 import com.code.pal.project.domain.Project;
 import com.code.pal.project.domain.ProjectRole;
 import com.code.pal.project.domain.ProjectType;
+import com.code.pal.project.domain.ProjectStage;
 import com.code.pal.project.dto.CreateProjectRequest;
 import com.code.pal.project.dto.ProjectMemberResponse;
 import com.code.pal.project.dto.ProjectResponse;
@@ -26,6 +27,9 @@ public interface ProjectService {
     Page<ProjectResponse> list(Long userId, UUID workspaceId, Collection<ProjectType> types, Pageable pageable);
 
     ProjectResponse get(Long userId, UUID projectId);
+
+    /** Advance a project lifecycle gate after a validated user action. */
+    ProjectResponse advanceLifecycle(Long userId, UUID projectId, ProjectStage stage);
 
     ProjectResponse update(Long userId, UUID projectId, UpdateProjectRequest request);
 

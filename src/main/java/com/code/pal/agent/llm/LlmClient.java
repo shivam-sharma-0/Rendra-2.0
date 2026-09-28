@@ -15,7 +15,12 @@ public interface LlmClient {
         return chatStreaming(request, ignored -> { });
     }
 
-    record LlmRequest(String model, List<LlmMessage> messages, List<ToolSpec> tools, double temperature) {}
+    record LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools, double temperature) {
+        /** Backwards-compatible constructor: unqualified requests use the OpenRouter fallback. */
+        public LlmRequest(String model, List<LlmMessage> messages, List<ToolSpec> tools, double temperature) {
+            this("openrouter", model, messages, tools, temperature);
+        }
+    }
 
     record LlmMessage(String role, String content, List<ToolCall> toolCalls, String toolCallId) {
         public static LlmMessage system(String content) { return new LlmMessage("system", content, null, null); }

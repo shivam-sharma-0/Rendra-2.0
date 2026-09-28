@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  agentApi, filesApi, insightsApi, memberApi, messageApi, notificationApi, projectApi, projectMemberApi, startProject, workspaceApi,
+  agentApi, databaseApi, filesApi, insightsApi, memberApi, messageApi, notificationApi, projectApi, projectMemberApi, startProject, workspaceApi,
   type ProjectRole, type ProjectType, type WorkspaceRole,
 } from './projects'
 import { newRequestId } from '../lib/ids'
@@ -27,6 +27,7 @@ export const qk = {
   unreadCount: ['notifications', 'unread-count'] as const,
   analytics: (projectId: string) => ['projects', projectId, 'analytics'] as const,
   securityScan: (projectId: string) => ['projects', projectId, 'security-scan'] as const,
+  database: (projectId: string) => ['projects', projectId, 'database'] as const,
 }
 
 // ── Queries ────────────────────────────────────────────────────────────────────
@@ -124,6 +125,14 @@ export function useSecurityScan(projectId: string | null | undefined, enabled = 
     queryFn: ({ signal }) => insightsApi.securityScan(projectId!, { signal }),
     enabled: !!projectId && enabled,
     staleTime: 5 * 60_000, // a scan is relatively expensive; don't refetch aggressively
+  })
+}
+
+export function useDatabase(projectId: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: qk.database(projectId ?? ''),
+    queryFn: ({ signal }) => databaseApi.get(projectId!, { signal }),
+    enabled: !!projectId && enabled,
   })
 }
 

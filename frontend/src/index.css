@@ -298,3 +298,61 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Kiln Landing scoped tokens + base resets ───────────────────────────── */
+.kl {
+  --ink: #16151A; --muted: #4A4852; --faint: #6E6B74; --dim: #8A8791;
+  --bg: #F6F4EF; --cream: #FBFAF7; --card: #FFFFFF;
+  --line: #E8E4DB; --line-2: #E3DFD6; --accent: #FF5B2E; --violet: #5B4CF5;
+}
+.kl::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 100vh;
+  background-color: var(--cream);
+  background-image: radial-gradient(#D6D1C6 1px, transparent 1px);
+  background-size: 22px 22px;
+  z-index: 0;
+}
+.kl a { color: var(--ink); text-decoration: none; transition: color .2s; }
+.kl a:hover { color: #E0461B; }
+.kl button { font-family: inherit; cursor: pointer; transition: background .2s, color .2s, border-color .2s, transform .2s, box-shadow .2s; }
+.kl button:active { transform: scale(.97); }
+
+/* ── Kiln Auth scoped tokens + base resets ──────────────────────────────── */
+.kau {
+  --ink: #16151A; --muted: #4A4852; --faint: #6E6B74; --dim: #8A8791;
+  --bg: #F6F4EF; --card: #FFFFFF; --line: #E8E4DB; --line-2: #CFCBC0;
+  --accent: #FF5B2E; --violet: #5B4CF5; --violet-soft: #F1EEFF; --violet-ink: #3D30C9;
+  --tab-bg: #F1EEE8;
+}
+.dark .kau {
+  --bg: #17161B; --card: #201F25; --ink: #F4F1E9; --muted: #C9C6CE; --faint: #AAA6AF;
+  --line: #3A373F; --line-2: #3A373F; --tab-bg: #2B2930;
+}
+.kau a { text-decoration: none; color: var(--ink); }
+.kau button { font-family: inherit; cursor: pointer; transition: background .2s, color .2s, border-color .2s, transform .2s, box-shadow .2s; }
+.kau button:active { transform: scale(.98); }
+.kau input { font-family: inherit; }
+.kau input::placeholder { color: var(--dim); }
+.dark .kau-input { background: #19181D; }
+.dark .kau-cta { background: #F6F4EF; color: #16151A; }
+
+/* ── Kiln shared keyframes ──────────────────────────────────────────────── */
+@keyframes kl-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes kl-spin { to { transform: rotate(360deg) } }
+@keyframes kl-rise { from { opacity: 0; transform: translateY(16px) } to { opacity: 1; transform: none } }
+@keyframes kl-blink { 50% { opacity: 0 } }
+@keyframes kl-floaty { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-10px) } }
+@keyframes kl-floaty-left { 0%, 100% { transform: translateY(0) rotate(-4deg) } 50% { transform: translateY(-10px) rotate(-4deg) } }
+@keyframes kl-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+@keyframes kl-marquee { to { transform: translateX(-50%) } }
+@keyframes kau-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes kau-spin { to { transform: rotate(360deg) } }
+@keyframes kau-rise { from { opacity: 0; transform: translateY(14px) } to { opacity: 1; transform: none } }
+
+/* Kiln landing staggered-rise utilities */
+.kl-rise { animation: kl-rise .8s cubic-bezier(.2,.8,.2,1) both; }
+.kl-d1 { animation-delay: .08s; } .kl-d2 { animation-delay: .16s; }
+.kl-d3 { animation-delay: .26s; } .kl-d4 { animation-delay: .36s; }

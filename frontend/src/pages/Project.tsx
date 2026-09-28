@@ -3,13 +3,14 @@ import { createPortal } from 'react-dom'
 import { Link, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  agentApi, messageApi, projectApi,
+  agentApi, messageApi, projectApi, requirementsApi,
   type AgentRun, type AgentStep, type FileNode, type Message, type MessageFeedback, type MessageRole,
-  type Project, type ProjectType, type ProjectRole,
+  type Project, type ProjectType, type ProjectRole, type RequirementSession,
 } from '../api/projects'
 import {
   qk, useProjectMembers, useShareProject, useUpdateProjectMemberRole, useRemoveProjectMember,
   useAnalytics, useSecurityScan, useFileTree, useFileContent,
+  useDatabase,
 } from '../api/queries'
 import { EmptyState, ErrorState, LoadingState } from '../components/ui/States'
 import { useRealtime, type RealtimeMessage } from '../realtime/useRealtime'
@@ -94,6 +95,10 @@ export default function ProjectPage() {
   const [thinkingPanel, setThinkingPanel] = useState<{ reasoning: string; seconds: number } | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
+  const [requirements, setRequirements] = useState<RequirementSession | null>(null)
+  const [requirementsBusy, setRequirementsBusy] = useState(false)
+  const [requirementsError, setRequirementsError] = useState('')
+  const requirementsStarted = useRef<string | null>(null)
   const queryClient = useQueryClient()
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(readStoredLayoutMode)
   const [chatWidth, setChatWidth] = useState<number>(readStoredChatWidth)
@@ -172,6 +177,79 @@ export default function ProjectPage() {
     })()
     return () => { cancelled = true }
   }, [id, loadLatestMessages])
+
+  useEffect(() => {
+    if (!project || project.lifecycleStage !== 'REQUIREMENTS' || !needsRequirementInterview(project) || requirementsStarted.current === id) return
+    requirementsStarted.current = id
+    setRequirementsError('')
+    void requirementsApi.start(id).then(setRequirements).catch((error) => {
+      setRequirementsError(error instanceof Error ? error.message : 'Could not start requirements interview.')
+    })
+  }, [id, project])
+
+  useEffect(() => {
+    if (project?.lifecycleStage === 'REQUIREMENTS' && needsRequirementInterview(project)) {
+      setTab('details')
+      setLayoutMode('chat-only')
+    }
+  }, [project?.lifecycleStage])
+
+  const answerRequirement = useCallback(async (questionId: string, selectedOption: string | null, otherText: string | null) => {
+    setRequirementsBusy(true)
+    setRequirementsError('')
+    try {
+      setRequirements(await requirementsApi.answer(id, questionId, { selectedOption, otherText }))
+    } catch (error) {
+      setRequirementsError(error instanceof Error ? error.message : 'Could not save this answer.')
+      throw error
+    } finally {
+      setRequirementsBusy(false)
+    }
+  }, [id])
+
+  const approveRequirements = useCallback(async () => {
+    setRequirementsBusy(true)
+    setRequirementsError('')
+    try {
+      setRequirements(await requirementsApi.approve(id))
+      setProject((current) => current ? { ...current, lifecycleStage: 'DESIGN' } : current)
+      setLayoutMode('split')
+      setTab('details')
+    } catch (error) {
+      setRequirementsError(error instanceof Error ? error.message : 'Could not approve requirements.')
+    } finally {
+      setRequirementsBusy(false)
+    }
+  }, [id])
+
+  const skipRequirements = useCallback(async () => {
+    if (!requirements) return
+    setRequirementsBusy(true)
+    setRequirementsError('')
+    try {
+      let latest = requirements
+      for (const question of requirements.questions) {
+        if (!question.required || question.selectedOption || question.otherText) continue
+        const recommended = question.recommendedOption
+          ?? question.options.find((option) => option.recommended)?.id
+          ?? question.options[0]?.id
+        if (!recommended) continue
+        latest = await requirementsApi.answer(id, question.id, { selectedOption: recommended, otherText: null })
+      }
+      setRequirements(latest)
+      if (latest.complete) {
+        const approved = await requirementsApi.approve(id)
+        setRequirements(approved)
+        setProject((current) => current ? { ...current, lifecycleStage: 'DESIGN' } : current)
+        setLayoutMode('split')
+        setTab('details')
+      }
+    } catch (error) {
+      setRequirementsError(error instanceof Error ? error.message : 'Could not use the recommended answers.')
+    } finally {
+      setRequirementsBusy(false)
+    }
+  }, [id, requirements])
 
   const upsert = useCallback((incoming: Message) => {
     setMessages((previous) => {
@@ -396,6 +474,16 @@ export default function ProjectPage() {
       <div className={'pw' + (dragging ? ' dragging' : '')} ref={splitRef}>
         {shareOpen && <ShareDialog projectId={id} onClose={() => setShareOpen(false)} />}
         {publishOpen && project && <PublishDialog project={project} onClose={() => setPublishOpen(false)} onChange={setProject} />}
+        {project?.lifecycleStage === 'REQUIREMENTS' && needsRequirementInterview(project) && requirements && (
+          <RequirementDialog
+            session={requirements}
+            busy={requirementsBusy}
+            error={requirementsError}
+            onAnswer={answerRequirement}
+            onApprove={approveRequirements}
+            onSkipAll={skipRequirements}
+          />
+        )}
 
         <section className={'pw-chat' + (!chatVisible ? ' pw-chat--hidden' : '')} style={{
           width: layoutMode === 'split' ? chatWidth : undefined,
@@ -437,7 +525,7 @@ export default function ProjectPage() {
               {loading
                 ? <p className="pw-loading">Loading conversation…</p>
                 : (() => {
-                    const nonSystem = messages.filter((m) => m.role !== 'SYSTEM')
+                    const nonSystem = messages.filter((m) => m.role !== 'SYSTEM' && !isInternalWorkflowMessage(m))
                     // Sort user messages by time — they are the anchor for ordering
                     const userMsgs = nonSystem
                       .filter((m) => m.role === 'USER')
@@ -472,6 +560,8 @@ export default function ProjectPage() {
                     })
                   })()}
               {rollbackError && <p className="pw-error">{rollbackError}</p>}
+              {requirements?.complete && <RequirementAnswerCard projectName={project?.name} session={requirements} onPreview={() => setTab('preview')} />}
+              {project?.lifecycleStage === 'REQUIREMENTS' && needsRequirementInterview(project) && <RequirementWaiting />}
               <div ref={bottomRef} />
             </div>
           </div>
@@ -630,10 +720,10 @@ export default function ProjectPage() {
               : tab === 'files' ? <FilesPanel projectId={id} />
               : tab === 'code' ? <CodePanel projectId={id} />
               : tab === 'history' ? <HistoryPanel runs={runs} onRestore={rollbackRun} rollingBackId={rollingBackId} />
-                : tab === 'details' ? <DetailsPanel run={selectedRun} steps={steps} />
+              : tab === 'details' ? <DetailsPanel run={selectedRun} steps={steps} stage={project?.lifecycleStage} requirements={requirements} />
                   : tab === 'analytics' ? <AnalyticsPanel projectId={id} active={tab === 'analytics'} />
                     : tab === 'security' ? <SecurityPanel projectId={id} active={tab === 'security'} />
-                      : tab === 'database' ? <DatabasePanel />
+                      : tab === 'database' ? <DatabasePanel projectId={id} />
                         : <PreviewPanel project={project} />}
           </div>
         </section>
@@ -644,6 +734,17 @@ export default function ProjectPage() {
 
 function isActive(run: AgentRun) {
   return run.status === 'QUEUED' || run.status === 'RUNNING' || run.status === 'AWAITING_INPUT'
+}
+
+function needsRequirementInterview(project: Project | null): boolean {
+  if (!project || project.type !== 'BUILD' || project.lifecycleStage !== 'REQUIREMENTS') return false
+  const prompt = (project.initialPrompt ?? '').trim().toLowerCase()
+  if (!prompt || /^(hi|hello|hey|yo|good morning|good evening|ok|okay)[.! ]*$/.test(prompt)) return false
+  return prompt.length >= 9 && /\b(build|create|make|develop|design|implement|generate|clone|app|application|website|dashboard|todo|tool|platform|system|project|page|portal|crm|portfolio|store|shop|blog|mern)\b/.test(prompt)
+}
+
+function isInternalWorkflowMessage(message: Message): boolean {
+  return message.role === 'USER' && message.content.startsWith('Build the requested project now. Use the approved requirements below as the source of truth.')
 }
 
 /* ── Chat ─────────────────────────────────────────────────────────────────── */
@@ -1019,7 +1120,44 @@ function HistoryPanel({ runs, onRestore, rollingBackId }: { runs: AgentRun[]; on
 }
 
 /* ── Build details (Figma 17) — the current run's metadata + full step timeline ────────────────── */
-function DetailsPanel({ run, steps }: { run: AgentRun | undefined; steps: AgentStep[] }) {
+function RequirementSummary({ session }: { session: RequirementSession }) {
+  const answered = session.questions.filter((question) => question.selectedOption || question.otherText).length
+  return (
+    <div className="pw-requirement-summary">
+      <div className="pw-requirement-summary-head">
+        <div><b>{session.status === 'APPROVED' ? 'Requirements approved' : 'Questions answered'}</b><small>{answered} of {session.questions.length} answered</small></div>
+        <span className={'pw-summary-pulse' + (session.complete ? ' done' : '')} />
+      </div>
+      <div className="pw-requirement-summary-list">
+        {session.questions.map((question) => {
+          const answer = question.otherText || question.options.find((option) => option.id === question.selectedOption)?.label
+          return <div className="pw-requirement-summary-row" key={question.id}><span>{question.prompt}</span><b>{answer ?? 'Waiting for answer'}</b></div>
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ProcessRail({ stage }: { stage?: Project['lifecycleStage'] }) {
+  const stages = [
+    ['REQUIREMENTS', 'Requirements'], ['DESIGN', 'Design'], ['BUILDING', 'Build'],
+    ['REVIEW', 'Review'], ['DEPLOYING', 'Deploy'], ['LIVE', 'Live'],
+  ] as const
+  const current = Math.max(0, stages.findIndex(([id]) => id === stage))
+  return (
+    <div className="pw-process-rail" aria-label="Project process">
+      {stages.map(([id, label], index) => (
+        <div key={id} className={'pw-process-rail-step' + (id === stage ? ' active' : '') + (index < current || stage === 'LIVE' ? ' complete' : '')}>
+          <span>{index < current || stage === 'LIVE' ? 'x' : index + 1}</span>
+          <b>{label}</b>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function DetailsPanel({ run, steps, stage, requirements }: { run: AgentRun | undefined; steps: AgentStep[]; stage?: Project['lifecycleStage']; requirements: RequirementSession | null }) {
+  if (!run && requirements) return <div className="pw-details"><ProcessRail stage={stage} /><RequirementSummary session={requirements} /></div>
   if (!run) return <div className="pw-emptyfiles">No build to show yet — start a build and its details appear here.</div>
   const meta = RUN_STATUS_META[run.status] ?? { label: run.status, color: '#6E6B74' }
   return (
@@ -1028,6 +1166,8 @@ function DetailsPanel({ run, steps }: { run: AgentRun | undefined; steps: AgentS
         <b>{run.mode.toLowerCase()} run</b>
         <span className="pw-details-status" style={{ color: meta.color }}>{meta.label}</span>
       </div>
+      <ProcessRail stage={stage} />
+      {requirements && <RequirementSummary session={requirements} />}
       <dl className="pw-details-meta">
         <div><dt>Started</dt><dd>{runWhen(run.createdAt)}</dd></div>
         <div><dt>Prompt tokens</dt><dd>{run.promptTokens.toLocaleString()}</dd></div>
@@ -1173,21 +1313,24 @@ function SecurityPanel({ projectId, active }: { projectId: string; active: boole
 }
 
 /* ── Cloud database (Figma 22) — honest empty state (no managed DB backend yet) ────────────────── */
-function DatabasePanel() {
+function DatabasePanel({ projectId }: { projectId: string }) {
+  const { data, isLoading, isError, refetch } = useDatabase(projectId)
+  if (isLoading) return <div className="pw-insight"><LoadingState /></div>
+  if (isError || !data) return <div className="pw-insight"><ErrorState message="Could not load database status." onRetry={() => void refetch()} /></div>
   return (
     <div className="pw-insight">
-      <h2>Cloud database</h2>
-      <p className="pw-insight-sub">Your project's data, ready when you are.</p>
-      <EmptyState title="No database connected"
-        hint="Ask Kiln to add a database to this project, or connect one from Connectors. Managed databases are coming soon." />
+      <h2>Project database</h2>
+      <p className="pw-insight-sub">The MongoDB namespace reserved for this generated app.</p>
+      <div className="pw-db-status"><span className={'pw-sev ' + (data.reachable ? 'low' : 'medium')}>{data.reachable ? 'Connected' : 'Unavailable'}</span><code>{data.database}</code></div>
+      {data.reachable ? <div className="pw-db-collections">{data.collections.length ? data.collections.map((name) => <span key={name}>{name}</span>) : <span>No collections yet</span>}</div> : <EmptyState title="MongoDB is unavailable" hint="Start the local MongoDB service to inspect this project's data." />}
     </div>
   )
 }
 
 function BuildStep({ step, previousCreatedAt }: { step: AgentStep; previousCreatedAt?: string }) {
   if (step.type === 'THINKING') return <ThinkingStep step={step} previousCreatedAt={previousCreatedAt} />
-  const title = step.type === 'TOOL_CALL' ? `Using ${step.content}`
-    : step.type === 'TOOL_RESULT' ? `${step.content} done`
+  const title = step.type === 'TOOL_CALL' ? friendlyToolTitle(step.content)
+    : step.type === 'TOOL_RESULT' ? `${friendlyToolTitle(step.content)} complete`
       : step.type === 'STATUS' ? (step.content ?? 'Status')
         : step.type.replace('_', ' ')
   const file = fileFromStep(step)
@@ -1198,6 +1341,29 @@ function BuildStep({ step, previousCreatedAt }: { step: AgentStep; previousCreat
       {file && <code>{file}</code>}
     </div>
   )
+}
+
+function friendlyToolTitle(tool: string | null): string {
+  switch (tool) {
+    case 'setPlan': return 'Created implementation plan'
+    case 'updatePlanStep': return 'Updated implementation plan'
+    case 'listFiles': return 'Read project files'
+    case 'readFile': return 'Read file'
+    case 'getFileSummary': return 'Summarized file'
+    case 'searchCode': return 'Searched code'
+    case 'getProjectMetadata': return 'Read project metadata'
+    case 'createFile': return 'Created file'
+    case 'writeFile': return 'Wrote file'
+    case 'patchFile': return 'Edited file'
+    case 'deleteFile': return 'Deleted file'
+    case 'renameFile': return 'Renamed file'
+    case 'getDiagnostics': return 'Checked diagnostics'
+    case 'runTypeCheck': return 'Checked types'
+    case 'runBuild': return 'Checked production build'
+    case 'runTests': return 'Ran tests'
+    case 'validateChanges': return 'Validated changes'
+    default: return tool ? tool.replace(/([a-z])([A-Z])/g, '$1 $2') : 'Agent step'
+  }
 }
 
 /** A "Thought for Ns" step expands in place to show the model's actual reasoning right inside
@@ -1895,6 +2061,226 @@ function CodeLines({ content, filename }: { content: string; filename: string })
 }
 
 /* ── Share (Figma 19) — per-project collaborators, wired to the real sharing API ──────────────── */
+function RequirementDialogLegacy({
+  session, busy, error, onAnswer, onApprove,
+}: {
+  session: RequirementSession
+  busy: boolean
+  error: string
+  onAnswer: (questionId: string, selectedOption: string | null, otherText: string | null) => Promise<void>
+  onApprove: () => Promise<void>
+}) {
+  const firstIncomplete = session.questions.findIndex((question) =>
+    question.required && !question.selectedOption && !question.otherText)
+  const [index, setIndex] = useState(firstIncomplete >= 0 ? firstIncomplete : 0)
+  const question = session.questions[index]
+  const [selected, setSelected] = useState<string | null>(question?.selectedOption ?? question?.recommendedOption ?? question?.options.find((option) => option.recommended)?.id ?? null)
+  const [other, setOther] = useState(question?.otherText ?? '')
+
+  useEffect(() => {
+    const next = session.questions.findIndex((item) => item.required && !item.selectedOption && !item.otherText)
+    setIndex(next >= 0 ? next : Math.max(0, session.questions.length - 1))
+  }, [session])
+
+  useEffect(() => {
+    setSelected(question?.selectedOption ?? question?.recommendedOption ?? question?.options.find((option) => option.recommended)?.id ?? null)
+    setOther(question?.otherText ?? '')
+  }, [question?.id, question?.selectedOption, question?.otherText, question?.recommendedOption, question?.options])
+
+  if (!question) return null
+  const isOther = selected === 'other'
+  const answered = !!selected || !!other.trim()
+  const last = index === session.questions.length - 1
+  const saveAndContinue = async () => {
+    await onAnswer(question.id, isOther ? 'other' : selected, isOther ? other : null)
+    if (!last) setIndex((value) => Math.min(value + 1, session.questions.length - 1))
+  }
+
+  return createPortal(
+    <div className="pw-modal-scrim pw-requirement-scrim">
+      <div className="pw-modal pw-requirement-modal" role="dialog" aria-modal="true" aria-label="Project requirements">
+        <header>
+          <div><span className="pw-requirement-kicker">REQUIREMENTS</span><b>Shape the first version</b></div>
+          <span className="pw-requirement-count">{index + 1} / {session.questions.length}</span>
+        </header>
+        <div className="pw-requirement-progress" aria-hidden="true">
+          {session.questions.map((item, itemIndex) => <span key={item.id} className={itemIndex <= index ? 'active' : ''} />)}
+        </div>
+        <div className="pw-requirement-question">
+          <h2>{question.prompt}</h2>
+          <div className="pw-requirement-options">
+            {question.options.map((option) => (
+              <button type="button" key={option.id} className={'pw-requirement-option' + (selected === option.id ? ' selected' : '')}
+                onClick={() => { setSelected(option.id); if (option.id !== 'other') setOther('') }} disabled={busy}>
+                <span className="pw-requirement-radio">{selected === option.id ? '✓' : ''}</span>
+                <span><b>{option.label}</b><small>{option.description}</small></span>
+                {option.recommended && <em>Recommended</em>}
+              </button>
+            ))}
+          </div>
+          {isOther && <textarea className="pw-requirement-other" value={other} onChange={(event) => setOther(event.target.value)} placeholder="Tell us what you have in mind" rows={3} autoFocus />}
+        </div>
+        {error && <p className="pw-error">{error}</p>}
+        <footer className="pw-requirement-actions">
+          <button type="button" className="pw-requirement-back" onClick={() => setIndex((value) => Math.max(0, value - 1))} disabled={index === 0 || busy}>Back</button>
+          {session.complete
+            ? <button type="button" className="pw-share-send" onClick={() => void onApprove()} disabled={busy}>{busy ? 'Preparing design…' : 'Approve requirements'}</button>
+            : <button type="button" className="pw-share-send" onClick={() => void saveAndContinue()} disabled={busy || !answered}>{busy ? 'Saving…' : last ? 'Save answer' : 'Continue'}</button>}
+        </footer>
+      </div>
+    </div>, document.body,
+  )
+}
+
+void RequirementDialogLegacy
+
+function RequirementAnswerCard({ projectName, session, onPreview }: {
+  projectName?: string
+  session: RequirementSession
+  onPreview: () => void
+}) {
+  const [expanded, setExpanded] = useState(true)
+  return (
+    <article className="pw-requirement-card">
+      <header>
+        <b>{projectName ? `Built ${projectName}` : 'Approved project requirements'}</b>
+        <span aria-hidden="true">+</span>
+      </header>
+      {expanded && <div className="pw-requirement-card-body">
+        {session.questions.map((question) => {
+          const answer = question.otherText || question.options.find((option) => option.id === question.selectedOption)?.label || question.selectedOption
+          return <div className="pw-requirement-card-row" key={question.id}><span>{question.prompt}</span><b>{answer ?? 'Not specified'}</b></div>
+        })}
+      </div>}
+      <footer>
+        <button type="button" onClick={() => setExpanded((value) => !value)}>{expanded ? 'Hide details' : 'Show details'}</button>
+        <button type="button" onClick={onPreview}>Preview</button>
+      </footer>
+    </article>
+  )
+}
+
+function RequirementWaiting() {
+  return (
+    <div className="pw-requirement-waiting" role="status" aria-live="polite">
+      <span className="pw-waiting-mark"><i /></span>
+      <span>Waiting for answers</span>
+      <span className="pw-waiting-dots" aria-hidden="true"><i /><i /><i /></span>
+    </div>
+  )
+}
+
+function RequirementDialog({
+  session, busy, error, onAnswer, onApprove, onSkipAll,
+}: {
+  session: RequirementSession
+  busy: boolean
+  error: string
+  onAnswer: (questionId: string, selectedOption: string | null, otherText: string | null) => Promise<void>
+  onApprove: () => Promise<void>
+  onSkipAll: () => Promise<void>
+}) {
+  const firstIncomplete = session.questions.findIndex((question) =>
+    question.required && !question.selectedOption && !question.otherText)
+  const [index, setIndex] = useState(firstIncomplete >= 0 ? firstIncomplete : 0)
+  const question = session.questions[index]
+  const [selected, setSelected] = useState<string | null>(question?.selectedOption ?? question?.recommendedOption ?? question?.options.find((option) => option.recommended)?.id ?? null)
+  const [other, setOther] = useState(question?.otherText ?? '')
+
+  useEffect(() => {
+    const next = session.questions.findIndex((item) => item.required && !item.selectedOption && !item.otherText)
+    setIndex(next >= 0 ? next : Math.max(0, session.questions.length - 1))
+  }, [session])
+
+  useEffect(() => {
+    setSelected(question?.selectedOption ?? question?.recommendedOption ?? question?.options.find((option) => option.recommended)?.id ?? null)
+    setOther(question?.otherText ?? '')
+  }, [question?.id, question?.selectedOption, question?.otherText, question?.recommendedOption, question?.options])
+
+  if (!question) return null
+  const last = index === session.questions.length - 1
+  const isOther = selected === 'other'
+  const answered = !!selected && (selected !== 'other' || !!other.trim())
+  const visibleOptions = question.options.reduce<RequirementSession['questions'][number]['options']>((result, option) => {
+    const custom = option.id === 'other' || /^(other|write your own|custom)/i.test(option.label.trim())
+    if (custom) {
+      if (!result.some((item) => item.id === 'other')) result.push({ ...option, id: 'other', label: 'Write your own...' })
+    } else result.push(option)
+    return result
+  }, [])
+
+  const choose = (optionId: string) => {
+    setSelected(optionId)
+    if (optionId !== 'other') setOther('')
+  }
+
+  const saveAndContinue = async () => {
+    await onAnswer(question.id, isOther ? 'other' : selected, isOther ? other : null)
+    if (last) await onApprove()
+    else setIndex((value) => Math.min(value + 1, session.questions.length - 1))
+  }
+
+  return createPortal(
+    <div className="pw-requirement-scrim">
+      <div className="pw-requirement-modal" role="dialog" aria-modal="true" aria-label="Project requirements">
+        <header className="pw-requirement-head">
+          <h2>{question.prompt}</h2>
+          <span className="pw-requirement-close" aria-hidden="true">x</span>
+        </header>
+
+        <div className="pw-requirement-progress" aria-label={`Question ${index + 1} of ${session.questions.length}`}>
+          {session.questions.map((item, itemIndex) => (
+            <span key={item.id} className={itemIndex <= index ? 'active' : ''} />
+          ))}
+        </div>
+
+        <div className="pw-requirement-options">
+          {visibleOptions.map((option) => option.id === 'other' ? (
+            <div className={'pw-requirement-option-wrap' + (isOther ? ' selected' : '')} key={option.id}>
+              <button type="button" className="pw-requirement-option pw-requirement-other-option"
+                onClick={() => choose(option.id)} disabled={busy}>
+                <span className="pw-requirement-radio">{isOther ? 'x' : ''}</span>
+                <span><b>{option.label === 'Other' ? 'Write your own...' : option.label}</b></span>
+              </button>
+              {isOther && (
+                <input className="pw-requirement-other-inline" value={other}
+                  onChange={(event) => { setOther(event.target.value); setSelected('other') }}
+                  onFocus={() => setSelected('other')} placeholder="Tell us what you have in mind"
+                  aria-label="Your custom requirement" autoFocus disabled={busy} />
+              )}
+            </div>
+          ) : (
+            <button type="button" key={option.id}
+              className={'pw-requirement-option' + (selected === option.id ? ' selected' : '')}
+              onClick={() => choose(option.id)} disabled={busy}>
+              <span className="pw-requirement-radio">{selected === option.id ? 'x' : ''}</span>
+              <span className="pw-requirement-option-copy">
+                <b>{option.label}</b>
+                <small>{option.description}</small>
+              </span>
+              {option.recommended && <em>Recommended</em>}
+            </button>
+          ))}
+        </div>
+
+        {error && <p className="pw-error">{error}</p>}
+        <footer className="pw-requirement-actions">
+          <div className="pw-requirement-nav">
+            <button type="button" className="pw-requirement-icon-button" aria-label="Previous question" title="Previous question"
+              onClick={() => setIndex((value) => Math.max(0, value - 1))} disabled={index === 0 || busy}>‹</button>
+            <button type="button" className="pw-requirement-icon-button" aria-label="Next question" title="Next question"
+              onClick={() => setIndex((value) => Math.min(session.questions.length - 1, value + 1))} disabled={last || busy}>›</button>
+          </div>
+          <button type="button" className="pw-requirement-skip" onClick={() => void onSkipAll()} disabled={busy}>Skip all</button>
+          <button type="button" className="pw-requirement-next" onClick={() => void saveAndContinue()} disabled={busy || !answered}>
+            {busy ? 'Saving...' : last ? 'Submit' : 'Next'}
+          </button>
+        </footer>
+      </div>
+    </div>, document.body,
+  )
+}
+
 function ShareDialog({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const { data: members, isLoading } = useProjectMembers(projectId)
   const share = useShareProject(projectId)

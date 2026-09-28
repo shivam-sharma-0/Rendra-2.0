@@ -4,18 +4,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useAuth } from '../../auth/AuthContext'
-import { googleLoginUrl } from '../../auth/api'
+import { clearLoggedOutMarker, googleLoginUrl } from '../../auth/api'
 import { startProject, type ProjectType } from '../../api/projects'
-import './auth.css'
-
-/**
- * Log in / Sign up — pixel-faithful to Figma "03 · Log in Sign up" (scoped .kau).
- *
- * The visible screen matches Figma exactly: providers + a single "Work email" field. Since the
- * backend uses email + password (no magic-link infra), we use an email-first flow — entering the
- * email advances to a compact password step. This keeps the initial view short (no scrollbar, no
- * logo crowding) and identical to the mock, while staying functional. Only Google OAuth is wired.
- */
 
 const loginSchema = z.object({
   email: z.string().min(1, 'Email is required').email('Enter a valid email'),
@@ -35,7 +25,11 @@ const PROVIDERS = [
   { name: 'Apple', mono: 'A', badge: 'apple', lastUsed: false, enabled: false },
 ] as const
 
-
+const BADGE_COLORS: Record<string, string> = {
+  google: 'bg-[#FFEDE6] text-[#B23A12]',
+  github: 'bg-[#16151A] text-[#F6F4EF]',
+  apple: 'bg-[#F1EEE8] text-[#16151A]',
+}
 
 const Arrow = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
@@ -96,53 +90,53 @@ export default function Auth() {
   })
 
   return (
-    <div className="kau">
-      <section className="kau-form">
-        <button type="button" className="kau-close" onClick={() => nav('/')} aria-label="Close">
+    <div className="kau fixed inset-0 bg-black/40 z-[999] flex items-center justify-center text-[var(--ink)] font-['Geist',system-ui,sans-serif] animate-[kau-fade_.26s_ease_both] backdrop-blur-[2px]">
+      <section className="w-[440px] p-10 flex flex-col bg-[var(--card)] rounded-[20px] shadow-[0_30px_60px_-15px_rgba(0,0,0,.3)] relative max-h-[95vh] overflow-y-auto max-[600px]:w-[90%] max-[600px]:p-7">
+        <button type="button" className="absolute right-5 top-5 w-8 h-8 rounded-2xl border-none bg-transparent text-[var(--faint)] text-xl flex items-center justify-center hover:bg-[var(--bg)] hover:text-[var(--ink)]" onClick={() => nav('/')} aria-label="Close">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
         </button>
-        <Link to="/" className="kau-brand"><span className="kau-brand-orb"><i /></span></Link>
+        <Link to="/" className="flex items-center gap-2.5"><span className="w-[30px] h-[30px] rounded-xl grid place-items-center bg-[conic-gradient(from_0deg,#FF5B2E,#FFB23E,#5B4CF5,#FF5B2E)] animate-[kau-spin_7s_linear_infinite]"><i className="w-3 h-3 rounded-full bg-[var(--card)]" /></span></Link>
 
-        <form className="kau-center" onSubmit={onSubmit} noValidate>
+        <form className="grow flex flex-col justify-center gap-5" onSubmit={onSubmit} noValidate>
 
-          <div className="kau-head">
-            <span className="kau-kicker">Start building.</span>
-            <h1>{isSignup ? 'Create free account' : 'Log in to your account'}</h1>
+          <div className="flex flex-col mt-3.5 gap-1">
+            <span className="text-lg font-semibold text-[#B9B6AE]">Start building.</span>
+            <h1 className="m-0 font-['Geist',system-ui,sans-serif] font-bold text-xl leading-[1.2] tracking-[-0.02em]">{isSignup ? 'Create free account' : 'Log in to your account'}</h1>
           </div>
 
           {stage === 'email' ? (
             <>
-              <div className="kau-providers">
+              <div className="flex flex-col gap-2">
                 {PROVIDERS.map((p) =>
                   p.enabled ? (
-                    <a key={p.name} className="kau-provider" href={googleLoginUrl()}>
-                      <span className={`kau-badge ${p.badge}`}>{p.mono}</span>
+                    <a key={p.name} className="relative h-11 rounded-xl border border-[var(--line-2)] bg-[var(--card)] text-[var(--ink)] text-sm font-medium flex items-center justify-center gap-2.5 hover:bg-[var(--bg)] hover:border-[#CFCAC0]" href={googleLoginUrl()} onClick={clearLoggedOutMarker}>
+                      <span className={`w-6 h-6 rounded-[7px] text-xs font-bold grid place-items-center ${BADGE_COLORS[p.badge]}`}>{p.mono}</span>
                       <span>Continue with {p.name}</span>
-                      {p.lastUsed && <span className="kau-lastused">Last used</span>}
+                      {p.lastUsed && <span className="absolute right-3.5 text-[11px] font-semibold py-1 px-2 rounded-lg bg-[var(--violet-soft)] text-[var(--violet-ink)]">Last used</span>}
                     </a>
                   ) : (
-                    <button key={p.name} type="button" className="kau-provider" disabled title="Coming soon">
-                      <span className={`kau-badge ${p.badge}`}>{p.mono}</span>
+                    <button key={p.name} type="button" className="relative h-11 rounded-xl border border-[var(--line-2)] bg-[var(--card)] text-[var(--ink)] text-sm font-medium flex items-center justify-center gap-2.5 hover:bg-[var(--bg)] hover:border-[#CFCAC0] disabled:cursor-not-allowed disabled:opacity-[.62]" disabled title="Coming soon">
+                      <span className={`w-6 h-6 rounded-[7px] text-xs font-bold grid place-items-center ${BADGE_COLORS[p.badge]}`}>{p.mono}</span>
                       <span>Continue with {p.name}</span>
-                      <span className="kau-soon">Soon</span>
+                      <span className="absolute right-3.5 text-[11px] text-[var(--dim)]">Soon</span>
                     </button>
                   ),
                 )}
               </div>
 
-              <div className="kau-or">OR</div>
+              <div className="flex items-center gap-3.5 text-[#8A8791] text-[11px] font-semibold tracking-[0.08em] -my-0.5 before:content-[''] before:grow before:h-px before:bg-[var(--line)] after:content-[''] after:grow after:h-px after:bg-[var(--line)]">OR</div>
 
-              <div className="kau-fields">
-                <div className="kau-field">
-                  <label htmlFor="email">Work email</label>
-                  <input id="email" type="email" className="kau-input" placeholder="you@company.com" autoComplete="email"
+              <div className="flex flex-col gap-2.5">
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="email" className="text-[12.5px] font-semibold text-[var(--muted)]">Work email</label>
+                  <input id="email" type="email" className="kau-input h-11 px-3.5 rounded-xl border border-[var(--line-2)] bg-[#FBFAF7] text-sm text-[var(--ink)] outline-[var(--violet)] aria-[invalid=true]:border-[#C63B2B] aria-[invalid=true]:bg-[#FDF3F1]" placeholder="you@company.com" autoComplete="email"
                     aria-invalid={errors.email ? true : undefined}
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void toPassword() } }}
                     {...register('email')} />
-                  {errors.email && <span className="kau-field-error" role="alert">{errors.email.message}</span>}
+                  {errors.email && <span className="text-[#C63B2B] text-xs font-medium" role="alert">{errors.email.message}</span>}
                 </div>
-                {formError && <p className="kau-form-error" role="alert">{formError}</p>}
-                <button type="button" className="kau-cta" onClick={() => void toPassword()}>
+                {formError && <p className="m-0 text-[#C63B2B] text-[13px]" role="alert">{formError}</p>}
+                <button type="button" className="kau-cta h-[46px] rounded-xl bg-[var(--ink)] text-[var(--bg)] text-sm font-semibold flex items-center justify-center gap-2 border-none shadow-[0_14px_26px_-14px_rgba(22,21,26,.6)] disabled:opacity-60 disabled:cursor-not-allowed" onClick={() => void toPassword()}>
                   {isSignup ? 'Create account' : 'Continue with email'} <Arrow />
                 </button>
                 <div style={{textAlign: 'center', fontSize: '13px', color: 'var(--faint)'}}>
@@ -155,36 +149,36 @@ export default function Auth() {
               </div>
             </>
           ) : (
-            <div className="kau-fields">
-              <button type="button" className="kau-backlink" onClick={() => { setStage('email'); setFormError('') }}>
+            <div className="flex flex-col gap-2.5">
+              <button type="button" className="self-start border-none bg-transparent text-[var(--faint)] text-[13px] font-semibold flex items-center gap-1.5 p-0" onClick={() => { setStage('email'); setFormError('') }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M11 18l-6-6 6-6" /></svg>
                 Back
               </button>
-              <div className="kau-emailrow">
+              <div className="flex items-center justify-between h-11 px-3.5 rounded-xl border border-[var(--line-2)] bg-[#FBFAF7] text-sm text-[var(--muted)]">
                 <span>{getValues('email')}</span>
-                <button type="button" onClick={() => setStage('email')}>Change</button>
+                <button type="button" className="border-none bg-transparent text-[var(--violet-ink)] text-[13px] font-semibold p-0" onClick={() => setStage('email')}>Change</button>
               </div>
               {isSignup && (
-                <div className="kau-field">
-                  <label htmlFor="name">Your name</label>
-                  <input id="name" className="kau-input" placeholder="Alex Morgan" autoComplete="name" autoFocus
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="name" className="text-[12.5px] font-semibold text-[var(--muted)]">Your name</label>
+                  <input id="name" className="kau-input h-11 px-3.5 rounded-xl border border-[var(--line-2)] bg-[#FBFAF7] text-sm text-[var(--ink)] outline-[var(--violet)] aria-[invalid=true]:border-[#C63B2B] aria-[invalid=true]:bg-[#FDF3F1]" placeholder="Alex Morgan" autoComplete="name" autoFocus
                     aria-invalid={errors.name ? true : undefined} {...register('name')} />
-                  {errors.name && <span className="kau-field-error" role="alert">{errors.name.message}</span>}
+                  {errors.name && <span className="text-[#C63B2B] text-xs font-medium" role="alert">{errors.name.message}</span>}
                 </div>
               )}
-              <div className="kau-field">
-                <label htmlFor="password">Password</label>
-                <input id="password" type="password" className="kau-input" autoFocus={!isSignup}
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="password" className="text-[12.5px] font-semibold text-[var(--muted)]">Password</label>
+                <input id="password" type="password" className="kau-input h-11 px-3.5 rounded-xl border border-[var(--line-2)] bg-[#FBFAF7] text-sm text-[var(--ink)] outline-[var(--violet)] aria-[invalid=true]:border-[#C63B2B] aria-[invalid=true]:bg-[#FDF3F1]" autoFocus={!isSignup}
                   placeholder={isSignup ? 'At least 8 characters' : 'Your password'}
                   autoComplete={isSignup ? 'new-password' : 'current-password'}
                   aria-invalid={errors.password ? true : undefined} {...register('password')} />
-                {errors.password && <span className="kau-field-error" role="alert">{errors.password.message}</span>}
+                {errors.password && <span className="text-[#C63B2B] text-xs font-medium" role="alert">{errors.password.message}</span>}
               </div>
-              {formError && <p className="kau-form-error" role="alert">{formError}</p>}
-              <button className="kau-cta" disabled={isSubmitting}>
+              {formError && <p className="m-0 text-[#C63B2B] text-[13px]" role="alert">{formError}</p>}
+              <button className="kau-cta h-[46px] rounded-xl bg-[var(--ink)] text-[var(--bg)] text-sm font-semibold flex items-center justify-center gap-2 border-none shadow-[0_14px_26px_-14px_rgba(22,21,26,.6)] disabled:opacity-60 disabled:cursor-not-allowed" disabled={isSubmitting}>
                 {isSubmitting ? 'Please wait…' : isSignup ? 'Create account' : 'Log in'} <Arrow />
               </button>
-              <span className="kau-note">
+              <span className="text-[13px] text-[var(--faint)] flex items-center gap-2">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
                 Your account is protected with secure session cookies.
               </span>
@@ -192,7 +186,7 @@ export default function Auth() {
           )}
         </form>
 
-        <div className="kau-footer" style={{textAlign: 'center', marginTop: '16px'}}>
+        <div className="flex flex-col gap-2 text-xs text-[var(--faint)] leading-[1.4] pt-1 [&_a]:underline" style={{textAlign: 'center', marginTop: '16px'}}>
           {isSignup && <span>By continuing, you agree to the <a href="#terms">Terms of Service</a> and <a href="#privacy">Privacy Policy</a>.</span>}
           <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>

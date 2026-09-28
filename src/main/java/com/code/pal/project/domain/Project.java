@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.FieldDefaults;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.SQLRestriction;
 import org.hibernate.annotations.UpdateTimestamp;
 
@@ -66,6 +67,13 @@ public class Project {
     @Column(nullable = false, length = 16)
     @Builder.Default
     ProjectType type = ProjectType.BUILD;
+
+    /** Explicit gate between prompt intake, design, build, review and deployment. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "lifecycle_stage", nullable = false, length = 20)
+    @ColumnDefault("'DESIGN'")
+    @Builder.Default
+    ProjectStage lifecycleStage = ProjectStage.REQUIREMENTS;
 
     @Column(name = "is_public", nullable = false)
     @Builder.Default

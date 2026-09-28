@@ -74,7 +74,8 @@ public class IntentClassifier {
                     change the project (a feature, a fix, a question about the codebase, etc).
                     Reply with exactly one word and nothing else.
                     """;
-            LlmResult result = llm.chat(new LlmRequest(props.modelFor(ProjectType.CHAT),
+            AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
+            LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
                     List.of(LlmMessage.system(system), LlmMessage.user(userRequest)), List.of(), 0.0));
             String answer = result.content() == null ? "" : result.content().trim().toUpperCase(Locale.ROOT);
             return answer.startsWith("CONVERSATIONAL") ? AgentIntent.CONVERSATIONAL : AgentIntent.TASK;

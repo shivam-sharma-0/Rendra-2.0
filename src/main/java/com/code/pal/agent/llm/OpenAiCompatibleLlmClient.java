@@ -19,6 +19,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,7 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * OpenAI-compatible streaming client. It understands the standard SSE delta format used by
- * Groq, OpenAI and OpenRouter, while assembling tool-call argument deltas into one final result.
+ * NVIDIA, OpenAI and OpenRouter, while assembling tool-call argument deltas into one final result.
  * A failed request is retried only before any text has been published, so users never see a
  * duplicated partial answer.
  */
@@ -39,8 +40,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 
     private final HttpClient http;
     private final ObjectMapper objectMapper;
-    private final URI completionsUri;
-    private final String apiKey;
+    private final Map<String, Endpoint> endpoints;
     private final double defaultTemperature;
     private final int maxAttempts;
     private final long initialBackoffMs;
@@ -50,14 +50,26 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     public OpenAiCompatibleLlmClient(AgentProperties props, ObjectMapper objectMapper) {
         AgentProperties.Llm llm = props.getLlm();
         this.objectMapper = objectMapper;
-        this.apiKey = llm.getApiKey() == null ? "" : llm.getApiKey();
         this.defaultTemperature = llm.getTemperature();
         this.maxAttempts = Math.max(1, llm.getMaxAttempts());
         this.initialBackoffMs = Math.max(50, llm.getRetryInitialBackoffMs());
         this.maxBackoffMs = Math.max(initialBackoffMs, llm.getRetryMaxBackoffMs());
         this.requestTimeout = Duration.ofMillis(Math.max(1_000, props.getRunTimeoutMs()));
-        String baseUrl = llm.getBaseUrl() == null ? "" : llm.getBaseUrl().replaceAll("/+$", "");
-        this.completionsUri = URI.create(baseUrl + "/v1/chat/completions");
+        Map<String, Endpoint> configured = new HashMap<>();
+        if (props.getProviders() != null) {
+            props.getProviders().forEach((name, provider) -> {
+                if (provider != null && provider.getBaseUrl() != null && !provider.getBaseUrl().isBlank()) {
+                    configured.put(name.toLowerCase(java.util.Locale.ROOT),
+                            new Endpoint(provider.getBaseUrl(), provider.getApiKey()));
+                }
+            });
+        }
+        // Preserve the old AGENT_LLM_BASE_URL / AGENT_LLM_API_KEY setup when no provider block
+        // is configured. Existing deployments therefore keep working during the migration.
+        if (!configured.containsKey("openrouter") && llm.getBaseUrl() != null && !llm.getBaseUrl().isBlank()) {
+            configured.put("openrouter", new Endpoint(llm.getBaseUrl(), llm.getApiKey()));
+        }
+        this.endpoints = Map.copyOf(configured);
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .version(HttpClient.Version.HTTP_1_1)
@@ -66,12 +78,17 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 
     @Override
     public LlmResult chatStreaming(LlmRequest request, Consumer<String> onTextDelta) {
-        if (apiKey.isBlank()) throw new LlmException("LLM API key is not configured");
+        String provider = request.provider() == null || request.provider().isBlank()
+                ? "openrouter" : request.provider().toLowerCase(java.util.Locale.ROOT);
+        Endpoint endpoint = endpoints.get(provider);
+        if (endpoint == null || endpoint.apiKey().isBlank()) {
+            throw new LlmException("LLM provider is not configured: " + provider);
+        }
 
         long backoffMs = initialBackoffMs;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                return streamOnce(request, onTextDelta);
+                return streamOnce(endpoint, request, onTextDelta);
             } catch (RetryableLlmException e) {
                 if (attempt == maxAttempts) throw e;
                 long base = e.retryAfterMs() > 0 ? e.retryAfterMs() : backoffMs;
@@ -85,12 +102,12 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         throw new LlmException("LLM request failed");
     }
 
-    private LlmResult streamOnce(LlmRequest request, Consumer<String> onTextDelta) {
+    private LlmResult streamOnce(Endpoint endpoint, LlmRequest request, Consumer<String> onTextDelta) {
         HttpRequest httpRequest;
         try {
-            httpRequest = HttpRequest.newBuilder(completionsUri)
+            httpRequest = HttpRequest.newBuilder(endpoint.completionsUri())
                     .timeout(requestTimeout)
-                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Authorization", "Bearer " + endpoint.apiKey())
                     .header("Content-Type", "application/json")
                     .header("Accept", "text/event-stream")
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(buildBody(request)), StandardCharsets.UTF_8))
@@ -280,4 +297,16 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     }
 
     private static final class UsageBuilder { private int promptTokens; private int completionTokens; }
+
+    private record Endpoint(URI completionsUri, String apiKey) {
+        private Endpoint(String baseUrl, String apiKey) {
+            this(completionsUri(baseUrl), apiKey == null ? "" : apiKey);
+        }
+
+        private static URI completionsUri(String baseUrl) {
+            String normalized = baseUrl.replaceAll("/+$", "");
+            String path = normalized.endsWith("/v1") ? "/chat/completions" : "/v1/chat/completions";
+            return URI.create(normalized + path);
+        }
+    }
 }

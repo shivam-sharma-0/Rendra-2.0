@@ -13,6 +13,7 @@ import com.code.pal.project.domain.Project;
 import com.code.pal.project.domain.ProjectMember;
 import com.code.pal.project.domain.ProjectRole;
 import com.code.pal.project.domain.ProjectType;
+import com.code.pal.project.domain.ProjectStage;
 import com.code.pal.project.dto.CreateProjectRequest;
 import com.code.pal.project.dto.ProjectMemberResponse;
 import com.code.pal.project.dto.ProjectResponse;
@@ -21,6 +22,7 @@ import com.code.pal.project.event.AssistantTurnRequested;
 import com.code.pal.project.exception.AlreadyProjectMemberException;
 import com.code.pal.project.exception.ProjectMemberNotFoundException;
 import com.code.pal.project.exception.ProjectNotFoundException;
+import com.code.pal.project.exception.WorkflowStageException;
 import com.code.pal.project.repository.ProjectMemberRepository;
 import com.code.pal.project.repository.ProjectRepository;
 import com.code.pal.project.service.ProjectService;
@@ -77,18 +79,24 @@ public class ProjectServiceImpl implements ProjectService {
 
         CreateMessageRequest initial = request.initialMessage();
         ProjectType type = request.type() != null ? request.type() : ProjectType.BUILD;
+        boolean requirementsNeeded = type == ProjectType.BUILD && needsRequirements(initial);
 
         Project project = projectRepository.save(Project.builder()
                 .workspaceId(workspaceId)
                 .ownerId(userId)
                 .name(deriveName(request.name(), initial))
                 .type(type)
+                .lifecycleStage(requirementsNeeded ? ProjectStage.REQUIREMENTS : ProjectStage.DESIGN)
                 .initialPrompt(initial != null ? initial.message() : null)
                 .lastActivityAt(Instant.now())
                 .build());
 
         if (initial != null) {
-            seedConversation(project.getId(), initial, type, userId);
+            // Actionable BUILD prompts pause for requirements; greetings and short chat prompts answer normally.
+            if (requirementsNeeded) seedInitialPrompt(project.getId(), initial, type, userId);
+            else if (type == ProjectType.BUILD) {
+                seedConversation(project.getId(), new CreateMessageRequest(initial.id(), initial.message(), ProjectType.CHAT, initial.aiMessageId()), type, userId);
+            } else seedConversation(project.getId(), initial, type, userId);
         }
 
         log.info("Project created id={} workspace={} owner={}", project.getId(), workspaceId, userId);
@@ -109,6 +117,14 @@ public class ProjectServiceImpl implements ProjectService {
     @Transactional(readOnly = true)
     public ProjectResponse get(Long userId, UUID projectId) {
         return ProjectResponse.from(requireAccessible(userId, projectId));
+    }
+
+    @Override
+    @Transactional
+    public ProjectResponse advanceLifecycle(Long userId, UUID projectId, ProjectStage stage) {
+        Project project = requireManageable(userId, projectId);
+        project.setLifecycleStage(stage);
+        return ProjectResponse.from(project);
     }
 
     @Override
@@ -258,9 +274,15 @@ public class ProjectServiceImpl implements ProjectService {
     @Transactional
     public ProjectResponse publish(Long actorId, UUID projectId) {
         Project project = requireManageable(actorId, projectId);
+        if (project.getType() == ProjectType.BUILD
+                && project.getLifecycleStage() != ProjectStage.REVIEW
+                && project.getLifecycleStage() != ProjectStage.LIVE) {
+            throw new WorkflowStageException("Review the completed build before deploying it");
+        }
         if (project.getPublicSlug() == null)
             project.setPublicSlug(uniqueSlug(project.getName()));
         project.setDeploymentStatus(DeploymentStatus.LIVE);
+        project.setLifecycleStage(ProjectStage.LIVE);
         project.setIsPublic(true);
         project.setPublishedUrl(publicBaseUrl + "/p/" + project.getPublicSlug());
         log.info("Project published id={} slug={} by={}", projectId, project.getPublicSlug(), actorId);
@@ -273,6 +295,7 @@ public class ProjectServiceImpl implements ProjectService {
         Project project = requireManageable(actorId, projectId);
         project.setDeploymentStatus(DeploymentStatus.NONE);
         project.setIsPublic(false);
+        if (project.getType() == ProjectType.BUILD) project.setLifecycleStage(ProjectStage.REVIEW);
         log.info("Project unpublished id={} by={}", projectId, actorId);
         return ProjectResponse.from(project);
     }
@@ -322,6 +345,13 @@ public class ProjectServiceImpl implements ProjectService {
         }
     }
 
+    private void seedInitialPrompt(UUID projectId, CreateMessageRequest initial, ProjectType projectType,
+            Long authorId) {
+        Message userMessage = Message.user(projectId, initial.id(), initial.message(), projectType, authorId);
+        userMessage.setSeq(messageSequence.next());
+        messageRepository.save(userMessage);
+    }
+
     private static String deriveName(String name, CreateMessageRequest initial) {
         if (name != null && !name.isBlank())
             return name.trim();
@@ -332,5 +362,12 @@ public class ProjectServiceImpl implements ProjectService {
                     : prompt.substring(0, NAME_FROM_PROMPT_MAX).trim() + "â€¦";
         }
         return "Untitled project";
+    }
+
+    private static boolean needsRequirements(CreateMessageRequest initial) {
+        if (initial == null || initial.message() == null) return false;
+        String prompt = initial.message().trim().toLowerCase();
+        if (prompt.isBlank() || prompt.matches("^(hi|hello|hey|yo|good morning|good evening|ok|okay)[.! ]*$")) return false;
+        return prompt.length() >= 9 && prompt.matches(".*\\b(build|create|make|develop|design|implement|generate|clone|app|application|website|dashboard|todo|tool|platform|system|project|page|portal|crm|portfolio|store|shop|blog|mern)\\b.*");
     }
 }

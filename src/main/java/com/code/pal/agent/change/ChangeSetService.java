@@ -196,6 +196,25 @@ public class ChangeSetService {
         return new WorkspaceView(set.live, set.stage, set.container, set.revision, List.copyOf(set.touched));
     }
 
+    /** Read-only view of the currently staged contents; never exposes the live workspace for editing. */
+    public List<StagedFile> stagedFiles(UUID runId) {
+        ActiveChangeSet set = active.get(runId);
+        if (set == null) return List.of();
+        return set.touched.stream().sorted().map(path -> {
+            Path file = set.stage.resolve(path).normalize();
+            if (!file.startsWith(set.stage) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+                return new StagedFile(path, null, true);
+            }
+            try {
+                byte[] bytes = Files.readAllBytes(file);
+                if (bytes.length > 200_000 || isBinary(bytes)) return new StagedFile(path, null, false);
+                return new StagedFile(path, new String(bytes, StandardCharsets.UTF_8), false);
+            } catch (IOException e) {
+                return new StagedFile(path, null, false);
+            }
+        }).toList();
+    }
+
     /** Fresh baseline copy for a validation operation, so scripts never write generated output to the live project. */
     public Path createValidationBaseline(AgentContext context, String name) {
         ActiveChangeSet set = requireActive(context);
@@ -384,7 +403,13 @@ public class ChangeSetService {
     public record ValidationResult(boolean valid, int changeSetRevision, List<ValidationIssue> issues, String summary) {}
     public record CommitResult(String snapshotRef, List<String> changedPaths) {}
     public record WorkspaceView(Path liveRoot, Path stagedRoot, Path container, int revision, List<String> touchedPaths) {}
+    public record StagedFile(String path, String content, boolean deleted) {}
     public record ValidationProgress(int revision, int validatedRevision, int repairAttempts,
                                      int repairAttemptsRemaining, boolean repairLimitExhausted,
                                      List<ProjectDiagnostic> diagnostics) {}
+
+    private static boolean isBinary(byte[] bytes) {
+        for (int i = 0; i < Math.min(bytes.length, 8_000); i++) if (bytes[i] == 0) return true;
+        return false;
+    }
 }

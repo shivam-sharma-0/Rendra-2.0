@@ -14,6 +14,7 @@ export type SessionResponse = { accessToken: string; user: AuthUser }
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
 export const BACKEND_ORIGIN = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8080'
+const LOGGED_OUT_KEY = 'cp_logged_out'
 
 /** Fail a request that hangs rather than leaving the UI stuck forever. */
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -56,6 +57,20 @@ export const session = {
     accessToken = null
     currentUser = null
   },
+}
+
+/** Remember an explicit logout for this tab so bootstrap does not probe /refresh again. */
+export function markLoggedOut() {
+  sessionStorage.setItem(LOGGED_OUT_KEY, '1')
+}
+
+/** A successful password/OAuth login clears the logout guard. */
+export function clearLoggedOutMarker() {
+  sessionStorage.removeItem(LOGGED_OUT_KEY)
+}
+
+export function wasExplicitlyLoggedOut(): boolean {
+  return sessionStorage.getItem(LOGGED_OUT_KEY) === '1'
 }
 
 /** Remove any tokens/PII a previous build (or another tool) may have left in localStorage. */
@@ -131,13 +146,20 @@ export const authApi = {
 async function authFetch(path: string, init?: RequestInit, allowRetry = true): Promise<Response> {
   const withDefaults = withRequestDefaults(init)
   const headers = withDefaults.headers as Headers
-  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
+  const tokenAtStart = accessToken
+  if (tokenAtStart) headers.set('Authorization', `Bearer ${tokenAtStart}`)
 
   const res = await fetch(`${API_BASE}${path}`, { ...withDefaults, credentials: 'include' })
-  if (res.status !== 401 || !allowRetry) return res
+  // Do not turn a stale request from before logout into a refresh request. A request made
+  // after logout has no access token either, so it must also fail without probing /refresh.
+  if (res.status !== 401 || !allowRetry || !tokenAtStart || accessToken !== tokenAtStart) return res
 
   try {
-    session.set(await authApi.refresh())
+    const refreshed = await authApi.refresh()
+    // Logout may have happened while the refresh request was in flight. Never let that stale
+    // response restore an authenticated session after the user explicitly signed out.
+    if (accessToken !== tokenAtStart || wasExplicitlyLoggedOut()) return res
+    session.set(refreshed)
   } catch {
     session.clear()
     return res

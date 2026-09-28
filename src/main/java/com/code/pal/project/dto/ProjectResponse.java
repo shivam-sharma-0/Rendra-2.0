@@ -3,6 +3,7 @@ package com.code.pal.project.dto;
 import com.code.pal.project.domain.DeploymentStatus;
 import com.code.pal.project.domain.Project;
 import com.code.pal.project.domain.ProjectType;
+import com.code.pal.project.domain.ProjectStage;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -14,6 +15,7 @@ public record ProjectResponse(
         String name,
         String initialPrompt,
         ProjectType type,
+        ProjectStage lifecycleStage,
         Boolean isPublic,
         String publishedUrl,
         DeploymentStatus deploymentStatus,
@@ -29,6 +31,7 @@ public record ProjectResponse(
                 p.getName(),
                 p.getInitialPrompt(),
                 p.getType(),
+                p.getLifecycleStage(),
                 p.getIsPublic(),
                 p.getPublishedUrl(),
                 p.getDeploymentStatus(),

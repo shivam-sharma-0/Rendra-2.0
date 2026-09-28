@@ -2,6 +2,7 @@ package com.code.pal.agent.web;
 
 import com.code.pal.agent.AgentEvents;
 import com.code.pal.agent.change.FileChangeRepository;
+import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.AgentStepType;
 import com.code.pal.agent.domain.RunStatus;
@@ -39,6 +40,7 @@ public class AgentRunController {
     private final AgentEvents events;
     private final AgentJobQueue queue;
     private final FileChangeRepository fileChanges;
+    private final ChangeSetService changeSets;
 
     @GetMapping
     public List<AgentRunResponse> list(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId) {
@@ -62,6 +64,15 @@ public class AgentRunController {
         projects.requireAccessible(principal.userId(), projectId);
         requireRun(projectId, runId);
         return fileChanges.findByRunIdOrderByCreatedAtAsc(runId).stream().map(FileChangeResponse::from).toList();
+    }
+
+    /** Read-only contents of files changed in a currently running isolated change set. */
+    @GetMapping("/{runId}/staged-files")
+    public List<ChangeSetService.StagedFile> stagedFiles(@AuthenticationPrincipal AuthPrincipal principal,
+                                                          @PathVariable UUID projectId, @PathVariable UUID runId) {
+        projects.requireAccessible(principal.userId(), projectId);
+        requireRun(projectId, runId);
+        return changeSets.stagedFiles(runId);
     }
 
     /** Restore the last BUILD run's pre-run workspace snapshot. Project management permission is required. */
