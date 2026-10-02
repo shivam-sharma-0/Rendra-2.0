@@ -196,6 +196,15 @@ export async function apiSend<T>(
   return (res.status === 204 ? undefined : await res.json()) as T
 }
 
+/** Upload multipart files behind auth without manually setting Content-Type (the browser adds the boundary). */
+export async function apiUpload<T>(path: string, files: File[]): Promise<T> {
+  const body = new FormData()
+  files.forEach((file) => body.append('files', file, file.name))
+  const res = await authFetch(path, { method: 'POST', body })
+  if (!res.ok) throw await toError(res)
+  return res.json() as Promise<T>
+}
+
 /** DELETE behind auth. */
 export async function apiDelete(path: string): Promise<void> {
   const res = await authFetch(path, { method: 'DELETE' })

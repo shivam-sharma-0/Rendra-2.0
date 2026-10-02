@@ -8,6 +8,7 @@ import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.snapshot.WorkspaceSnapshotService;
 import com.code.pal.agent.workspace.WorkspaceStorage;
+import com.code.pal.agent.workspace.DockerProjectEnvironment;
 import com.code.pal.message.domain.MessageStatus;
 import com.code.pal.message.dto.MessageResponse;
 import com.code.pal.message.repository.MessageRepository;
@@ -33,6 +34,7 @@ public class AgentRunRecovery {
     private final RealtimeService realtime;
     private final WorkspaceStorage workspace;
     private final WorkspaceSnapshotService snapshots;
+    private final DockerProjectEnvironment sandbox;
 
     @Scheduled(fixedDelayString = "${app.agent.stale-sweep-interval-ms:30000}")
     public void sweep() {
@@ -65,7 +67,11 @@ public class AgentRunRecovery {
         boolean restored = false;
         if (props.isRollbackOnFailure() && run.getSnapshotRef() != null) {
             try {
-                snapshots.restore(workspace.ensure(run.getProjectId()), run.getSnapshotRef());
+                if (run.getSnapshotRef().startsWith("docker:")) {
+                    sandbox.restoreTree(run.getProjectId(), ".codepal/history/" + run.getId() + "/original");
+                } else {
+                    snapshots.restore(workspace.ensure(run.getProjectId()), run.getSnapshotRef());
+                }
                 restored = true;
             } catch (Exception e) {
                 log.error("Could not restore abandoned run {}: {}", run.getId(), e.getMessage());

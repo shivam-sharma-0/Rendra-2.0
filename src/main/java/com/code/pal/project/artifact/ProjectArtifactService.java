@@ -2,6 +2,8 @@ package com.code.pal.project.artifact;
 
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.workspace.WorkspaceStorage;
+import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.project.domain.RequirementQuestion;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -20,6 +22,8 @@ public class ProjectArtifactService {
     private static final int MAX_READ_BYTES = 512_000;
     private final WorkspaceStorage workspaces;
     private final ObjectMapper objectMapper;
+    private final DockerProjectEnvironment sandbox;
+    private final AgentProperties properties;
 
     public void writeRequirements(UUID projectId, UUID sessionId, List<RequirementQuestion> questions) {
         List<Map<String, Object>> answers = questions.stream().map(question -> {
@@ -49,6 +53,10 @@ public class ProjectArtifactService {
     }
 
     public List<Artifact> list(UUID projectId) {
+        if (properties.getSandbox().isRequired()) {
+            return sandbox.list(projectId, ".codepal", 8).stream().filter(entry -> !entry.directory())
+                    .map(entry -> new Artifact(entry.path(), entry.size(), Instant.now())).sorted(Comparator.comparing(Artifact::path)).toList();
+        }
         Path root = workspaces.projectDir(projectId).resolve(".codepal").normalize();
         if (!root.startsWith(workspaces.projectDir(projectId)) || !Files.isDirectory(root)) return List.of();
         try (var paths = Files.walk(root)) {
@@ -64,6 +72,11 @@ public class ProjectArtifactService {
         if (relativePath == null || relativePath.isBlank() || relativePath.contains("..") || relativePath.startsWith("/")) {
             throw new IllegalArgumentException("Invalid artifact path");
         }
+        if (properties.getSandbox().isRequired()) {
+            if (!sandbox.regularFile(projectId, ".codepal", relativePath)) throw new IllegalArgumentException("Artifact not found");
+            if (sandbox.size(projectId, ".codepal", relativePath) > MAX_READ_BYTES) throw new IllegalArgumentException("Artifact is too large");
+            return sandbox.readText(projectId, ".codepal", relativePath);
+        }
         Path root = workspaces.projectDir(projectId).resolve(".codepal").normalize();
         Path target = root.resolve(relativePath).normalize();
         if (!target.startsWith(root) || !Files.isRegularFile(target)) throw new IllegalArgumentException("Artifact not found");
@@ -74,6 +87,11 @@ public class ProjectArtifactService {
     }
 
     private void writeJson(UUID projectId, String relativePath, Object value) {
+        if (properties.getSandbox().isRequired()) {
+            sandbox.writeText(projectId, ".codepal", relativePath,
+                    objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value));
+            return;
+        }
         Path root = workspaces.ensure(projectId).resolve(".codepal").normalize();
         Path target = root.resolve(relativePath).normalize();
         if (!target.startsWith(root)) throw new IllegalArgumentException("Invalid artifact path");

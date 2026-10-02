@@ -63,6 +63,8 @@ public class SearchCodeTool implements AgentTool {
         int maxResults = args.get("maxResults") instanceof Number number
                 ? Math.min(MAX_RESULTS, number.intValue()) : DEFAULT_MAX_RESULTS;
 
+        if (context.sandboxed()) return searchSandbox(query, path, caseSensitive, maxResults, context);
+
         Path root = context.resolveSafe(path);
         if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) {
             throw new IllegalArgumentException("Search path is not a directory: " + path);
@@ -111,6 +113,45 @@ public class SearchCodeTool implements AgentTool {
         output.put("matchCount", matches.size());
         output.put("scannedFiles", scannedFiles[0]);
         output.put("truncated", truncated[0]);
+        return output;
+    }
+
+    private Map<String, Object> searchSandbox(String query, String requestedPath, boolean caseSensitive,
+                                              int maxResults, AgentContext context) {
+        if (query.isBlank() || query.length() > 256) throw new IllegalArgumentException("Search query must be 1-256 characters");
+        String path = ".".equals(requestedPath) ? "." : context.resolveSandboxPath(requestedPath);
+        String root = ".".equals(path) ? context.sandboxRoot() : context.sandboxRoot() + "/" + path;
+        List<String> command = new ArrayList<>(List.of("grep", "-RInF", "-I"));
+        for (String ignored : SKIP_DIRECTORIES) command.add("--exclude-dir=" + ignored);
+        if (!caseSensitive) command.add("--ignore-case");
+        command.add("--");
+        command.add(query);
+        command.add(".");
+        var result = context.sandbox().exec(context.projectId(), root, command);
+        List<Map<String, Object>> matches = new ArrayList<>();
+        if (result.success() || result.exitCode() == 1) {
+            for (String line : result.stdout().split("\\R")) {
+                if (matches.size() >= maxResults || line.isBlank()) break;
+                int first = line.indexOf(':');
+                int second = first < 0 ? -1 : line.indexOf(':', first + 1);
+                if (first < 0 || second < 0) continue;
+                String foundPath = line.substring(0, first).replaceFirst("^\\./", "");
+                int lineNumber;
+                try { lineNumber = Integer.parseInt(line.substring(first + 1, second)); }
+                catch (NumberFormatException ignored) { continue; }
+                String snippet = line.substring(second + 1);
+                if (snippet.length() > MAX_LINE_CHARS) snippet = snippet.substring(0, MAX_LINE_CHARS) + "...";
+                matches.add(Map.of("path", foundPath, "line", lineNumber, "text", snippet));
+                context.contextTrace().selected(foundPath, ContextSelectionReason.SEARCH_MATCH, snippet.length());
+            }
+        }
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("query", query);
+        output.put("path", requestedPath);
+        output.put("matches", matches);
+        output.put("matchCount", matches.size());
+        output.put("scannedFiles", 0);
+        output.put("truncated", matches.size() >= maxResults || result.stdout().split("\\R").length > maxResults);
         return output;
     }
 

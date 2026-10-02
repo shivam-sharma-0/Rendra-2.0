@@ -4,7 +4,9 @@ import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.tool.AgentToolException;
+import com.code.pal.agent.workspace.DockerProjectEnvironment;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
@@ -21,7 +23,7 @@ import java.util.regex.Pattern;
 
 /** Executes only backend-selected package validation operations and returns bounded diagnostics. */
 @Service
-@RequiredArgsConstructor
+@RequiredArgsConstructor(onConstructor_ = @Autowired)
 public class ProjectValidationService {
     private static final Pattern TS_PAREN = Pattern.compile("^(.+?)\\((\\d+),(\\d+)\\):\\s*(error|warning)\\s*([A-Za-z]+\\d+)?:?\\s*(.*)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern COLON = Pattern.compile("^(.+?):(\\d+):(\\d+)\\s*(?:[-:]\\s*)?(error|warning)?\\s*([A-Za-z]+\\d+)?:?\\s*(.*)$", Pattern.CASE_INSENSITIVE);
@@ -30,11 +32,20 @@ public class ProjectValidationService {
     private final ChangeSetService changeSets;
     private final ProjectCommandResolver resolver;
     private final AgentProperties properties;
+    private final DockerProjectEnvironment sandbox;
     private final Map<UUID, ValidationReport> lastReports = new ConcurrentHashMap<>();
+
+    /** Compatibility constructor for path-backed tests; production injection includes Docker. */
+    public ProjectValidationService(ChangeSetService changeSets, ProjectCommandResolver resolver,
+                                    AgentProperties properties) {
+        this(changeSets, resolver, properties, new DockerProjectEnvironment(properties));
+    }
 
     public Object diagnostics(AgentContext context) {
         var view = changeSets.view(context);
-        var capabilities = resolver.inspect(view.liveRoot());
+        var capabilities = context.sandboxed()
+                ? resolver.inspectSandbox(sandbox, context.projectId(), ".")
+                : resolver.inspect(view.liveRoot());
         var summary = new CapabilitySummary(capabilities.packageManager(), capabilities.declaredPackageManager(),
                 capabilities.scripts().keySet().stream().sorted().toList(), capabilities.availableOperations(), capabilities.error());
         return new DiagnosticsSnapshot(summary, lastReports.get(context.runId()),
@@ -43,6 +54,7 @@ public class ProjectValidationService {
 
     public ValidationReport run(AgentContext context, ValidationOperation operation, String scope) {
         validateScope(scope);
+        if (context.sandboxed()) return runSandbox(context, operation, scope);
         var view = changeSets.view(context);
         ProjectCommandResolver.CommandPlan plan = resolver.resolve(view.liveRoot(), operation, scope);
         if (!plan.available()) {
@@ -65,6 +77,7 @@ public class ProjectValidationService {
 
     /** Required final gate: structural checks plus every applicable type-check/build operation. */
     public ValidationReport validateAll(AgentContext context) {
+        if (context.sandboxed()) return validateAllSandbox(context);
         ChangeSetService.ValidationResult structure = changeSets.validate(context);
         if (!structure.valid()) {
             List<ProjectDiagnostic> diagnostics = structure.issues().stream().map(issue ->
@@ -113,6 +126,129 @@ public class ProjectValidationService {
 
     public ValidationReport lastReport(UUID runId) { return lastReports.get(runId); }
     public void clear(UUID runId) { lastReports.remove(runId); }
+
+    private ValidationReport runSandbox(AgentContext context, ValidationOperation operation, String scope) {
+        ProjectCommandResolver.CommandPlan plan = resolver.resolveSandbox(sandbox, context.projectId(), ".", operation, scope);
+        if (!plan.available()) {
+            ValidationReport report = reportUnavailable(context, plan);
+            lastReports.put(context.runId(), report);
+            return report;
+        }
+        Comparison comparison = compareSandbox(context, plan, scope);
+        ValidationReport report = toReport(context, plan, comparison);
+        if (!comparison.after().started() || comparison.after().timedOut()) {
+            changeSets.recordTerminalValidationFailure(context, report.introducedDiagnostics());
+        } else {
+            changeSets.recordProjectValidation(context, report.changeValidationPassed(),
+                    report.introducedDiagnostics(), false);
+        }
+        report = withProgress(report, changeSets.validationProgress(context));
+        lastReports.put(context.runId(), report);
+        return report;
+    }
+
+    private ValidationReport validateAllSandbox(AgentContext context) {
+        ChangeSetService.ValidationResult structure = changeSets.validate(context);
+        if (!structure.valid()) {
+            List<ProjectDiagnostic> diagnostics = structure.issues().stream().map(issue ->
+                    new ProjectDiagnostic(issue.path(), null, null, DiagnosticSeverity.ERROR,
+                            issue.message(), "structure", issue.code())).toList();
+            changeSets.recordProjectValidation(context, false, diagnostics);
+            ValidationReport report = aggregateSandboxReport(context, false, diagnostics, List.of(),
+                    "Deterministic file validation failed");
+            lastReports.put(context.runId(), report);
+            return report;
+        }
+        if (resolver.validationScriptsChanged(sandbox, context.projectId(), ".", context.sandboxRoot())) {
+            List<ProjectDiagnostic> diagnostics = List.of(new ProjectDiagnostic("package.json", null, null,
+                    DiagnosticSeverity.ERROR, "Validation scripts changed during the run and cannot be executed as trusted commands",
+                    "validation-security", "VALIDATION_SCRIPT_CHANGED"));
+            changeSets.recordProjectValidation(context, false, diagnostics);
+            ValidationReport report = aggregateSandboxReport(context, false, diagnostics, List.of(),
+                    "Restore the original package scripts before validation");
+            lastReports.put(context.runId(), report);
+            return report;
+        }
+        List<Comparison> comparisons = new ArrayList<>();
+        List<String> executed = new ArrayList<>();
+        for (ValidationOperation operation : List.of(ValidationOperation.TYPE_CHECK, ValidationOperation.BUILD)) {
+            ProjectCommandResolver.CommandPlan plan = resolver.resolveSandbox(sandbox, context.projectId(), ".", operation, null);
+            if (!plan.available()) continue;
+            comparisons.add(compareSandbox(context, plan, null));
+            executed.add(operation.name());
+        }
+        List<ProjectDiagnostic> introduced = comparisons.stream().flatMap(value -> value.introduced().stream()).toList();
+        List<ProjectDiagnostic> existing = comparisons.stream().flatMap(value -> value.preExisting().stream()).toList();
+        boolean passed = comparisons.stream().allMatch(Comparison::changePassed);
+        boolean terminal = comparisons.stream().anyMatch(value -> !value.after().started() || value.after().timedOut());
+        if (terminal) changeSets.recordTerminalValidationFailure(context, introduced);
+        else changeSets.recordProjectValidation(context, passed, introduced);
+        String summary = passed
+                ? (executed.isEmpty() ? "Structural validation passed; no type-check/build script is configured"
+                                      : "Validation passed: " + String.join(", ", executed))
+                : "Validation found errors introduced by the staged changes";
+        ValidationReport report = aggregateSandboxReport(context, passed, introduced, existing, summary);
+        lastReports.put(context.runId(), report);
+        return report;
+    }
+
+    private Comparison compareSandbox(AgentContext context, ProjectCommandResolver.CommandPlan plan, String scope) {
+        Path baselinePath = changeSets.createValidationBaseline(context, plan.operation().name().toLowerCase(Locale.ROOT));
+        Path candidatePath = changeSets.createValidationCandidate(context, plan.operation().name().toLowerCase(Locale.ROOT));
+        String baseline = sandboxRoot(baselinePath);
+        String candidate = sandboxRoot(candidatePath);
+        try {
+            resolver.preserveOriginalScripts(sandbox, context.projectId(), ".", candidate);
+            CommandOutcome before = executeSandbox(context, plan, baseline);
+            CommandOutcome after = executeSandbox(context, plan, candidate);
+            List<ProjectDiagnostic> baselineDiagnostics = diagnostics(before, baselinePath, plan.operation(), changeSets.view(context).touchedPaths());
+            List<ProjectDiagnostic> currentDiagnostics = diagnostics(after, candidatePath, plan.operation(), changeSets.view(context).touchedPaths());
+            Set<String> baselineKeys = baselineDiagnostics.stream().map(ProjectValidationService::responsibilityFingerprint)
+                    .collect(java.util.stream.Collectors.toSet());
+            List<ProjectDiagnostic> introduced = currentDiagnostics.stream()
+                    .filter(item -> !baselineKeys.contains(responsibilityFingerprint(item))).toList();
+            List<ProjectDiagnostic> existing = currentDiagnostics.stream()
+                    .filter(item -> baselineKeys.contains(responsibilityFingerprint(item))).toList();
+            boolean passed;
+            if (!after.started() || after.timedOut()) passed = false;
+            else if (after.exitCode() == 0) passed = true;
+            else passed = before.started() && !before.timedOut() && before.exitCode() != 0 && introduced.isEmpty();
+            if (!passed && introduced.isEmpty()) introduced = List.of(infrastructureDiagnostic(after, plan.operation()));
+            var touched = changeSets.view(context).touchedPaths();
+            int remaining = Math.max(0, properties.getMaxValidationDiagnostics() - introduced.size());
+            return new Comparison(plan, before, after, bounded(introduced, touched), bounded(existing, touched, remaining), passed);
+        } finally {
+            try { sandbox.removeTree(context.projectId(), baseline); } catch (RuntimeException ignored) { }
+            try { sandbox.removeTree(context.projectId(), candidate); } catch (RuntimeException ignored) { }
+        }
+    }
+
+    private CommandOutcome executeSandbox(AgentContext context, ProjectCommandResolver.CommandPlan plan, String root) {
+        var result = sandbox.exec(context.projectId(), root, plan.command());
+        String output = result.stdout() + (result.error().isBlank() ? "" : "\n" + result.error());
+        return new CommandOutcome(!result.error().startsWith("Docker command could not be started"),
+                result.error().toLowerCase(Locale.ROOT).contains("timed out"), result.exitCode(), output);
+    }
+
+    private ValidationReport aggregateSandboxReport(AgentContext context, boolean passed,
+                                                     List<ProjectDiagnostic> introduced,
+                                                     List<ProjectDiagnostic> existing, String summary) {
+        var progress = changeSets.validationProgress(context);
+        var capabilities = resolver.inspectSandbox(sandbox, context.projectId(), ".");
+        var view = changeSets.view(context);
+        List<ProjectDiagnostic> boundedIntroduced = bounded(introduced, view.touchedPaths());
+        int remaining = Math.max(0, properties.getMaxValidationDiagnostics() - boundedIntroduced.size());
+        return new ValidationReport(ValidationOperation.ALL, true, passed, passed, false, passed ? 0 : 1,
+                capabilities.packageManager(), "project validation", boundedIntroduced,
+                bounded(existing, view.touchedPaths(), remaining), progress.repairAttempts(),
+                progress.repairAttemptsRemaining(), progress.revision(), summary);
+    }
+
+    private static String sandboxRoot(Path path) {
+        String value = path.toString().replace('\\', '/');
+        if (value.startsWith("/workspace/")) return value.substring("/workspace/".length());
+        return value.startsWith("/") ? value.substring(1) : value;
+    }
 
     private Comparison compare(AgentContext context, ProjectCommandResolver.CommandPlan plan, String scope) {
         var view = changeSets.view(context);

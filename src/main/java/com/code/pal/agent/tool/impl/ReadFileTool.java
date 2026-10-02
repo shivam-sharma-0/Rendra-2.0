@@ -41,6 +41,7 @@ public class ReadFileTool implements AgentTool {
     @Override
     public Object execute(Map<String, Object> args, AgentContext context) throws Exception {
         String path = str(args.get("path"));
+        if (context.sandboxed()) return readSandbox(path, context);
         Path file = context.resolveSafe(path);
         if (isSecretFile(file.getFileName().toString())) {
             throw new IllegalArgumentException("Credential-like files are not available to agent tools");
@@ -70,6 +71,31 @@ public class ReadFileTool implements AgentTool {
         String content = new String(truncated ? java.util.Arrays.copyOf(bytes, MAX_BYTES) : bytes, StandardCharsets.UTF_8);
         context.contextTrace().recordRead(normalizedPath, size, version, content.length());
         return Map.of("path", normalizedPath, "version", version, "content", content,
+                "truncated", truncated, "sizeBytes", size);
+    }
+
+    private Object readSandbox(String requested, AgentContext context) {
+        String path = context.resolveSandboxPath(requested);
+        if (isSecretFile(Path.of(path).getFileName().toString())) {
+            throw new IllegalArgumentException("Credential-like files are not available to agent tools");
+        }
+        var sandbox = context.sandbox();
+        if (!sandbox.regularFile(context.projectId(), context.sandboxRoot(), path)) {
+            throw new IllegalArgumentException("File not found: " + requested);
+        }
+        long size = sandbox.size(context.projectId(), context.sandboxRoot(), path);
+        String version = sandbox.version(context.projectId(), context.sandboxRoot(), path);
+        if (context.contextTrace().wasReadUnchanged(path, size, version)) {
+            return Map.of("path", path, "version", version, "unchanged", true,
+                    "message", "Unchanged file already present in this run's conversation");
+        }
+        String raw = sandbox.readText(context.projectId(), context.sandboxRoot(), path);
+        byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+        if (isBinary(bytes)) throw new IllegalArgumentException("Binary files cannot be read as text");
+        boolean truncated = bytes.length > MAX_BYTES;
+        String content = truncated ? new String(bytes, 0, MAX_BYTES, StandardCharsets.UTF_8) : raw;
+        context.contextTrace().recordRead(path, size, version, content.length());
+        return Map.of("path", path, "version", version, "content", content,
                 "truncated", truncated, "sizeBytes", size);
     }
 

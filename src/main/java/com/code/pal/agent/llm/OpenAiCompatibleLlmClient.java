@@ -54,7 +54,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         this.maxAttempts = Math.max(1, llm.getMaxAttempts());
         this.initialBackoffMs = Math.max(50, llm.getRetryInitialBackoffMs());
         this.maxBackoffMs = Math.max(initialBackoffMs, llm.getRetryMaxBackoffMs());
-        this.requestTimeout = Duration.ofMillis(Math.max(1_000, props.getRunTimeoutMs()));
+        this.requestTimeout = Duration.ofMillis(Math.max(1_000, llm.getRequestTimeoutMs()));
         Map<String, Endpoint> configured = new HashMap<>();
         if (props.getProviders() != null) {
             props.getProviders().forEach((name, provider) -> {

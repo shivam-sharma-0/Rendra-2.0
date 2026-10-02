@@ -43,11 +43,45 @@ public class GetFileSummaryTool implements AgentTool {
     @Override
     public ProjectFileSummary execute(Map<String, Object> args, AgentContext context) {
         String path = args.get("path").toString();
+        if (context.sandboxed()) return summarizeSandbox(path, context);
         Path file = context.resolveSafe(path);
         ProjectFileSummary summary = contexts.summarizeFile(context.workspace(), file);
         context.contextTrace().selected(summary.path(), ContextSelectionReason.FILE_SUMMARY, 300);
         recordLocalImports(file, summary, context);
         return summary;
+    }
+
+    private ProjectFileSummary summarizeSandbox(String requested, AgentContext context) {
+        String path = context.resolveSandboxPath(requested);
+        if (!context.sandbox().regularFile(context.projectId(), context.sandboxRoot(), path)) {
+            throw new IllegalArgumentException("File is not available for deterministic summarization: " + requested);
+        }
+        long size = context.sandbox().size(context.projectId(), context.sandboxRoot(), path);
+        String content = context.sandbox().readText(context.projectId(), context.sandboxRoot(), path);
+        ProjectFileSummary summary = contexts.summarizeText(path, size, content);
+        context.contextTrace().selected(summary.path(), ContextSelectionReason.FILE_SUMMARY, 300);
+        recordLocalImportsSandbox(path, summary, context);
+        return summary;
+    }
+
+    private static void recordLocalImportsSandbox(String source, ProjectFileSummary summary, AgentContext context) {
+        Path sourcePath = Path.of(source);
+        Path parent = sourcePath.getParent() == null ? Path.of("") : sourcePath.getParent();
+        for (String imported : summary.imports()) {
+            if (!imported.startsWith(".")) continue;
+            String candidate = parent.resolve(imported).normalize().toString().replace('\\', '/');
+            if (context.sandbox().regularFile(context.projectId(), context.sandboxRoot(), candidate)) {
+                context.contextTrace().selected(candidate, ContextSelectionReason.DIRECT_IMPORT, 0);
+                continue;
+            }
+            for (String extension : SOURCE_EXTENSIONS) {
+                String withExtension = candidate + extension;
+                if (context.sandbox().regularFile(context.projectId(), context.sandboxRoot(), withExtension)) {
+                    context.contextTrace().selected(withExtension, ContextSelectionReason.DIRECT_IMPORT, 0);
+                    break;
+                }
+            }
+        }
     }
 
     private static void recordLocalImports(Path source, ProjectFileSummary summary, AgentContext context) {

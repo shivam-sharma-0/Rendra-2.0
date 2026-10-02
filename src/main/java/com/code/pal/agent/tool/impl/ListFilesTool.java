@@ -39,6 +39,7 @@ public class ListFilesTool implements AgentTool {
     @Override
     public String execute(Map<String, Object> args, AgentContext context) throws Exception {
         String path = args.get("path") == null ? "." : args.get("path").toString();
+        if (context.sandboxed()) return listSandbox(path, context);
         Path dir = context.resolveSafe(path);
         if (!Files.isDirectory(dir)) throw new IllegalArgumentException("Not a directory: " + path);
         context.contextTrace().selected(path, ContextSelectionReason.DIRECTORY_DISCOVERY, 0);
@@ -54,5 +55,20 @@ public class ListFilesTool implements AgentTool {
         }
         if (entries.isEmpty()) return "(empty)";
         return String.join("\n", entries);
+    }
+
+    private String listSandbox(String requested, AgentContext context) {
+        String path = ".".equals(requested) ? "." : context.resolveSandboxPath(requested);
+        String root = ".".equals(path) ? context.sandboxRoot() : context.sandboxRoot() + "/" + path;
+        var entries = context.sandbox().list(context.projectId(), root, 1).stream()
+                .filter(entry -> entry.path().indexOf('/') < 0)
+                .sorted((a, b) -> {
+                    if (a.directory() != b.directory()) return a.directory() ? -1 : 1;
+                    return a.path().compareToIgnoreCase(b.path());
+                }).toList();
+        context.contextTrace().selected(requested, ContextSelectionReason.DIRECTORY_DISCOVERY, 0);
+        if (entries.isEmpty()) return "(empty)";
+        return entries.stream().map(entry -> entry.directory() ? entry.path() + "/" : entry.path())
+                .collect(java.util.stream.Collectors.joining("\n"));
     }
 }

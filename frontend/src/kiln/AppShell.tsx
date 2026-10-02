@@ -6,7 +6,6 @@ import { useProjects, useUnreadCount, useDeleteProject, useNotifications, useMar
 import { notificationApi } from '../api/projects'
 import { Spinner } from '../components/ui/States'
 import { relTime } from './parts'
-import './app-shell.css'
 
 /**
  * Authenticated app shell — sidebar (workspace switcher, nav, recents, Go Pro, account menu) +
@@ -156,7 +155,7 @@ export default function AppShell({ active, children }: { active?: NavId; childre
   ]
 
   return (
-    <div className="kap">
+    <div className="kap h-screen flex bg-[var(--bg)] text-[var(--ink)] font-['Geist',system-ui,sans-serif] overflow-hidden">
       {pop !== 'none' && <div className="kap-scrim" onClick={() => setPop('none')} />}
       
       {deleteConfirmProject && (

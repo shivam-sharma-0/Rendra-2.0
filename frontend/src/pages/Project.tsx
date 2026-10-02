@@ -2,14 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { createPortal } from 'react-dom'
 import { Link, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
+import { BACKEND_ORIGIN } from '../auth/api'
 import {
   agentApi, messageApi, projectApi, requirementsApi,
-  type AgentRun, type AgentStep, type FileNode, type Message, type MessageFeedback, type MessageRole,
+  type AgentRun, type AgentStep, type FileNode, type Message, type MessageFeedback, type MessageRole, type StagedFile,
   type Project, type ProjectType, type ProjectRole, type RequirementSession,
 } from '../api/projects'
 import {
   qk, useProjectMembers, useShareProject, useUpdateProjectMemberRole, useRemoveProjectMember,
-  useAnalytics, useSecurityScan, useFileTree, useFileContent,
+  useAnalytics, useSecurityScan, useFileTree, useFileContent, useStagedFiles,
   useDatabase,
 } from '../api/queries'
 import { EmptyState, ErrorState, LoadingState } from '../components/ui/States'
@@ -18,7 +19,6 @@ import AppShell from '../kiln/AppShell'
 import { Ico } from '../kiln/parts'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import './project-workspace.css'
 
 const TIMELINE_EVENT_TYPES = new Set(['THINKING', 'TOOL_CALL', 'TOOL_RESULT', 'ASK_USER', 'MESSAGE', 'STATUS'])
 const PAGE_SIZE = 50
@@ -296,7 +296,7 @@ export default function ProjectPage() {
           const now = new Date().toISOString()
           const created: Message = {
             id: messageId, projectId: id, role: 'ASSISTANT', content: delta, status: 'STREAMING',
-            mode: null, replyToId: null, feedback: null, createdAt: now, updatedAt: now,
+            mode: null, replyToId: null, feedback: null, seq: Number.MAX_SAFE_INTEGER, createdAt: now, updatedAt: now,
           }
           return [...previous, created]
         }
@@ -336,8 +336,9 @@ export default function ProjectPage() {
     }
   }, [id, oldestPage, loadingOlder])
 
-  const send = useCallback(async (prompt: string, mode: ProjectType) => {
+  const send = useCallback(async (prompt: string, mode: ProjectType, files: File[] = []) => {
     try {
+      if (files.length) await projectApi.uploadAttachments(id, files)
       const created = await messageApi.post(id, prompt, mode)
       // The agent can finish (and its realtime updates can land) before this response does, since
       // ids are client-generated and shared between this response and the realtime stream. Skip any
@@ -471,7 +472,7 @@ export default function ProjectPage() {
 
   return (
     <AppShell active="chats">
-      <div className={'pw' + (dragging ? ' dragging' : '')} ref={splitRef}>
+      <div className={'pw w-full h-full flex flex-row bg-[var(--bg)] text-[var(--ink)] font-[Inter,Geist,system-ui,-apple-system,sans-serif] text-base animate-[pw-fade_.26s_ease_both] motion-reduce:animate-none' + (dragging ? ' dragging' : '')} ref={splitRef}>
         {shareOpen && <ShareDialog projectId={id} onClose={() => setShareOpen(false)} />}
         {publishOpen && project && <PublishDialog project={project} onClose={() => setPublishOpen(false)} onChange={setProject} />}
         {project?.lifecycleStage === 'REQUIREMENTS' && needsRequirementInterview(project) && requirements && (
@@ -526,10 +527,13 @@ export default function ProjectPage() {
                 ? <p className="pw-loading">Loading conversation…</p>
                 : (() => {
                     const nonSystem = messages.filter((m) => m.role !== 'SYSTEM' && !isInternalWorkflowMessage(m))
-                    // Sort user messages by time — they are the anchor for ordering
+                    // Sort user messages by server seq (monotonic insertion order) — the canonical
+                    // order the backend uses. createdAt alone is unstable: messages can share the same
+                    // @CreationTimestamp instant, so sorting on it inverts newly-sent messages until a
+                    // refetch. Fall back to createdAt only if seq is somehow missing.
                     const userMsgs = nonSystem
                       .filter((m) => m.role === 'USER')
-                      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+                      .sort((a, b) => (a.seq - b.seq) || (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()))
                     // Map assistant messages by replyToId for O(1) lookup
                     const byReply = new Map<string, Message>()
                     nonSystem.filter((m) => m.role === 'ASSISTANT' && m.replyToId).forEach((m) => byReply.set(m.replyToId!, m))
@@ -717,8 +721,8 @@ export default function ProjectPage() {
           )}
           <div key={tab} className="pw-panel-content">
             {tab === 'thinking' && thinkingPanel ? <ThinkingPanel reasoning={thinkingPanel.reasoning} seconds={thinkingPanel.seconds} onBack={() => { setTab('details'); setThinkingPanel(null) }} />
-              : tab === 'files' ? <FilesPanel projectId={id} />
-              : tab === 'code' ? <CodePanel projectId={id} />
+              : tab === 'files' ? <FilesPanel projectId={id} activeRunId={runActive ? selectedRun?.id ?? null : null} />
+              : tab === 'code' ? <CodePanel projectId={id} activeRunId={runActive ? selectedRun?.id ?? null : null} />
               : tab === 'history' ? <HistoryPanel runs={runs} onRestore={rollbackRun} rollingBackId={rollingBackId} />
               : tab === 'details' ? <DetailsPanel run={selectedRun} steps={steps} stage={project?.lifecycleStage} requirements={requirements} />
                   : tab === 'analytics' ? <AnalyticsPanel projectId={id} active={tab === 'analytics'} />
@@ -1226,8 +1230,49 @@ function ThinkingPanel({ reasoning, seconds, onBack }: { reasoning: string; seco
 }
 
 /* ── Files panel — project file tree ─────────────────────────────────────────────────────────── */
-function FilesPanel({ projectId }: { projectId: string }) {
+function mergeStagedTree(tree: FileNode[], staged: StagedFile[]): FileNode[] {
+  const clone = (node: FileNode): FileNode => ({ ...node, children: node.children?.map(clone) ?? null })
+  let result = tree.map(clone)
+  for (const change of staged) {
+    const parts = change.path.replaceAll('\\', '/').split('/').filter(Boolean)
+    if (!parts.length) continue
+    const apply = (nodes: FileNode[], index: number): FileNode[] => {
+      const name = parts[index]
+      const at = nodes.findIndex(node => node.name === name)
+      const last = index === parts.length - 1
+      if (last) {
+        if (change.deleted) return at < 0 ? nodes : nodes.filter((_, nodeIndex) => nodeIndex !== at)
+        const previous = at >= 0 ? nodes[at] : null
+        const next: FileNode = {
+          name,
+          path: change.path,
+          dir: previous?.dir ?? false,
+          size: change.content?.length ?? previous?.size ?? 0,
+          children: previous?.children ?? null,
+        }
+        if (at < 0) return [...nodes, next]
+        return nodes.map((node, nodeIndex) => nodeIndex === at ? next : node)
+      }
+      if (at < 0) {
+        if (change.deleted) return nodes
+        const path = parts.slice(0, index + 1).join('/')
+        const created: FileNode = { name, path, dir: true, size: 0, children: apply([], index + 1) }
+        return [...nodes, created]
+      }
+      const current = nodes[at]
+      if (!current.dir) return nodes
+      const next = { ...current, children: apply(current.children ?? [], index + 1) }
+      return nodes.map((node, nodeIndex) => nodeIndex === at ? next : node)
+    }
+    result = apply(result, 0)
+  }
+  return result
+}
+
+function FilesPanel({ projectId, activeRunId }: { projectId: string; activeRunId: string | null }) {
   const { data: tree, isLoading } = useFileTree(projectId)
+  const { data: staged } = useStagedFiles(projectId, activeRunId, !!activeRunId)
+  const visibleTree = useMemo(() => mergeStagedTree(tree ?? [], staged ?? []), [tree, staged])
 
   function renderNode(node: FileNode, depth = 0): React.ReactNode {
     const isDir = node.dir
@@ -1247,7 +1292,7 @@ function FilesPanel({ projectId }: { projectId: string }) {
   }
 
   if (isLoading) return <div className="pw-insight"><LoadingState /></div>
-  if (!tree?.length) return (
+  if (!visibleTree.length) return (
     <div className="pw-empty">
       <div>
         <span className="pw-empty-icon">
@@ -1258,7 +1303,7 @@ function FilesPanel({ projectId }: { projectId: string }) {
       </div>
     </div>
   )
-  return <div className="pw-file-tree">{tree.map(n => renderNode(n))}</div>
+  return <div className="pw-file-tree">{visibleTree.map(n => renderNode(n))}</div>
 }
 
 /* ── Analytics (Figma 21) — real activity aggregates ──────────────────────────────────────────── */
@@ -1472,7 +1517,7 @@ const COMPOSER_MODES: { id: ProjectType; label: string; icon: string }[] = [
 ]
 
 function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest }: {
-  defaultMode: ProjectType; onSend: (prompt: string, mode: ProjectType) => void
+  defaultMode: ProjectType; onSend: (prompt: string, mode: ProjectType, files: File[]) => void
   quote: Quote | null; onClearQuote: () => void
   editRequest: { text: string; nonce: number } | null
 }) {
@@ -1507,7 +1552,7 @@ function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest }: {
     const text = draft.trim()
     if (!text) return
     const prompt = quote ? `> ${quote.text.replace(/\n/g, '\n> ')}\n\n${text}` : text
-    onSend(prompt, mode)
+    onSend(prompt, mode, files)
     setDraft('')
     setFiles([])
     onClearQuote()
@@ -1579,7 +1624,7 @@ function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest }: {
           {modeOpen && (
             <>
               <div className="kap-scrim" onClick={() => setModeOpen(false)} />
-              <div className="kap-pop kap-mode-pop" style={{ bottom: '40px', top: 'auto' }}>
+              <div className="kap-pop kap-mode-pop">
                 {COMPOSER_MODES.map((m) => (
                   <button key={m.id} type="button" className={m.id === mode ? 'on' : ''} onClick={() => { setMode(m.id); setModeOpen(false) }}>
                     <Ico d={m.icon} size={14} />
@@ -1599,13 +1644,30 @@ function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest }: {
 
 /* ── Preview ──────────────────────────────────────────────────────────────── */
 function PreviewPanel({ project }: { project: Project | null }) {
-  const url = project?.deploymentStatus === 'LIVE' ? project?.publishedUrl : null
+  const [previewToken, setPreviewToken] = useState<string | null>(null)
+  const [previewError, setPreviewError] = useState(false)
+  const live = project?.deploymentStatus === 'LIVE'
+
+  useEffect(() => {
+    setPreviewToken(null)
+    setPreviewError(false)
+    if (!project || live || project.lifecycleStage !== 'REVIEW') return
+    let cancelled = false
+    void projectApi.previewToken(project.id)
+      .then((response) => { if (!cancelled) setPreviewToken(response.token) })
+      .catch(() => { if (!cancelled) setPreviewError(true) })
+    return () => { cancelled = true }
+  }, [project?.id, project?.lifecycleStage, live])
+
+  const url = live
+    ? project?.publishedUrl
+    : previewToken ? `${BACKEND_ORIGIN}/preview/${previewToken}` : null
   if (url) return <iframe title="App preview" src={url} className="pw-frame" sandbox="allow-scripts allow-same-origin allow-forms" />
   return (
     <div className="pw-empty pw-dots">
       <div>
         <span className="pw-empty-icon">◐</span>
-        <h3>No preview yet</h3>
+        <h3>{previewError ? 'Preview unavailable' : project?.lifecycleStage === 'REVIEW' ? 'Preparing preview' : 'No preview yet'}</h3>
         <p>Your app’s live preview will appear here once it can run. For now, open the <b>Code</b> tab to see the files Kiln has written.</p>
       </div>
     </div>
@@ -1679,7 +1741,7 @@ function FileIcon({ name }: { name: string }) {
   )
 }
 
-function CodePanel({ projectId }: { projectId: string }) {
+function CodePanel({ projectId, activeRunId }: { projectId: string; activeRunId: string | null }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [copied, setCopied] = useState(false)
@@ -1700,11 +1762,14 @@ function CodePanel({ projectId }: { projectId: string }) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   const { data: tree, isError: treeErrored } = useFileTree(projectId)
+  const { data: staged } = useStagedFiles(projectId, activeRunId, !!activeRunId)
+  const visibleTree = useMemo(() => mergeStagedTree(tree ?? [], staged ?? []), [tree, staged])
   const { data: file, isFetching: loadingFile } = useFileContent(projectId, selected)
+  const stagedFile = staged?.find((item) => item.path === selected && !item.deleted)
 
   // Expand top-level directories by default on first load
   useEffect(() => {
-    if (tree && !initializedDirs.current) {
+    if (visibleTree.length && !initializedDirs.current) {
       initializedDirs.current = true
       const toOpen = new Set<string>()
       const collect = (nodes: FileNode[], depth = 0) => {
@@ -1715,10 +1780,10 @@ function CodePanel({ projectId }: { projectId: string }) {
           }
         }
       }
-      collect(tree)
+      collect(visibleTree)
       setOpenDirs(toOpen)
     }
-  }, [tree])
+  }, [visibleTree])
 
   const toggleDir = (dirPath: string) => {
     setOpenDirs((prev) => {
@@ -1730,7 +1795,7 @@ function CodePanel({ projectId }: { projectId: string }) {
   }
 
   const allFiles = useMemo(() => {
-    if (!tree) return []
+    if (!visibleTree) return []
     const flat: FileNode[] = []
     const collect = (nodes: FileNode[]) => {
       for (const n of nodes) {
@@ -1738,9 +1803,9 @@ function CodePanel({ projectId }: { projectId: string }) {
         if (n.children) collect(n.children)
       }
     }
-    collect(tree)
+    collect(visibleTree)
     return flat
-  }, [tree])
+  }, [visibleTree])
 
   const matchingFiles = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -1849,11 +1914,11 @@ function CodePanel({ projectId }: { projectId: string }) {
   }
 
   if (!tree && !treeErrored) return <div className="pw-code"><div className="pw-loading">Loading files…</div></div>
-  if (!tree || tree.length === 0) {
+  if (!visibleTree || visibleTree.length === 0) {
     return <div className="pw-code"><div className="pw-emptyfiles">No files yet — when Kiln builds in this project, the files it writes show up here.</div></div>
   }
 
-  const sortedTree = sortNodes(tree)
+  const sortedTree = sortNodes(visibleTree)
 
   return (
     <div
@@ -1957,10 +2022,10 @@ function CodePanel({ projectId }: { projectId: string }) {
           </div>
           {loadingFile ? (
             <div className="pw-loading">Loading…</div>
-          ) : file?.binary ? (
+          ) : file?.binary || (stagedFile && stagedFile.content === null) ? (
             <div className="pw-emptyfiles">Binary file — cannot preview.</div>
           ) : (
-            <CodeLines content={file?.content ?? ''} filename={selected} />
+            <CodeLines content={stagedFile?.content ?? file?.content ?? ''} filename={selected} />
           )}
         </article>
       )}

@@ -16,6 +16,7 @@ import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.repository.AgentStepRepository;
 import com.code.pal.agent.snapshot.WorkspaceSnapshotService;
 import com.code.pal.agent.workspace.WorkspaceStorage;
+import com.code.pal.agent.workspace.DockerProjectEnvironment;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.shared.security.AuthPrincipal;
@@ -37,6 +38,7 @@ public class AgentRunController {
     private final AgentStepRepository steps;
     private final WorkspaceStorage workspace;
     private final WorkspaceSnapshotService snapshots;
+    private final DockerProjectEnvironment sandbox;
     private final AgentEvents events;
     private final AgentJobQueue queue;
     private final FileChangeRepository fileChanges;
@@ -88,7 +90,11 @@ public class AgentRunController {
         if (latest == null || !latest.getId().equals(runId) || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.QUEUED) {
             throw new AgentRunConflictException("Only the latest completed build can be rolled back");
         }
-        snapshots.restore(workspace.ensure(projectId), run.getSnapshotRef());
+        if (run.getSnapshotRef().startsWith("docker:")) {
+            sandbox.restoreTree(projectId, ".codepal/history/" + run.getId() + "/original");
+        } else {
+            snapshots.restore(workspace.ensure(projectId), run.getSnapshotRef());
+        }
         events.emit(run, AgentStepType.STATUS, "Workspace restored to the snapshot before this run.", null);
     }
 

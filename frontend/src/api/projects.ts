@@ -1,4 +1,4 @@
-import { apiGet, apiSend } from '../auth/api'
+import { apiGet, apiSend, apiUpload } from '../auth/api'
 import { newAiMessageId, newUserMessageId } from '../lib/ids'
 
 export type ProjectType = 'BUILD' | 'CHAT' | 'PLAN'
@@ -23,7 +23,7 @@ export type MessageFeedback = 'UP' | 'DOWN'
 export type Message = {
   id: string; projectId: string; role: MessageRole; content: string; status: MessageStatus
   mode: ProjectType | null; replyToId: string | null; feedback: MessageFeedback | null
-  createdAt: string; updatedAt: string
+  seq: number; createdAt: string; updatedAt: string
 }
 export type AgentRun = {
   id: string; projectId: string; messageId: string; mode: ProjectType; status: AgentRunStatus
@@ -91,10 +91,14 @@ export const projectApi = {
     opts?: { idempotencyKey?: string },
   ) => apiSend<Project>('POST', `/api/workspaces/${workspaceId}/projects`, body, opts),
   get: (id: string, opts?: ReadOpts) => apiGet<Project>(`/api/projects/${id}`, opts),
+  previewToken: (id: string, opts?: ReadOpts) => apiGet<{ token: string }>(`/api/projects/${id}/preview-token`, opts),
+  uploadAttachments: (id: string, files: File[]) => apiUpload<Attachment[]>(`/api/projects/${id}/attachments`, files),
   remove: (id: string) => apiSend<void>('DELETE', `/api/projects/${id}`),
   publish: (id: string) => apiSend<Project>('POST', `/api/projects/${id}/publish`),
   unpublish: (id: string) => apiSend<Project>('POST', `/api/projects/${id}/unpublish`),
 }
+
+export type Attachment = { path: string; originalName: string; size: number; contentType: string | null }
 
 export type RequirementOption = { id: string; label: string; description: string; recommended: boolean }
 export type RequirementQuestion = {

@@ -63,7 +63,7 @@ public class RequirementServiceImpl implements RequirementService {
     @Override
     @Transactional
     public RequirementDtos.Session answer(Long userId, UUID projectId, UUID questionId, RequirementDtos.AnswerRequest request) {
-        projects.requireCanEdit(userId, projectId);
+        Project project = projects.requireCanEdit(userId, projectId);
         RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
         RequirementQuestion question = questions.findByIdAndSessionId(questionId, session.getId()).orElseThrow(ProjectNotFoundException::new);
         String selected = clean(request.selectedOption(), 80);
@@ -74,8 +74,59 @@ public class RequirementServiceImpl implements RequirementService {
         question.setSelectedOption(selected);
         question.setOtherText(other);
         session.setStatus(RequirementStatus.IN_PROGRESS);
-        if (complete(session)) session.setStatus(RequirementStatus.APPROVAL_REQUIRED);
+        if (complete(session)) refineOrApprove(project, session);
         return view(session);
+    }
+
+    /** Re-checks the completed answer set once, adding only genuinely missing decisions. */
+    private void refineOrApprove(Project project, RequirementSession session) {
+        List<RequirementQuestion> answered = questions.findBySessionIdOrderBySequenceAsc(session.getId());
+        try {
+            Assessment assessment = assess(project, answered);
+            if (!assessment.clear() && !assessment.questions().isEmpty()) {
+                Set<String> knownKeys = answered.stream().map(RequirementQuestion::getQuestionKey)
+                        .map(String::toLowerCase).collect(java.util.stream.Collectors.toSet());
+                int remaining = Math.max(0, 8 - answered.size());
+                List<QuestionDraft> additional = assessment.questions().stream()
+                        .filter(item -> knownKeys.add(item.key().toLowerCase(Locale.ROOT)))
+                        .limit(remaining)
+                        .toList();
+                if (!additional.isEmpty()) {
+                    saveQuestions(session, additional, answered.size());
+                    session.setStatus(RequirementStatus.IN_PROGRESS);
+                    return;
+                }
+            }
+        } catch (RuntimeException error) {
+            // The user can still review the complete answer set when the assessment provider is unavailable.
+            log.warn("Requirement assessment fell back to approval project={}: {}", project.getId(), error.getMessage());
+        }
+        session.setStatus(RequirementStatus.APPROVAL_REQUIRED);
+    }
+
+    private Assessment assess(Project project, List<RequirementQuestion> answered) {
+        StringBuilder summary = new StringBuilder();
+        for (RequirementQuestion question : answered) {
+            String answer = answerLabel(question);
+            summary.append("- ").append(question.getQuestionKey()).append(": ")
+                    .append(answer == null ? "Not specified" : answer).append('\n');
+        }
+        String prompt = """
+                Return only valid JSON object with this shape:
+                {"requirementsClear":true|false,"questions":[{"key":"...","prompt":"...","required":true,"recommended":"...","options":[{"id":"...","label":"...","description":"..."}]}]}
+                Decide whether the approved product requirements are specific enough to build without guessing.
+                Set requirementsClear=true and questions=[] when they are sufficient. If not, return at most two
+                blocking questions. Every question needs at least two concrete options and an option with id "other".
+                Do not repeat a decision already answered. User's original request: %s
+                Current answers:
+                %s
+                """.formatted(Optional.ofNullable(project.getInitialPrompt()).orElse(""), summary);
+        AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
+        LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
+                List.of(LlmMessage.system("You are a strict product requirements reviewer."), LlmMessage.user(prompt)), List.of(), 0.0));
+        JsonNode root = objectMapper.readTree(stripJsonFence(result.content()));
+        if (!root.isObject()) throw new IllegalArgumentException("Requirement assessment was not an object");
+        return new Assessment(root.path("requirementsClear").asBoolean(false), parseQuestionDrafts(root.path("questions")));
     }
 
     @Override
@@ -151,9 +202,13 @@ public class RequirementServiceImpl implements RequirementService {
     }
 
     private void saveQuestions(RequirementSession session, List<QuestionDraft> drafts) {
+        saveQuestions(session, drafts, 0);
+    }
+
+    private void saveQuestions(RequirementSession session, List<QuestionDraft> drafts, int sequenceOffset) {
         for (int i = 0; i < drafts.size(); i++) {
             QuestionDraft draft = drafts.get(i);
-            questions.save(RequirementQuestion.builder().sessionId(session.getId()).sequence(i + 1).questionKey(draft.key())
+            questions.save(RequirementQuestion.builder().sessionId(session.getId()).sequence(sequenceOffset + i + 1).questionKey(draft.key())
                     .prompt(draft.prompt()).type(RequirementQuestionType.SINGLE_SELECT).required(draft.required())
                     .optionsJson(write(draft.options())).recommendedOption(draft.recommended()).build());
         }
@@ -187,9 +242,11 @@ public class RequirementServiceImpl implements RequirementService {
 
     private List<QuestionDraft> parseQuestions(String content) {
         if (content == null || content.isBlank()) return List.of();
-        String json = content.trim().replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "");
-        JsonNode root = objectMapper.readTree(json);
-        if (!root.isArray()) return List.of();
+        return parseQuestionDrafts(objectMapper.readTree(stripJsonFence(content)));
+    }
+
+    private List<QuestionDraft> parseQuestionDrafts(JsonNode root) {
+        if (root == null || !root.isArray()) return List.of();
         List<QuestionDraft> result = new ArrayList<>();
         for (JsonNode node : root) {
             String key = node.path("key").asText("").replaceAll("[^a-zA-Z0-9_-]", "");
@@ -200,9 +257,18 @@ public class RequirementServiceImpl implements RequirementService {
                 String id = option.path("id").asText("").replaceAll("[^a-zA-Z0-9_-]", "");
                 if (!id.isBlank()) options.add(new OptionDraft(id, option.path("label").asText(id), option.path("description").asText("")));
             }
-            if (options.size() >= 2) result.add(new QuestionDraft(key, prompt, node.path("required").asBoolean(true), node.path("recommended").asText(options.get(0).id()), options));
+            if (options.size() >= 2) {
+                String recommended = node.path("recommended").asText("").trim();
+                boolean validRecommendation = options.stream().anyMatch(option -> option.id().equals(recommended));
+                result.add(new QuestionDraft(key, prompt, node.path("required").asBoolean(true),
+                        validRecommendation ? recommended : options.get(0).id(), options));
+            }
         }
         return result;
+    }
+
+    private static String stripJsonFence(String content) {
+        return content.trim().replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "");
     }
 
     private List<QuestionDraft> defaults(String prompt) {
@@ -221,4 +287,5 @@ public class RequirementServiceImpl implements RequirementService {
     private static boolean nonBlank(String value) { return value != null && !value.isBlank(); }
     private record OptionDraft(String id, String label, String description) {}
     private record QuestionDraft(String key, String prompt, boolean required, String recommended, List<OptionDraft> options) {}
+    private record Assessment(boolean clear, List<QuestionDraft> questions) {}
 }

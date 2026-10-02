@@ -18,6 +18,7 @@ import com.code.pal.agent.llm.LlmClient.LlmRequest;
 import com.code.pal.agent.llm.LlmClient.LlmResult;
 import com.code.pal.agent.llm.LlmClient.ToolCall;
 import com.code.pal.agent.llm.LlmClient.ToolSpec;
+import com.code.pal.agent.llm.LlmException;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.runtime.AgentRunResult;
@@ -32,6 +33,7 @@ import com.code.pal.agent.tool.AgentToolExecutor;
 import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.tool.ToolExecutionResult;
 import com.code.pal.agent.workspace.WorkspaceStorage;
+import com.code.pal.agent.workspace.DockerProjectEnvironment;
 import com.code.pal.agent.validation.ProjectValidationService;
 import com.code.pal.agent.validation.ValidationReport;
 import com.code.pal.message.domain.Message;
@@ -75,7 +77,7 @@ public class AgentRunner implements AgentRuntime {
     private static final Set<String> READ_ONLY_FOUNDATION_TOOLS = Set.of(
             "listFiles", "readFile", "searchCode", "getProjectMetadata", "getFileSummary");
     private static final Set<String> PLANNING_TOOLS = Set.of("setPlan", "updatePlanStep");
-    private static final Set<String> WRITE_TOOLS = Set.of("createFile", "patchFile", "deleteFile", "renameFile",
+    private static final Set<String> WRITE_TOOLS = Set.of("createFile", "createFiles", "patchFile", "deleteFile", "renameFile",
             "getDiagnostics", "runTypeCheck", "runBuild", "runTests", "validateChanges");
 
     private final LlmClient llm;
@@ -90,6 +92,7 @@ public class AgentRunner implements AgentRuntime {
     private final MessageRepository messageRepository;
     private final RealtimeService realtime;
     private final WorkspaceStorage workspace;
+    private final DockerProjectEnvironment sandbox;
     private final AgentHeartbeat heartbeat;
     private final AgentJobQueue queue;
     private final ObjectMapper objectMapper;
@@ -107,7 +110,8 @@ public class AgentRunner implements AgentRuntime {
                        WorkspaceStorage workspace, AgentHeartbeat heartbeat, AgentJobQueue queue,
                        ObjectMapper objectMapper, ChangeSetService changeSets,
                        ProjectValidationService validation, NotificationService notifications,
-                       ProjectArtifactService artifacts, GeneratedDatabaseService databases) {
+                       ProjectArtifactService artifacts, GeneratedDatabaseService databases,
+                       DockerProjectEnvironment sandbox) {
         this.llm = llm;
         this.intentClassifier = intentClassifier;
         this.tools = tools;
@@ -120,6 +124,7 @@ public class AgentRunner implements AgentRuntime {
         this.messageRepository = messageRepository;
         this.realtime = realtime;
         this.workspace = workspace;
+        this.sandbox = sandbox;
         this.heartbeat = heartbeat;
         this.queue = queue;
         this.objectMapper = objectMapper;
@@ -140,7 +145,7 @@ public class AgentRunner implements AgentRuntime {
                        ProjectValidationService validation, NotificationService notifications) {
         this(llm, intentClassifier, tools, toolExecutor, events, props, projectContexts, runRepository, projects,
                 messageRepository, realtime, workspace, heartbeat, queue, objectMapper, changeSets, validation,
-                notifications, null, null);
+                notifications, null, null, new DockerProjectEnvironment(props));
     }
 
     /** Execute a read-only run end to end; every terminal outcome is persisted and returned. */
@@ -171,14 +176,21 @@ public class AgentRunner implements AgentRuntime {
                     ? projects.requireManageable(run.getUserId(), run.getProjectId())
                     : projects.requireAccessible(run.getUserId(), run.getProjectId());
             if (run.getMode() == ProjectType.BUILD) moveProject(run, ProjectStage.BUILDING);
-            Path liveWorkspace = workspace.ensure(run.getProjectId());
+            boolean dockerWorkspace = run.getMode() == ProjectType.BUILD && props.getSandbox().isRequired();
+            Path liveWorkspace = dockerWorkspace ? Path.of("/workspace") : workspace.ensure(run.getProjectId());
             Path ws = run.getMode() == ProjectType.BUILD
-                    ? changeSets.start(run.getId(), run.getProjectId(), liveWorkspace)
+                    ? (dockerWorkspace ? changeSets.start(run.getId(), run.getProjectId())
+                                       : changeSets.start(run.getId(), run.getProjectId(), liveWorkspace))
                     : liveWorkspace;
-            projectContext = projectContexts.build(ws, userRequest, history, List.of());
+            projectContext = dockerWorkspace
+                    ? projectContexts.buildSandbox(sandbox, run.getProjectId(), ".codepal/changesets/" + run.getId() + "/workspace",
+                    userRequest, history, List.of())
+                    : projectContexts.build(ws, userRequest, history, List.of());
             AgentPlanState plan = new AgentPlanState();
             ctx = new AgentContext(run.getProjectId(), run.getUserId(), run.getMode(), ws,
-                    AgentProjectMetadata.from(project), projectContext.trace(), run.getId(), plan);
+                    AgentProjectMetadata.from(project), projectContext.trace(), run.getId(), plan,
+                    dockerWorkspace ? sandbox : null,
+                    dockerWorkspace ? ".codepal/changesets/" + run.getId() + "/workspace" : null);
             List<AgentTool> available = toolsForRun(run.getMode());
             List<ToolSpec> specs = available.stream().map(t -> new ToolSpec(t.name(), t.description(), t.parametersSchema())).toList();
 
@@ -198,7 +210,9 @@ public class AgentRunner implements AgentRuntime {
             events.emit(run, AgentStepType.STATUS, "Project context prepared",
                     contextAudit(projectContext.diagnostics()));
 
-            int validationReminders = 0;
+            int planningReminders = 0;
+            int implementationReminders = 0;
+            int previewReminders = 0;
             for (int i = 0; i < props.getMaxIterations(); i++) {
                 requireBeforeDeadline(deadlineNanos);
                 requireNotCancelled(run);
@@ -213,8 +227,25 @@ public class AgentRunner implements AgentRuntime {
                         runtime.modelCallCount(), selection.provider(), selection.model());
                 events.emit(run, AgentStepType.STATUS, "Model called", Map.of(
                         "iteration", runtime.iteration(), "modelCall", runtime.modelCallCount()));
-                LlmResult res = llm.chatStreaming(new LlmRequest(
-                        selection.provider(), selection.model(), runtime.messages(), specs, props.getLlm().getTemperature()), stream::append);
+                LlmResult res;
+                try {
+                    res = llm.chatStreaming(new LlmRequest(
+                            selection.provider(), selection.model(), runtime.messages(), specs, props.getLlm().getTemperature()), stream::append);
+                } catch (LlmException providerFailure) {
+                    // Keep the conversation intact when a provider rejects a request before it
+                    // publishes output. The next round-robin model can support a different tool
+                    // schema or have independent rate limits; the model-call cap still bounds cost.
+                    if (providerFailure.getMessage() != null
+                            && providerFailure.getMessage().contains("after partial output")) {
+                        throw providerFailure;
+                    }
+                    log.warn("llm_provider_unavailable runId={} provider={} model={} reason={}; trying next configured model",
+                            run.getId(), selection.provider(), selection.model(), providerFailure.getMessage());
+                    events.emit(run, AgentStepType.STATUS, "LLM provider unavailable", Map.of(
+                            "provider", selection.provider(), "model", selection.model(),
+                            "retryable", providerFailure instanceof com.code.pal.agent.llm.RetryableLlmException));
+                    continue;
+                }
                 stream.flush();
                 accountTokens(run, res);
 
@@ -231,23 +262,62 @@ public class AgentRunner implements AgentRuntime {
 
                 if (!res.hasToolCalls()) {
                     if (run.getMode() == ProjectType.BUILD) {
-                        if (changeSets.hasUnvalidatedChanges(ctx)) {
-                            if (validationReminders++ > 0) {
-                                throw new AgentValidationFailedException(validationFailureMessage(run.getId()));
+                        if (!ctx.plan().exists()) {
+                            if (planningReminders++ > 0) {
+                                throw new AgentValidationFailedException("The agent did not create an implementation plan before finishing the build");
                             }
-                            runtime.messages().add(LlmMessage.user("The staged revision has not passed validation. Inspect the latest diagnostics, repair only errors introduced by this change, and call validateChanges again."));
+                            runtime.messages().add(LlmMessage.user(
+                                    "BUILD GATE: The build cannot finish yet because no plan was created. "
+                                            + "Call setPlan with concrete file-oriented steps now, then implement the request with the file tools."));
+                            continue;
+                        }
+                        if (changeSets.view(ctx).touchedPaths().isEmpty()) {
+                            if (implementationReminders++ > 0) {
+                                throw new AgentValidationFailedException("The agent did not create or modify any project files");
+                            }
+                            runtime.messages().add(LlmMessage.user(
+                                    "BUILD GATE: The plan exists but no project files were changed. "
+                                            + "Use createFile or patchFile to implement the approved request, then validate the staged revision."));
+                            continue;
+                        }
+                        if (changeSets.hasUnvalidatedChanges(ctx)) {
+                            // The final gate is deterministic. A model does not need an extra turn
+                            // just to call validation after its last mutation.
+                            ValidationReport finalReport = validation.validateAll(ctx);
+                            events.emit(run, AgentStepType.STATUS, "Final validation", Map.of(
+                                    "validationPassed", finalReport.changeValidationPassed(),
+                                    "introducedDiagnosticCount", finalReport.introducedDiagnostics().size(),
+                                    "repairAttempts", finalReport.repairAttempts()));
+                            if (!finalReport.changeValidationPassed()) {
+                                if (changeSets.validationProgress(ctx).repairLimitExhausted()) {
+                                    throw new AgentValidationFailedException(validationFailureMessage(run.getId()));
+                                }
+                                runtime.messages().add(LlmMessage.user(finalValidationRepairPrompt(finalReport)));
+                                continue;
+                            }
+                        }
+                        if (!hasPreviewEntrypoint(ctx)) {
+                            if (previewReminders++ > 0) {
+                                throw new AgentValidationFailedException(
+                                        "The build has no browser preview entrypoint; no changes were committed");
+                            }
+                            runtime.messages().add(LlmMessage.user(
+                                    "BUILD GATE: The project is not previewable yet. Create a functional frontend entrypoint "
+                                            + "at index.html, client/index.html, client/public/index.html, frontend/index.html, "
+                                            + "or a supported dist/build index.html, then finish the build."));
                             continue;
                         }
                         ChangeSetService.CommitResult committed = changeSets.commit(ctx, run);
-                        if (!committed.changedPaths().isEmpty()) {
-                            stream.append("\n\nChanged files:\n" + committed.changedPaths().stream()
-                                    .map(path -> "- " + path).collect(java.util.stream.Collectors.joining("\n")));
-                            events.emit(run, AgentStepType.STATUS, "Change set committed", Map.of(
+                        if (committed.changedPaths().isEmpty()) {
+                            throw new AgentValidationFailedException("The staged build produced no committed file changes");
+                        }
+                        stream.append("\n\nChanged files:\n" + committed.changedPaths().stream()
+                                .map(path -> "- " + path).collect(java.util.stream.Collectors.joining("\n")));
+                        events.emit(run, AgentStepType.STATUS, "Change set committed", Map.of(
                                 "changedFiles", committed.changedPaths(), "snapshotRef", committed.snapshotRef()));
                         if (artifacts != null) artifacts.writeBuild(run, "COMMITTED", committed.changedPaths());
                         if (databases != null) databases.ensure(run.getProjectId());
                         moveProject(run, ProjectStage.REVIEW);
-                    }
                     }
                     runtime.transitionPhase(AgentPhase.FINISH);
                     stream.complete();
@@ -295,7 +365,7 @@ public class AgentRunner implements AgentRuntime {
             notifyBuild(run, false);
             updateAssistant(run, e.getMessage(), MessageStatus.FAILED);
             events.emit(run, AgentStepType.STATUS, "Agent validation failed", Map.of(
-                    "status", "FAILED", "reason", "REPAIR_LIMIT_EXCEEDED"));
+                    "status", "FAILED", "reason", "BUILD_GATE_FAILED", "message", e.getMessage()));
             emitContextUsage(run, projectContext, runtime);
             return result(run, runtime, e.getMessage(), e.getMessage());
         } catch (Exception e) {
@@ -421,7 +491,7 @@ public class AgentRunner implements AgentRuntime {
     private static void recordPhase(AgentRuntimeContext runtime, String toolName) {
         if (toolName.equals("setPlan")) runtime.transitionPhase(AgentPhase.PLAN);
         else if (toolName.equals("updatePlanStep") && runtime.phase().ordinal() < AgentPhase.PLAN.ordinal()) runtime.transitionPhase(AgentPhase.PLAN);
-        else if (Set.of("createFile", "patchFile", "deleteFile", "renameFile").contains(toolName)) runtime.transitionPhase(AgentPhase.MODIFY);
+        else if (Set.of("createFile", "createFiles", "patchFile", "deleteFile", "renameFile").contains(toolName)) runtime.transitionPhase(AgentPhase.MODIFY);
         else if (Set.of("getDiagnostics", "runTypeCheck", "runBuild", "runTests", "validateChanges").contains(toolName)) runtime.transitionPhase(AgentPhase.VALIDATE);
         else if (runtime.phase() == AgentPhase.UNDERSTAND) runtime.transitionPhase(AgentPhase.EXPLORE);
     }
@@ -460,6 +530,26 @@ public class AgentRunner implements AgentRuntime {
             return "- " + location + " — " + item.message();
         }).collect(java.util.stream.Collectors.joining("\n"));
         return "Validation still failed after the configured repair limit. No staged changes were committed.\n" + details;
+    }
+
+    private static String finalValidationRepairPrompt(ValidationReport report) {
+        String details = report.introducedDiagnostics().stream().limit(8).map(item -> {
+            String location = item.file() == null ? "project" : item.file()
+                    + (item.line() == null ? "" : ":" + item.line()
+                    + (item.column() == null ? "" : ":" + item.column()));
+            return "- " + location + " - " + item.message();
+        }).collect(java.util.stream.Collectors.joining("\n"));
+        return "The automatic final validation found errors introduced by the staged changes. "
+                + "Repair only these errors, then finish so the backend can validate once more:\n" + details;
+    }
+
+    private static boolean hasPreviewEntrypoint(AgentContext context) {
+        if (!context.sandboxed()) return true;
+        return java.util.stream.Stream.of(
+                        "index.html", "client/index.html", "client/public/index.html", "frontend/index.html",
+                        "dist/index.html", "build/index.html", "client/dist/index.html", "client/build/index.html",
+                        "frontend/dist/index.html", "frontend/build/index.html")
+                .anyMatch(path -> context.sandbox().regularFile(context.projectId(), context.sandboxRoot(), path));
     }
 
     private record PreparedToolCall(ToolCall call, Map<String, Object> args, AgentTool tool) {}
@@ -663,13 +753,17 @@ public class AgentRunner implements AgentRuntime {
                     when exploration invalidates an assumption. Never invent an API without inspecting existing API
                     patterns. Preserve existing behavior unless requested. Update imports/types when needed. Prefer
                     patchFile for existing files and use only versions returned by readFile.
-                    If a patch is stale or does not match, re-read and retry. Call validateChanges after the final
-                    mutation, fix any reported issue, validate again, then finish with an exact change summary.
+                    If a patch is stale or does not match, re-read and retry. Use createFiles for independent new
+                    scaffold files so one implementation phase stays within a small number of model turns. Call validateChanges only when you need
+                    to inspect the staged revision during implementation. The backend performs one deterministic
+                    final validation after your last mutation, then commits a passing revision. Fix reported issues
+                    before finishing and provide an exact change summary.
                     Use getDiagnostics to inspect the detected package manager and scripts. You may use the controlled
                     runTypeCheck, runBuild, and runTests operations; never invent or supply shell commands. Never modify
                     package scripts to evade validation. Treat pre-existing diagnostics as out of scope and repair only
                     diagnostics introduced by this change. Repair attempts are strictly bounded. Do not finish while a
-                    known error caused by the current changes remains.
+                    known error caused by the current changes remains. A BUILD must leave a functional browser preview
+                    entrypoint in a supported index.html location before it can finish.
                     """;
             case CHAT -> "Mode: CHAT. Answer and explain. You may read/list files for context, but do NOT modify files.";
             case PLAN -> "Mode: PLAN. Produce a clear, step-by-step implementation plan. Do NOT modify files.";

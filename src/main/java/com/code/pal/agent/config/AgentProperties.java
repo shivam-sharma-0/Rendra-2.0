@@ -22,6 +22,7 @@ public class AgentProperties {
 
     private final Llm llm = new Llm();
     private final Models models = new Models();
+    private final Sandbox sandbox = new Sandbox();
     /** Provider-specific endpoints. The legacy {@code llm} block remains the compatibility fallback. */
     private Map<String, Provider> providers = new LinkedHashMap<>();
 
@@ -78,6 +79,8 @@ public class AgentProperties {
         private String baseUrl;
         private String apiKey;
         private double temperature = 0.2;
+        /** Per-provider HTTP timeout; keep this shorter than the overall agent run timeout. */
+        private long requestTimeoutMs = 60_000;
         /** Initial request plus this many retry attempts are bounded by maxAttempts. */
         private int maxAttempts = 3;
         private long retryInitialBackoffMs = 500;
@@ -89,6 +92,32 @@ public class AgentProperties {
     public static class Provider {
         private String baseUrl;
         private String apiKey;
+    }
+
+    @Getter
+    @Setter
+    public static class Sandbox {
+        /** Production runs require Docker; tests and legacy embedders may leave this false. */
+        private boolean required = false;
+        /** Docker CLI used by the backend process. In WSL this is normally simply {@code docker}. */
+        private String dockerCommand = "docker";
+        /** Optional whitespace-separated arguments, e.g. {@code -e docker} when launched from Windows. */
+        private String dockerCommandArgs = "";
+        private String image = "node:22-bookworm-slim";
+        private String containerPrefix = "codepal-sandbox-";
+        private String volumePrefix = "codepal-project-";
+        private String workspacePath = "/workspace";
+        private long commandTimeoutMs = 120_000;
+        private int outputMaxChars = 80_000;
+        private int memoryMb = 2_048;
+        private double cpus = 2.0;
+        /** Stop an inactive sandbox but keep its named volume. */
+        private long idleStopMs = 900_000;
+        /** Remove the stopped container after this period; the project volume remains intact. */
+        private long idleRemoveMs = 86_400_000;
+        private long cleanupIntervalMs = 60_000;
+        /** Maximum combined project volume size, excluding internal .codepal snapshots. */
+        private long maxProjectBytes = 500_000_000;
     }
 
     @Getter

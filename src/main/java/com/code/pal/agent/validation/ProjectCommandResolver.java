@@ -1,5 +1,6 @@
 package com.code.pal.agent.validation;
 
+import com.code.pal.agent.workspace.DockerProjectEnvironment;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
@@ -7,6 +8,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.UUID;
 
 /** Resolves fixed validation operations from the original project manifest; no model command text is accepted. */
 @Component
@@ -57,6 +59,47 @@ public class ProjectCommandResolver {
         return new CommandPlan(operation, true, capabilities.packageManager(), script, List.copyOf(command), null);
     }
 
+    public Capabilities inspectSandbox(DockerProjectEnvironment sandbox, UUID projectId, String root) {
+        try {
+            String manifestText = sandbox.readText(projectId, root, "package.json");
+            @SuppressWarnings("unchecked") Map<String, Object> manifest = objectMapper.readValue(manifestText, Map.class);
+            Map<String, String> scripts = new LinkedHashMap<>();
+            if (manifest.get("scripts") instanceof Map<?, ?> raw) {
+                raw.forEach((key, value) -> { if (key != null && value != null) scripts.put(key.toString(), value.toString()); });
+            }
+            String declared = manifest.get("packageManager") == null ? null : manifest.get("packageManager").toString();
+            String manager = detectSandboxManager(sandbox, projectId, root, declared);
+            boolean localTypeScript = sandbox.regularFile(projectId, root, "node_modules/typescript/bin/tsc");
+            return new Capabilities(manager, declared, Map.copyOf(scripts), localTypeScript, null);
+        } catch (RuntimeException error) {
+            return new Capabilities(null, null, Map.of(), false, "package.json could not be read");
+        }
+    }
+
+    public CommandPlan resolveSandbox(DockerProjectEnvironment sandbox, UUID projectId, String root,
+                                      ValidationOperation operation, String scope) {
+        Capabilities capabilities = inspectSandbox(sandbox, projectId, root);
+        if (capabilities.error() != null) return CommandPlan.unavailable(operation, capabilities, capabilities.error());
+        String script = switch (operation) {
+            case TYPE_CHECK -> firstPresent(capabilities.scripts(), TYPECHECK_SCRIPTS);
+            case BUILD -> capabilities.scripts().containsKey("build") ? "build" : null;
+            case TESTS -> firstPresent(capabilities.scripts(), TEST_SCRIPTS);
+            default -> null;
+        };
+        List<String> command;
+        if (script != null) {
+            command = new ArrayList<>(List.of(capabilities.packageManager(), "run", script));
+            if (scope != null && !scope.isBlank()) { command.add("--"); command.add(scope); }
+        } else if (operation == ValidationOperation.TYPE_CHECK && capabilities.localTypeScript()
+                && hasTypeScriptConfig(sandbox, projectId, root)) {
+            command = List.of("node", "node_modules/typescript/bin/tsc", "--noEmit", "--pretty", "false");
+            script = "typescript --noEmit";
+        } else {
+            return CommandPlan.unavailable(operation, capabilities, "No matching project script/configuration was found");
+        }
+        return new CommandPlan(operation, true, capabilities.packageManager(), script, List.copyOf(command), null);
+    }
+
     /** Keep command-bearing package scripts identical to the original trusted project during validation. */
     public void preserveOriginalScripts(Path liveRoot, Path candidateRoot) {
         Path liveManifest = liveRoot.resolve("package.json");
@@ -80,6 +123,33 @@ public class ProjectCommandResolver {
             @SuppressWarnings("unchecked") Map<String, Object> staged = objectMapper.readValue(Files.readString(stagedRoot.resolve("package.json")), Map.class);
             return !Objects.equals(live.get("scripts"), staged.get("scripts"));
         } catch (IOException | RuntimeException error) { return false; }
+    }
+
+    public void preserveOriginalScripts(DockerProjectEnvironment sandbox, UUID projectId,
+                                        String liveRoot, String candidateRoot) {
+        try {
+            @SuppressWarnings("unchecked") Map<String, Object> live = objectMapper.readValue(
+                    sandbox.readText(projectId, liveRoot, "package.json"), Map.class);
+            @SuppressWarnings("unchecked") Map<String, Object> candidate = objectMapper.readValue(
+                    sandbox.readText(projectId, candidateRoot, "package.json"), Map.class);
+            Map<String, Object> safe = new LinkedHashMap<>(candidate);
+            if (live.containsKey("scripts")) safe.put("scripts", live.get("scripts"));
+            else safe.remove("scripts");
+            sandbox.writeText(projectId, candidateRoot, "package.json", objectMapper.writeValueAsString(safe));
+        } catch (RuntimeException error) {
+            throw new IllegalStateException("Could not prepare trusted validation manifest", error);
+        }
+    }
+
+    public boolean validationScriptsChanged(DockerProjectEnvironment sandbox, UUID projectId,
+                                            String liveRoot, String stagedRoot) {
+        try {
+            @SuppressWarnings("unchecked") Map<String, Object> live = objectMapper.readValue(
+                    sandbox.readText(projectId, liveRoot, "package.json"), Map.class);
+            @SuppressWarnings("unchecked") Map<String, Object> staged = objectMapper.readValue(
+                    sandbox.readText(projectId, stagedRoot, "package.json"), Map.class);
+            return !Objects.equals(live.get("scripts"), staged.get("scripts"));
+        } catch (RuntimeException error) { return false; }
     }
 
     private static List<String> packageScriptCommand(String manager, String script, String scope) {
@@ -107,11 +177,26 @@ public class ProjectCommandResolver {
         return "npm";
     }
 
+    private static String detectSandboxManager(DockerProjectEnvironment sandbox, UUID projectId, String root, String declared) {
+        if (declared != null && !declared.isBlank()) {
+            String name = declared.split("@", 2)[0].toLowerCase(Locale.ROOT);
+            if (Set.of("npm", "pnpm", "yarn", "bun").contains(name)) return name;
+        }
+        if (sandbox.exists(projectId, root, "pnpm-lock.yaml")) return "pnpm";
+        if (sandbox.exists(projectId, root, "yarn.lock")) return "yarn";
+        if (sandbox.exists(projectId, root, "bun.lock") || sandbox.exists(projectId, root, "bun.lockb")) return "bun";
+        return "npm";
+    }
+
     private static boolean hasTypeScriptConfig(Path root) {
         try (var files = Files.list(root)) {
             return files.anyMatch(path -> path.getFileName().toString().startsWith("tsconfig")
                     && path.getFileName().toString().endsWith(".json"));
         } catch (IOException ignored) { return false; }
+    }
+    private static boolean hasTypeScriptConfig(DockerProjectEnvironment sandbox, UUID projectId, String root) {
+        return sandbox.list(projectId, root, 1).stream().anyMatch(entry -> !entry.directory()
+                && entry.path().startsWith("tsconfig") && entry.path().endsWith(".json"));
     }
     private static String firstPresent(Map<String, String> scripts, List<String> names) { return names.stream().filter(scripts::containsKey).findFirst().orElse(null); }
     private static boolean isWindows() { return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win"); }

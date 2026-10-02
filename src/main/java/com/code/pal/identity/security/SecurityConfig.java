@@ -53,6 +53,9 @@ public class SecurityConfig {
             "/actuator/health/**",
             // Published project sites are public by design (served read-only, LIVE projects only).
             "/p/**",
+            // Short-lived project preview URLs are public by token; the token is minted only after
+            // the requesting user passes the normal project-access check.
+            "/preview/**",
             // WebSocket handshake — authenticated by JwtHandshakeInterceptor (token in query),
             // not the Bearer filter, so the filter chain must let the upgrade request through.
             "/realtime"
@@ -81,7 +84,8 @@ public class SecurityConfig {
                         // JSON API stays locked down; published sites under /p/** get a permissive CSP so
                         // the served app can run its own inline scripts/styles and be framed by the SPA.
                         .addHeaderWriter((request, response) -> {
-                            if (request.getRequestURI().startsWith("/p/")) {
+                            if (request.getRequestURI().startsWith("/p/")
+                                    || request.getRequestURI().startsWith("/preview/")) {
                                 response.setHeader("Content-Security-Policy",
                                         "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-ancestors 'self' "
                                                 + String.join(" ", allowedOrigins));

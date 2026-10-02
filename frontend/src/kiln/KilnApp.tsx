@@ -7,7 +7,6 @@ import { useWorkspace } from '../workspace/WorkspaceContext'
 import { useTheme, type Theme } from '../theme/ThemeProvider'
 import { LoadingState } from '../components/ui/States'
 import KilnLanding from './screens/Landing'
-import './kiln.css'
 
 // Auth pulls in react-hook-form + zod; lazy-load it so those stay out of the landing bundle.
 const Auth = lazy(() => import('./screens/Auth'))

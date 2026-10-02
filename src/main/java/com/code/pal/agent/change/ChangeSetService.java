@@ -7,7 +7,9 @@ import com.code.pal.agent.snapshot.WorkspaceSnapshotService;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.tool.AgentToolException;
 import com.code.pal.agent.validation.ProjectDiagnostic;
+import com.code.pal.agent.workspace.DockerProjectEnvironment;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 
@@ -24,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * back from a private archive if any apply operation fails.
  */
 @Service
-@RequiredArgsConstructor
+@RequiredArgsConstructor(onConstructor_ = @Autowired)
 public class ChangeSetService {
     private static final Set<String> COPY_IGNORED = Set.of(".git", ".secrets", ".agent-changesets", ".agent-history",
             "node_modules", "build", "dist", "coverage");
@@ -35,7 +37,14 @@ public class ChangeSetService {
     private final AgentRunRepository runs;
     private final ObjectMapper objectMapper;
     private final AgentProperties properties;
+    private final DockerProjectEnvironment sandbox;
     private final Map<UUID, ActiveChangeSet> active = new ConcurrentHashMap<>();
+
+    /** Compatibility constructor for path-backed unit tests; runtime injection uses the full constructor. */
+    public ChangeSetService(FileChangeRepository changes, WorkspaceSnapshotService snapshots,
+                            AgentRunRepository runs, ObjectMapper objectMapper, AgentProperties properties) {
+        this(changes, snapshots, runs, objectMapper, properties, new DockerProjectEnvironment(properties));
+    }
 
     public Path start(UUID runId, UUID projectId, Path liveRoot) {
         Path live = liveRoot.toAbsolutePath().normalize();
@@ -53,10 +62,24 @@ public class ChangeSetService {
         return stage;
     }
 
+    /** Start a copy-on-write change set entirely inside the project's persistent Docker volume. */
+    public Path start(UUID runId, UUID projectId) {
+        sandbox.ensure(projectId);
+        String container = ".codepal/changesets/" + runId;
+        String stage = container + "/workspace";
+        sandbox.removeTree(projectId, container);
+        sandbox.copyTree(projectId, ".", stage);
+        active.put(runId, new ActiveChangeSet(runId, projectId,
+                Path.of("/workspace"), Path.of("/workspace/" + stage), Path.of("/workspace/" + container), true,
+                ".", stage, container));
+        return Path.of("/workspace/" + stage);
+    }
+
     public MutationResult create(AgentContext context, String relative, String content) {
         ActiveChangeSet set = requireActive(context);
         requirePlan(context);
         requireRepairAvailable(set);
+        if (set.sandboxed) return createSandbox(set, context, relative, content);
         Path target = context.resolveSafe(relative);
         String path = relative(context.workspace(), target);
         if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) throw failure("FILE_ALREADY_EXISTS", "File already exists", path, target);
@@ -70,6 +93,7 @@ public class ChangeSetService {
         ActiveChangeSet set = requireActive(context);
         requirePlan(context);
         requireRepairAvailable(set);
+        if (set.sandboxed) return patchSandbox(set, context, relative, expectedVersion, oldText, newText);
         Path target = context.resolveSafe(relative);
         String path = relative(context.workspace(), target);
         requireRegular(target, path);
@@ -94,6 +118,7 @@ public class ChangeSetService {
         ActiveChangeSet set = requireActive(context);
         requirePlan(context);
         requireRepairAvailable(set);
+        if (set.sandboxed) return deleteSandbox(set, context, relative, expectedVersion);
         Path target = context.resolveSafe(relative);
         String path = relative(context.workspace(), target);
         requireRegular(target, path);
@@ -108,6 +133,7 @@ public class ChangeSetService {
         ActiveChangeSet set = requireActive(context);
         requirePlan(context);
         requireRepairAvailable(set);
+        if (set.sandboxed) return renameSandbox(set, context, sourceRelative, targetRelative, expectedVersion);
         Path source = context.resolveSafe(sourceRelative);
         Path target = context.resolveSafe(targetRelative);
         String sourcePath = relative(context.workspace(), source);
@@ -127,6 +153,7 @@ public class ChangeSetService {
 
     public ValidationResult validate(AgentContext context) {
         ActiveChangeSet set = requireActive(context);
+        if (set.sandboxed) return validateSandbox(set, context);
         List<ValidationIssue> issues = new ArrayList<>();
         for (String path : set.touched) {
             Path file = set.stage.resolve(path).normalize();
@@ -143,8 +170,88 @@ public class ChangeSetService {
                 valid ? "Deterministic file validation passed" : "Fix validation issues and validate again");
     }
 
+    private MutationResult createSandbox(ActiveChangeSet set, AgentContext context, String relative, String content) {
+        String path = context.resolveSandboxPath(relative);
+        if (sandbox.exists(set.projectId, set.stageRelative, path)) {
+            throw failure("FILE_ALREADY_EXISTS", "File already exists", path, Path.of(path));
+        }
+        ensureTextSize(content);
+        rememberBaselineSandbox(set, path);
+        sandbox.writeText(set.projectId, set.stageRelative, path, content);
+        return record(set, path, null, FileOperation.CREATE, FileVersions.ABSENT,
+                sandbox.version(set.projectId, set.stageRelative, path));
+    }
+
+    private MutationResult patchSandbox(ActiveChangeSet set, AgentContext context, String relative,
+                                        String expectedVersion, String oldText, String newText) {
+        String path = context.resolveSandboxPath(relative);
+        requireRegularSandbox(set, path);
+        String actual = sandbox.version(set.projectId, set.stageRelative, path);
+        requireVersion(path, expectedVersion, actual);
+        String content = sandbox.readText(set.projectId, set.stageRelative, path);
+        int first = content.indexOf(oldText);
+        if (first < 0) throw new AgentToolException("PATCH_TARGET_NOT_FOUND", "Expected patch target was not found",
+                Map.of("path", path, "actualVersion", actual, "action", "Re-read the file and construct a new patch"));
+        if (content.indexOf(oldText, first + Math.max(1, oldText.length())) >= 0) {
+            throw new AgentToolException("PATCH_TARGET_AMBIGUOUS", "Expected patch target occurs more than once",
+                    Map.of("path", path, "actualVersion", actual, "action", "Use a larger unique oldText block"));
+        }
+        String next = content.substring(0, first) + newText + content.substring(first + oldText.length());
+        ensureTextSize(next);
+        rememberBaselineSandbox(set, path);
+        sandbox.writeText(set.projectId, set.stageRelative, path, next);
+        return record(set, path, null, FileOperation.PATCH, actual,
+                sandbox.version(set.projectId, set.stageRelative, path));
+    }
+
+    private MutationResult deleteSandbox(ActiveChangeSet set, AgentContext context, String relative, String expectedVersion) {
+        String path = context.resolveSandboxPath(relative);
+        requireRegularSandbox(set, path);
+        String actual = sandbox.version(set.projectId, set.stageRelative, path);
+        requireVersion(path, expectedVersion, actual);
+        rememberBaselineSandbox(set, path);
+        sandbox.delete(set.projectId, set.stageRelative, path);
+        return record(set, path, null, FileOperation.DELETE, actual, FileVersions.ABSENT);
+    }
+
+    private MutationResult renameSandbox(ActiveChangeSet set, AgentContext context, String sourceRelative,
+                                         String targetRelative, String expectedVersion) {
+        String source = context.resolveSandboxPath(sourceRelative);
+        String target = context.resolveSandboxPath(targetRelative);
+        requireRegularSandbox(set, source);
+        if (sandbox.exists(set.projectId, set.stageRelative, target)) {
+            throw failure("RENAME_TARGET_EXISTS", "Rename target already exists", target, Path.of(target));
+        }
+        String actual = sandbox.version(set.projectId, set.stageRelative, source);
+        requireVersion(source, expectedVersion, actual);
+        rememberBaselineSandbox(set, source);
+        rememberBaselineSandbox(set, target);
+        sandbox.move(set.projectId, set.stageRelative, source, target);
+        return record(set, target, source, FileOperation.RENAME, actual,
+                sandbox.version(set.projectId, set.stageRelative, target));
+    }
+
+    private ValidationResult validateSandbox(ActiveChangeSet set, AgentContext context) {
+        List<ValidationIssue> issues = new ArrayList<>();
+        for (String path : set.touched) {
+            if (!sandbox.regularFile(set.projectId, set.stageRelative, path)) continue;
+            String text = sandbox.readText(set.projectId, set.stageRelative, path);
+            if (text.contains("<<<<<<<") || text.contains(">>>>>>>")) {
+                issues.add(new ValidationIssue(path, "MERGE_MARKER", "Unresolved merge marker"));
+            }
+            if (path.toLowerCase(Locale.ROOT).endsWith(".json")) {
+                try { objectMapper.readTree(text); }
+                catch (RuntimeException error) { issues.add(new ValidationIssue(path, "INVALID_JSON", "JSON is not syntactically valid")); }
+            }
+        }
+        boolean valid = issues.isEmpty() && !set.touched.isEmpty();
+        return new ValidationResult(valid, set.revision, List.copyOf(issues),
+                valid ? "Deterministic file validation passed" : "Fix validation issues and validate again");
+    }
+
     public CommitResult commit(AgentContext context, AgentRun run) {
         ActiveChangeSet set = requireActive(context);
+        if (set.sandboxed) return commitSandbox(set, run);
         if (set.touched.isEmpty()) { discard(run.getId()); return new CommitResult(null, List.of()); }
         if (set.validatedRevision != set.revision) throw new AgentToolException("VALIDATION_REQUIRED", "Validate the current change set before finishing");
         for (Map.Entry<String, String> baseline : set.baselines.entrySet()) {
@@ -174,7 +281,59 @@ public class ChangeSetService {
     public void discard(UUID runId) {
         ActiveChangeSet set = active.remove(runId);
         if (set == null) return;
+        if (set.sandboxed) {
+            try { sandbox.removeTree(set.projectId, set.containerRelative); } catch (RuntimeException ignored) { }
+            return;
+        }
         try { deleteTree(set.container); } catch (IOException ignored) { }
+    }
+
+    private CommitResult commitSandbox(ActiveChangeSet set, AgentRun run) {
+        if (set.touched.isEmpty()) { discard(run.getId()); return new CommitResult(null, List.of()); }
+        if (set.validatedRevision != set.revision) {
+            throw new AgentToolException("VALIDATION_REQUIRED", "Validate the current change set before finishing");
+        }
+        for (Map.Entry<String, String> baseline : set.baselines.entrySet()) {
+            String actual = sandbox.version(set.projectId, set.liveRelative, baseline.getKey());
+            if (!actual.equals(baseline.getValue())) {
+                throw new AgentToolException("STALE_PROJECT_FILE",
+                        "A project file changed while the agent was working; the change set was not committed",
+                        Map.of("path", baseline.getKey(), "expectedVersion", baseline.getValue(), "actualVersion", actual));
+            }
+        }
+        String archive = ".codepal/history/" + run.getId() + "/original";
+        try {
+            sandbox.copyTree(set.projectId, set.liveRelative, archive);
+            for (String path : set.touched.stream().sorted().toList()) {
+                if (sandbox.regularFile(set.projectId, set.stageRelative, path)) {
+                    sandbox.copyFile(set.projectId, set.stageRelative, path, set.liveRelative, path);
+                } else {
+                    sandbox.delete(set.projectId, set.liveRelative, path);
+                }
+            }
+        } catch (RuntimeException error) {
+            restoreSandbox(set, archive);
+            throw new IllegalStateException("Change-set commit failed; original files were restored", error);
+        }
+        String snapshotRef = "docker:" + run.getId();
+        run.setSnapshotRef(snapshotRef);
+        runs.save(run);
+        List<String> changed = set.touched.stream().sorted().toList();
+        active.remove(run.getId());
+        try { sandbox.removeTree(set.projectId, set.containerRelative); } catch (RuntimeException ignored) { }
+        return new CommitResult(snapshotRef, changed);
+    }
+
+    private void restoreSandbox(ActiveChangeSet set, String archive) {
+        for (String path : set.touched) {
+            try {
+                if (sandbox.regularFile(set.projectId, archive, path)) {
+                    sandbox.copyFile(set.projectId, archive, path, set.liveRelative, path);
+                } else {
+                    sandbox.delete(set.projectId, set.liveRelative, path);
+                }
+            } catch (RuntimeException ignored) { }
+        }
     }
 
     private MutationResult record(ActiveChangeSet set, String path, String source, FileOperation operation, String before, String after) {
@@ -200,6 +359,18 @@ public class ChangeSetService {
     public List<StagedFile> stagedFiles(UUID runId) {
         ActiveChangeSet set = active.get(runId);
         if (set == null) return List.of();
+        if (set.sandboxed) {
+            return set.touched.stream().sorted().map(path -> {
+                if (!sandbox.regularFile(set.projectId, set.stageRelative, path)) return new StagedFile(path, null, true);
+                try {
+                    String content = sandbox.readText(set.projectId, set.stageRelative, path);
+                    if (content.getBytes(StandardCharsets.UTF_8).length > 200_000 || isBinary(content.getBytes(StandardCharsets.UTF_8))) {
+                        return new StagedFile(path, null, false);
+                    }
+                    return new StagedFile(path, content, false);
+                } catch (RuntimeException error) { return new StagedFile(path, null, false); }
+            }).toList();
+        }
         return set.touched.stream().sorted().map(path -> {
             Path file = set.stage.resolve(path).normalize();
             if (!file.startsWith(set.stage) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
@@ -218,6 +389,13 @@ public class ChangeSetService {
     /** Fresh baseline copy for a validation operation, so scripts never write generated output to the live project. */
     public Path createValidationBaseline(AgentContext context, String name) {
         ActiveChangeSet set = requireActive(context);
+        if (set.sandboxed) {
+            String safeName = name == null ? "validation" : name.replaceAll("[^A-Za-z0-9_-]", "_");
+            String baseline = set.containerRelative + "/baseline-" + safeName;
+            sandbox.removeTree(set.projectId, baseline);
+            sandbox.copyTree(set.projectId, set.liveRelative, baseline);
+            return Path.of("/workspace/" + baseline);
+        }
         String safeName = name == null ? "validation" : name.replaceAll("[^A-Za-z0-9_-]", "_");
         Path baseline = set.container.resolve("baseline-" + safeName).normalize();
         if (!baseline.startsWith(set.container)) throw new IllegalStateException("Invalid validation workspace");
@@ -234,6 +412,13 @@ public class ChangeSetService {
     /** Disposable copy of the current staged revision used for commands that may emit build output. */
     public Path createValidationCandidate(AgentContext context, String name) {
         ActiveChangeSet set = requireActive(context);
+        if (set.sandboxed) {
+            String safeName = name == null ? "validation" : name.replaceAll("[^A-Za-z0-9_-]", "_");
+            String candidate = set.containerRelative + "/candidate-" + safeName;
+            sandbox.removeTree(set.projectId, candidate);
+            sandbox.copyTree(set.projectId, set.stageRelative, candidate);
+            return Path.of("/workspace/" + candidate);
+        }
         String safeName = name == null ? "validation" : name.replaceAll("[^A-Za-z0-9_-]", "_");
         Path candidate = set.container.resolve("candidate-" + safeName).normalize();
         if (!candidate.startsWith(set.container)) throw new IllegalStateException("Invalid validation workspace");
@@ -306,6 +491,14 @@ public class ChangeSetService {
         ActiveChangeSet set = active.get(context.runId());
         if (set == null || !set.projectId.equals(context.projectId())) throw new AgentToolException("CHANGE_SET_NOT_ACTIVE", "No active change set for this run");
         return set;
+    }
+    private void rememberBaselineSandbox(ActiveChangeSet set, String path) {
+        set.baselines.computeIfAbsent(path, key -> sandbox.version(set.projectId, set.liveRelative, key));
+    }
+    private void requireRegularSandbox(ActiveChangeSet set, String path) {
+        if (!sandbox.regularFile(set.projectId, set.stageRelative, path)) {
+            throw new AgentToolException("FILE_NOT_FOUND", "File does not exist", Map.of("path", path));
+        }
     }
     private static void rememberBaseline(ActiveChangeSet set, String path) { set.baselines.computeIfAbsent(path, key -> FileVersions.of(set.live.resolve(key))); }
     private static void requireVersion(String path, String expected, String actual) {
@@ -392,10 +585,19 @@ public class ChangeSetService {
 
     private static final class ActiveChangeSet {
         final UUID runId; final UUID projectId; final Path live; final Path stage; final Path container;
+        final boolean sandboxed; final String liveRelative; final String stageRelative; final String containerRelative;
         final Map<String, String> baselines = new LinkedHashMap<>(); final Set<String> touched = new LinkedHashSet<>();
         int revision; int validatedRevision = -1; int repairAttempts; boolean repairPending;
         List<ProjectDiagnostic> lastDiagnostics = List.of();
-        ActiveChangeSet(UUID runId, UUID projectId, Path live, Path stage, Path container) { this.runId=runId; this.projectId=projectId; this.live=live; this.stage=stage; this.container=container; }
+        ActiveChangeSet(UUID runId, UUID projectId, Path live, Path stage, Path container) {
+            this(runId, projectId, live, stage, container, false, ".", ".", ".");
+        }
+        ActiveChangeSet(UUID runId, UUID projectId, Path live, Path stage, Path container, boolean sandboxed,
+                        String liveRelative, String stageRelative, String containerRelative) {
+            this.runId=runId; this.projectId=projectId; this.live=live; this.stage=stage; this.container=container;
+            this.sandboxed=sandboxed; this.liveRelative=liveRelative; this.stageRelative=stageRelative;
+            this.containerRelative=containerRelative;
+        }
     }
 
     public record MutationResult(String path, String sourcePath, FileOperation operation, String beforeVersion, String afterVersion, int changeSetRevision) {}

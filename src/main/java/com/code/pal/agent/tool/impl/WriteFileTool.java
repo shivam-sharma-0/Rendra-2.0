@@ -48,6 +48,14 @@ public class WriteFileTool implements AgentTool {
         String path = require(args.get("path"), "path");
         String content = args.get("content") == null ? "" : args.get("content").toString();
 
+        if (context.sandboxed()) {
+            byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+            if (bytes.length > MAX_BYTES) return "Error: file content exceeds the " + MAX_BYTES + " byte write limit.";
+            String safe = context.resolveSandboxPath(path);
+            context.sandbox().writeText(context.projectId(), context.sandboxRoot(), safe, content);
+            return "Wrote " + bytes.length + " bytes to " + safe;
+        }
+
         Path file = context.resolveSafe(path);
         byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
         if (bytes.length > MAX_BYTES) {

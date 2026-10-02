@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../auth/AuthContext'
 import { useWorkspace } from '../../workspace/WorkspaceContext'
 import { useProjects, useStartProject } from '../../api/queries'
-import type { ProjectType } from '../../api/projects'
+import { projectApi, type ProjectType } from '../../api/projects'
 import { EmptyState, ErrorState, Spinner } from '../../components/ui/States'
 import AppShell from '../AppShell'
 import { Ico, relTime, statusOf, CARD_PALETTE } from '../parts'
@@ -124,6 +124,7 @@ export default function Dashboard() {
     setError('')
     try {
       const project = await start.mutateAsync({ prompt: draft.trim(), mode, workspaceId: selectedId ?? undefined })
+      if (files.length) await projectApi.uploadAttachments(project.id, files)
       nav(`/project/${project.id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start the project. Please try again.')

@@ -87,6 +87,16 @@ export function useFileContent(projectId: string | null | undefined, path: strin
   })
 }
 
+/** Poll the active isolated change set so the code panel can show edits before commit. */
+export function useStagedFiles(projectId: string | null | undefined, runId: string | null | undefined, active = true) {
+  return useQuery({
+    queryKey: ['projects', projectId ?? '', 'agent-runs', runId ?? '', 'staged-files'] as const,
+    queryFn: ({ signal }) => agentApi.stagedFiles(projectId!, runId!, { signal }),
+    enabled: !!projectId && !!runId && active,
+    refetchInterval: active ? 1_000 : false,
+  })
+}
+
 export function useNotifications(enabled = true) {
   return useQuery({ queryKey: qk.notifications, queryFn: ({ signal }) => notificationApi.list({ signal }), enabled })
 }
