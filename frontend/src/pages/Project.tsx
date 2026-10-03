@@ -14,8 +14,8 @@ import {
 } from '../api/queries'
 import { EmptyState, ErrorState, LoadingState } from '../components/ui/States'
 import { useRealtime, type RealtimeMessage } from '../realtime/useRealtime'
-import AppShell from '../kiln/AppShell'
-import { Ico } from '../kiln/parts'
+import AppShell from '../rendra/AppShell'
+import { Ico } from '../rendra/parts'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -255,7 +255,7 @@ export default function ProjectPage() {
       const index = previous.findIndex((message) => message.id === incoming.id)
       if (index === -1) return [...previous, incoming]
       const next = previous.slice()
-      next[index] = incoming
+      next[index] = { ...incoming, createdAt: incoming.createdAt ?? previous[index].createdAt }
       return next
     })
   }, [])
@@ -526,13 +526,13 @@ export default function ProjectPage() {
                 ? <p className="pw-loading">Loading conversation…</p>
                 : (() => {
                     const nonSystem = messages.filter((m) => m.role !== 'SYSTEM' && !isInternalWorkflowMessage(m))
-                    // Sort user messages by server seq (monotonic insertion order) — the canonical
-                    // order the backend uses. createdAt alone is unstable: messages can share the same
-                    // @CreationTimestamp instant, so sorting on it inverts newly-sent messages until a
-                    // refetch. Fall back to createdAt only if seq is somehow missing.
+                    // Backend canonical order: createdAt, then seq (seq resets on restart, so it is only a
+                    // tie-breaker). A row without createdAt has not been read back from the DB yet, so it
+                    // is the newest — never let it fall to new Date(null) = 1970 and jump to the top.
+                    const sortTime = (m: Message) => (m.createdAt ? new Date(m.createdAt).getTime() : Number.MAX_SAFE_INTEGER)
                     const userMsgs = nonSystem
                       .filter((m) => m.role === 'USER')
-                      .sort((a, b) => (a.seq - b.seq) || (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()))
+                      .sort((a, b) => (sortTime(a) - sortTime(b)) || ((a.seq ?? 0) - (b.seq ?? 0)))
                     // Map assistant messages by replyToId for O(1) lookup
                     const byReply = new Map<string, Message>()
                     nonSystem.filter((m) => m.role === 'ASSISTANT' && m.replyToId).forEach((m) => byReply.set(m.replyToId!, m))
@@ -1095,7 +1095,7 @@ function runWhen(iso: string): string {
 }
 
 function HistoryPanel({ runs, onRestore, rollingBackId }: { runs: AgentRun[]; onRestore: (id: string) => void; rollingBackId: string | null }) {
-  if (!runs.length) return <div className="pw-emptyfiles">No builds yet — ask Kiln to build something and each run will appear here.</div>
+  if (!runs.length) return <div className="pw-emptyfiles">No builds yet — ask Rendra to build something and each run will appear here.</div>
   return (
     <div className="pw-history">
       {runs.map((run) => {
@@ -1586,7 +1586,7 @@ function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest }: {
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) submit(e) }}
-        placeholder={quote ? 'Ask about the selected part…' : 'Ask Kiln to make a change…'}
+        placeholder={quote ? 'Ask about the selected part…' : 'Ask Rendra to make a change…'}
       />
       <footer>
         <input type="file" multiple ref={fileInputRef} style={{ display: 'none' }} onChange={addFiles} />
@@ -1667,7 +1667,7 @@ function PreviewPanel({ project }: { project: Project | null }) {
       <div>
         <span className="pw-empty-icon">◐</span>
         <h3>{previewError ? 'Preview unavailable' : project?.lifecycleStage === 'REVIEW' ? 'Preparing preview' : 'No preview yet'}</h3>
-        <p>Your app’s live preview will appear here once it can run. For now, open the <b>Code</b> tab to see the files Kiln has written.</p>
+        <p>Your app’s live preview will appear here once it can run. For now, open the <b>Code</b> tab to see the files Rendra has written.</p>
       </div>
     </div>
   )
@@ -1914,7 +1914,7 @@ function CodePanel({ projectId, activeRunId }: { projectId: string; activeRunId:
 
   if (!tree && !treeErrored) return <div className="pw-code"><div className="pw-loading">Loading files…</div></div>
   if (!visibleTree || visibleTree.length === 0) {
-    return <div className="pw-code"><div className="pw-emptyfiles">No files yet — when Kiln builds in this project, the files it writes show up here.</div></div>
+    return <div className="pw-code"><div className="pw-emptyfiles">No files yet — when Rendra builds in this project, the files it writes show up here.</div></div>
   }
 
   const sortedTree = sortNodes(visibleTree)

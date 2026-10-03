@@ -114,7 +114,7 @@ export default function AppShell({ active, children }: { active?: NavId; childre
   }
   const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? Math.round(window.innerWidth * 0.14) : 220))
   const [isResizing, setIsResizing] = useState(false)
-  const [hidePro, setHidePro] = useState(() => localStorage.getItem('kiln_hide_pro') === 'true')
+  const [hidePro, setHidePro] = useState(() => localStorage.getItem('rendra_hide_pro') === 'true')
   const collapsed = width < 120
 
   const startResize = (e: React.MouseEvent) => {
@@ -277,7 +277,7 @@ export default function AppShell({ active, children }: { active?: NavId; childre
       <aside className={`kap-side ${collapsed ? 'collapsed' : ''}`} style={{ width }}>
         <div className={`kap-resizer ${isResizing ? 'active' : ''}`} onMouseDown={startResize} />
 
-        <Link to="/" className="kap-brand"><span className="kap-brand-orb"><i /></span><b>Kiln</b></Link>
+        <Link to="/" className="kap-brand"><span className="kap-brand-orb"><i /></span><b>Rendra</b></Link>
 
         <div className="kap-ws-wrap">
           <button
@@ -443,7 +443,7 @@ export default function AppShell({ active, children }: { active?: NavId; childre
         {!hidePro && (
           <div className="kap-pro">
             <span className="kap-pro-orb" />
-            <button type="button" className="kap-pro-close" onClick={() => { setHidePro(true); localStorage.setItem('kiln_hide_pro', 'true') }} aria-label="Dismiss">
+            <button type="button" className="kap-pro-close" onClick={() => { setHidePro(true); localStorage.setItem('rendra_hide_pro', 'true') }} aria-label="Dismiss">
               <Ico d="M18 6L6 18M6 6l12 12" size={15} />
             </button>
             <div style={{ position: 'relative', paddingRight: '12px' }}><b>Go Pro</b><p>More builds, custom domains and private projects.</p></div>
@@ -453,7 +453,7 @@ export default function AppShell({ active, children }: { active?: NavId; childre
 
         <button type="button" className="kap-me" aria-expanded={pop === 'me'} onClick={() => setPop(pop === 'me' ? 'none' : 'me')}>
           <span className="kap-me-badge">{initials(label)}</span>
-          <span className="kap-me-name">{user?.name || 'Kiln builder'}</span>
+          <span className="kap-me-name">{user?.name || 'Rendra builder'}</span>
         </button>
         {pop === 'me' && (
           <div className="kap-pop" style={{ left: collapsed ? 42 : 14, bottom: collapsed ? 8 : 56, width: 244 }}>

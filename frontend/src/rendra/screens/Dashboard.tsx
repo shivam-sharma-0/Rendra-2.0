@@ -45,7 +45,7 @@ const PLACEHOLDERS: Record<ProjectType, string[]> = {
     'Map out the user journey for a booking app...',
   ],
   CHAT: [
-    'Ask Kiln anything about your projects...',
+    'Ask Rendra anything about your projects...',
     'How do I deploy this application?',
     'What is the best way to handle authentication?',
   ]
@@ -234,7 +234,7 @@ export default function Dashboard() {
             <div className="kap-jump-tabs">
               <span className="active">My projects</span>
               <span>Recently viewed</span>
-              <span>Kiln templates</span>
+              <span>Rendra templates</span>
             </div>
             <button type="button" className="kap-jump-all" onClick={(e) => { e.stopPropagation(); nav('/projects') }}>
               Browse all <Ico d="M5 12h14M13 6l6 6-6 6" size={14} />

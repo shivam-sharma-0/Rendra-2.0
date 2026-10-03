@@ -76,6 +76,9 @@ public class MessageServiceImpl implements MessageService {
         }
 
         project.setLastActivityAt(Instant.now());   // managed entity — flushes on commit
+        // Ids are client-assigned, so Hibernate defers the INSERT (and @CreationTimestamp) to flush.
+        // Flush now or the response/broadcast below carries createdAt=null and the client mis-sorts it.
+        messageRepository.flush();
         log.info("Message posted project={} user={} id={}", projectId, userId, request.id());
 
         // Broadcast to everyone in the project room — but only AFTER the tx commits, so a rollback

@@ -83,7 +83,7 @@ export default function Onboarding() {
   }
 
   const savePersona = () =>
-    localStorage.setItem('kiln_persona', JSON.stringify({ role, goals, kind, color, slug }))
+    localStorage.setItem('rendra_persona', JSON.stringify({ role, goals, kind, color, slug }))
 
   const ensureWorkspace = async (): Promise<boolean> => {
     if (!wsName.trim()) {
@@ -159,7 +159,7 @@ export default function Onboarding() {
         <span className="absolute right-[-40px] bottom-[-40px] w-[200px] h-[200px] rounded-full bg-[var(--rail)]" aria-hidden="true" />
         <Link to="/" className="flex items-center gap-2.5 text-[var(--bg)] relative no-underline">
           <span className="w-7 h-7 rounded-full grid place-items-center bg-[conic-gradient(from_0deg,#FF5B2E,#FFB23E,#5B4CF5,#FF5B2E)]"><i className="w-[11px] h-[11px] rounded-full bg-[var(--rail)]" /></span>
-          <span className="font-['Bricolage_Grotesque',sans-serif] font-extrabold text-[21px] tracking-[-0.03em]">Kiln</span>
+          <span className="font-['Bricolage_Grotesque',sans-serif] font-extrabold text-[21px] tracking-[-0.03em]">Rendra</span>
         </Link>
 
         <ol className="flex flex-col relative">
@@ -190,7 +190,7 @@ export default function Onboarding() {
             <span className="w-[42px] h-[42px] rounded-xl text-white font-['Bricolage_Grotesque',sans-serif] font-extrabold text-lg grid place-items-center" style={{ background: color }}>{wsInitial}</span>
             <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
               <span className="text-[15px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis">{wsShown}</span>
-              <span className="font-['JetBrains_Mono',monospace] text-xs text-[var(--rail-dim)]">kiln.app/{slug || 'workspace'}</span>
+              <span className="font-['JetBrains_Mono',monospace] text-xs text-[var(--rail-dim)]">rendra.app/{slug || 'workspace'}</span>
             </span>
           </div>
           <div className="flex items-center gap-2.5">
@@ -216,7 +216,7 @@ export default function Onboarding() {
             <>
               <div>
                 <h1 className="m-0 font-['Bricolage_Grotesque',sans-serif] font-extrabold text-[52px] leading-[1.02] tracking-[-0.045em]">Nice to meet you, <span className="font-['Instrument_Serif',serif] italic font-normal text-[var(--accent)]">{firstName}</span>.</h1>
-                <p className="text-[17px] text-[var(--muted)]">Two quick questions so Kiln can tailor templates and suggestions.</p>
+                <p className="text-[17px] text-[var(--muted)]">Two quick questions so Rendra can tailor templates and suggestions.</p>
               </div>
               <div className="flex flex-col gap-3">
                 <span className="text-sm font-semibold">What best describes you?</span>
@@ -262,7 +262,7 @@ export default function Onboarding() {
                 <div className="flex flex-col gap-[7px]">
                   <label htmlFor="ws-slug" className="text-[13px] font-semibold text-[var(--muted)]">Workspace URL</label>
                   <div className="h-[52px] rounded-[14px] border border-[var(--line-2)] bg-[var(--card)] flex items-center px-4 font-['JetBrains_Mono',monospace] text-sm">
-                    <span className="text-[var(--faint)]">kiln.app/</span>
+                    <span className="text-[var(--faint)]">rendra.app/</span>
                     <input id="ws-slug" className="grow min-w-0 border-none outline-none bg-transparent font-[inherit] text-sm text-[var(--ink)]" value={slug} onChange={(e) => setSlug(slugify(e.target.value))} />
                     <em className="font-['Geist',sans-serif] not-italic text-xs font-semibold text-[#0B6B45]">Available</em>
                   </div>
@@ -319,10 +319,10 @@ export default function Onboarding() {
                 <span className="w-10 h-10 rounded-xl bg-[var(--violet-soft)] text-[var(--violet-ink)] grid place-items-center"><Ico d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></span>
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1 }}>
                   <b className="text-[14.5px] font-semibold">Or share an invite link</b>
-                  <small className="font-['JetBrains_Mono',monospace] text-[12.5px] text-[var(--faint)]">kiln.app/join/{slug || 'workspace'}</small>
+                  <small className="font-['JetBrains_Mono',monospace] text-[12.5px] text-[var(--faint)]">rendra.app/join/{slug || 'workspace'}</small>
                 </span>
                 <button type="button" className="h-[38px] px-3.5 rounded-[11px] border border-[var(--line-2)] bg-[var(--bg)] text-[var(--ink)] text-[13px] font-semibold" onClick={() => {
-                  void navigator.clipboard?.writeText(`https://kiln.app/join/${slug || 'workspace'}`).catch(() => {})
+                  void navigator.clipboard?.writeText(`https://rendra.app/join/${slug || 'workspace'}`).catch(() => {})
                   setCopied(true)
                 }}>{copied ? 'Copied' : 'Copy link'}</button>
               </div>

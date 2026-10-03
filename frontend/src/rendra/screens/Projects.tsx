@@ -14,8 +14,8 @@ import { Ico, relTime, statusOf, paletteFor } from '../parts'
  * so it shows an honest empty state rather than faking ownership data.
  */
 
-const STAR_KEY = 'kiln_starred'
-const LAYOUT_KEY = 'kiln_projects_layout'
+const STAR_KEY = 'rendra_starred'
+const LAYOUT_KEY = 'rendra_projects_layout'
 
 type Tab = 'all' | 'mine' | 'shared' | 'starred'
 type StatusFilter = 'any' | 'LIVE' | 'PENDING' | 'NONE'

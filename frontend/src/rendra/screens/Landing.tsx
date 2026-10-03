@@ -65,8 +65,8 @@ export default function Landing() {
     const t = text.trim()
     if (!t || busy) return
     if (!isAuthenticated) {
-      sessionStorage.setItem('kiln_pending_prompt', t)
-      sessionStorage.setItem('kiln_pending_mode', mode)
+      sessionStorage.setItem('rendra_pending_prompt', t)
+      sessionStorage.setItem('rendra_pending_mode', mode)
       nav('/signup')
       return
     }
@@ -88,7 +88,7 @@ export default function Landing() {
         <nav className="h-[84px] shrink-0 flex items-center gap-10 px-16">
           <Link to="/" className="flex items-center gap-2.5">
             <span className="rounded-full bg-[conic-gradient(from_0deg,#FF5B2E,#FFB23E,#5B4CF5,#FF5B2E)] animate-[kl-spin_7s_linear_infinite] inline-flex items-center justify-center shrink-0" style={{ width: 30, height: 30 }}><span style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--bg)' }} /></span>
-            <b className="font-['Bricolage_Grotesque',sans-serif] font-extrabold text-[23px] tracking-[-0.03em]">Kiln</b>
+            <b className="font-['Bricolage_Grotesque',sans-serif] font-extrabold text-[23px] tracking-[-0.03em]">Rendra</b>
           </Link>
           <div className="flex gap-7 text-[15px]">
             <a href="#how" className="font-medium">Product</a>
@@ -113,12 +113,12 @@ export default function Landing() {
             <span className="w-[9px] h-[9px] rounded-full bg-[#3DD68C] animate-[kl-pulse_1.6s_infinite] shrink-0" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <span style={{ fontSize: 13, fontWeight: 600 }}>Deployed</span>
-              <span className="font-['JetBrains_Mono',monospace] text-xs px-2 py-1 rounded-md self-start" style={{ padding: 0, background: 'transparent', color: '#B9B6AE', fontSize: 11 }}>yourapp.kiln.app</span>
+              <span className="font-['JetBrains_Mono',monospace] text-xs px-2 py-1 rounded-md self-start" style={{ padding: 0, background: 'transparent', color: '#B9B6AE', fontSize: 11 }}>yourapp.rendra.app</span>
             </div>
           </div>
 
           <a href="#how" className="flex items-center gap-2.5 h-9 px-1.5 rounded-[18px] bg-white border border-[var(--line-2)] text-[13px] text-[var(--ink)] kl-rise"><span className="h-[26px] px-2.5 rounded-[13px] bg-[var(--ink)] text-[var(--bg)] font-semibold flex items-center">New</span><span>Plan mode — think it through before you build</span><Arrow s={14} /></a>
-          <h1 className="m-0 text-center font-['Bricolage_Grotesque',sans-serif] font-extrabold text-[clamp(48px,7vw,96px)] leading-[.98] tracking-[-0.045em] kl-rise kl-d1">Describe it.<br /><span className="font-['Instrument_Serif',serif] italic font-normal tracking-[-0.02em] text-[var(--accent)]">Kiln</span> builds it.</h1>
+          <h1 className="m-0 text-center font-['Bricolage_Grotesque',sans-serif] font-extrabold text-[clamp(48px,7vw,96px)] leading-[.98] tracking-[-0.045em] kl-rise kl-d1">Describe it.<br /><span className="font-['Instrument_Serif',serif] italic font-normal tracking-[-0.02em] text-[var(--accent)]">Rendra</span> builds it.</h1>
           <p className="m-0 max-w-[620px] text-center text-[19px] leading-[1.55] text-[var(--muted)] kl-rise kl-d2">Turn one sentence into a working full-stack app — interface, database, login and hosting — then shape it by simply talking to it.</p>
 
           <form className="w-[min(640px,100%)] mt-3 pt-3.5 px-[18px] pb-2.5 rounded-[26px] bg-white border border-[var(--line-2)] shadow-[0_30px_60px_-30px_rgba(22,21,26,.35),0_0_0_6px_rgba(255,91,46,.06)] flex flex-col gap-2.5 kl-rise kl-d3" onSubmit={submit}>
@@ -170,7 +170,7 @@ export default function Landing() {
         <section id="how" className="pt-[110px] px-16 pb-10 flex flex-col gap-11 max-[900px]:pt-[70px] max-[900px]:px-6 max-[900px]:pb-10">
           <div className="flex items-end justify-between gap-10 flex-wrap">
             <h2 className="m-0 font-['Bricolage_Grotesque',sans-serif] font-extrabold text-[clamp(34px,4vw,56px)] leading-[1.02] tracking-[-0.04em] max-w-[640px]">From idea to live app in <span className="font-['Instrument_Serif',serif] italic font-normal tracking-[-0.02em] text-[var(--accent)]">three</span> moves.</h2>
-            <p className="m-0 max-w-[380px] text-base leading-[1.6] text-[var(--muted)]">No setup, no boilerplate. You stay in the conversation — Kiln writes, runs and ships the code.</p>
+            <p className="m-0 max-w-[380px] text-base leading-[1.6] text-[var(--muted)]">No setup, no boilerplate. You stay in the conversation — Rendra writes, runs and ships the code.</p>
           </div>
           <div className="grid grid-cols-3 gap-5 max-[900px]:grid-cols-1">
             <article className="p-7 rounded-[28px] bg-white border border-[var(--line)] flex flex-col gap-[22px] transition-[transform,box-shadow] duration-300 ease-[cubic-bezier(.2,.8,.2,1)] hover:-translate-y-1 hover:shadow-[0_22px_40px_-18px_rgba(22,21,26,.28)]">
@@ -207,7 +207,7 @@ export default function Landing() {
               <div className="h-[190px] rounded-[18px] bg-[var(--bg)] p-5 flex flex-col gap-2.5" style={{ background: '#232229', justifyContent: 'center', gap: 14 }}>
                 <div style={{ height: 40, borderRadius: 12, background: '#2E2D35', display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px' }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B9B6AE" strokeWidth="2.2" strokeLinecap="round"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, color: '#E6E3DC' }}>yogaflow.kiln.app</span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, color: '#E6E3DC' }}>yogaflow.rendra.app</span>
                   <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#3DD68C' }}><span className="w-[9px] h-[9px] rounded-full bg-[#3DD68C] animate-[kl-pulse_1.6s_infinite] shrink-0" style={{ width: 7, height: 7 }} />Live</span>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -265,7 +265,7 @@ export default function Landing() {
         </section>
 
         <footer className="h-24 shrink-0 flex items-center justify-between px-16 text-[13px] text-[var(--faint)] flex-wrap gap-3">
-          <span>© 2026 Kiln</span>
+          <span>© 2026 Rendra</span>
           <div className="flex gap-6">
             <a href="#terms" className="text-[var(--faint)]">Terms</a><a href="#privacy" className="text-[var(--faint)]">Privacy</a><a href="#security" className="text-[var(--faint)]">Security</a><a href="#status" className="text-[var(--faint)]">Status</a>
           </div>

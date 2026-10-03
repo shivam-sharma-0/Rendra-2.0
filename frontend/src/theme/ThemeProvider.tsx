@@ -5,9 +5,9 @@ type ThemeContextValue = { theme: Theme; resolvedTheme: 'light' | 'dark'; setThe
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined)
 
-const THEME_KEY = 'kiln_theme'
+const THEME_KEY = 'rendra_theme'
 
-/** Resolve the initial theme. The Kiln design reference is light, so that is the default; users can
+/** Resolve the initial theme. The Rendra design reference is light, so that is the default; users can
  *  still switch to dark/system from Appearance settings. (New key resets any legacy 'system' default.) */
 function getInitialTheme(): Theme {
   const saved = localStorage.getItem(THEME_KEY)

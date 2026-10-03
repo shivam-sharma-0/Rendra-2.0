@@ -23,7 +23,7 @@ const CONNECTORS: Conn[] = [
   { id: 'at', name: 'Airtable', cat: 'Data', mono: 'At', bg: '#E4F1F7', fg: '#135E84', desc: 'Bases as a quick backend.' },
 ]
 
-const KEY = 'kiln_connectors'
+const KEY = 'rendra_connectors'
 function loadConnected(): Set<string> {
   try { return new Set(JSON.parse(localStorage.getItem(KEY) || '["gh","sl"]') as string[]) } catch { return new Set(['gh', 'sl']) }
 }

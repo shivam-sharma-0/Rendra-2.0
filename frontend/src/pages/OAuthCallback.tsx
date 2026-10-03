@@ -36,11 +36,11 @@ export default function OAuthCallback() {
     // Carry a guest's pending prompt through the OAuth round-trip: start their project and open it,
     // otherwise land on the dashboard.
     let cancelled = false
-    const pending = sessionStorage.getItem('kiln_pending_prompt')
+    const pending = sessionStorage.getItem('rendra_pending_prompt')
     if (pending) {
-      const mode = (sessionStorage.getItem('kiln_pending_mode') || 'BUILD') as ProjectType
-      sessionStorage.removeItem('kiln_pending_prompt')
-      sessionStorage.removeItem('kiln_pending_mode')
+      const mode = (sessionStorage.getItem('rendra_pending_mode') || 'BUILD') as ProjectType
+      sessionStorage.removeItem('rendra_pending_prompt')
+      sessionStorage.removeItem('rendra_pending_mode')
       startProject(pending, mode)
         .then((project) => { if (!cancelled) navigate(`/project/${project.id}`, { replace: true }) })
         .catch(() => { if (!cancelled) navigate('/dashboard', { replace: true }) })

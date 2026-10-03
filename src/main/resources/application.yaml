@@ -139,6 +139,7 @@ app:
   # OpenRouter remains available as a fallback provider.
   # api-key is a SECRET â†’ env-only, no default. All models below must support tool/function calling.
   agent:
+    billing-mode: ${BILLING_MODE:FREE}
     llm:
       base-url: ${AGENT_LLM_BASE_URL:https://integrate.api.nvidia.com/v1}
       api-key: ${AGENT_LLM_API_KEY:}
@@ -151,22 +152,34 @@ app:
     # time in round-robin order; no LLM requests from a single run are sent in parallel.
     providers:
       openrouter:
-        base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api}
-        api-key: ${OPENROUTER_API_KEY:${AGENT_LLM_API_KEY:}}
+        base-url: https://openrouter.ai/api
+        api-key: "${OPENROUTER_API_KEY:ENC(ODRpA4R7z06IJp5+fqmyq1IV/+O+kautoPWZcfGF0JCDlfoGXY5emiIunTKCcqtjdUA9uhk7LWmWI8x/zUcgLZ/6LOE9x9L1cu2DrwxmB4FqPbdtWWPoayRzbgZPYlScvutfMjsZC8ftRmQIPoSjsDzF3CsT)}"
       nvidia:
-        base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
-        api-key: ${NVIDIA_API_KEY:}
+        base-url: https://integrate.api.nvidia.com/v1
+        api-key: "${NVIDIA_API_KEY:ENC(8dINy2ixZDjWRMercsQO/Qd/IEOhslBfiNQKhj1k39dubWqaO/862av6XBTgrS7JCYS6bC97z706GHNmg9ezchKqe9f1TNOc1wu/3eUNNxgxWZNZaYtLd9pKVWIVD/fBltsJyemG3ugbYE3yqpX5Xasu)}"
       groq:
-        base-url: ${GROQ_BASE_URL:https://api.groq.com/openai/v1}
-        api-key: ${GROQ_API_KEY:}
+        base-url: https://api.groq.com/openai/v1
+        api-key: "${GROQ_API_KEY:ENC(FVtXcOR9KiLqYfWfwMmEWwVb8vpb6reZrzhbpvjM3wcM7bElRhBtYpqws9h0mWsUQhuyB0neKR47NR+EGstbvzu937AkTcmj/T73l5cQ4jvvGHobw5n/hX6uEGEnX5elC35Xng==)}"
+      mistral:
+        base-url: https://api.mistral.ai/v1
+        api-keys:
+          - "ENC(ab12idRQXOKSeGMKhl4JVl80AsLanrqSlmqOzzVCOeVfMhCCqoR/iZP8gxrByzlssIzCd6lGD28O3leXCfQvjCPepiwl+MIcpc+uFaD4Oj+mv3XU5WdCNo0=)"
+          - "ENC(LbPmq4zfPSXQf33Y1UnATNiCQPkljFcAWdcNOSVGgr1D3G64ilY4c3kpnVloWpWKXBEkkEMx21Ud43IGKfACzGZC7hnNwa9pZMFos1Yf0N/IZTDiZl6+JxI=)"
+          - "ENC(PnE1LPdnJibNwj6t82QuqViYVNmNxmeOd8fpL3soirZH7elpFWeXI5jQKASIPUmpfZk95KUhCq6kj6ASqbY0aLZP3+QKtjmU8m1akqPHCJI/YTOOcio9qcQ=)"
+      gemini:
+        base-url: https://generativelanguage.googleapis.com/v1beta/openai
+        api-key: "ENC(2V/vTEVbYL1gbhB+7hORs0z90oAuYRQtz9vN2ztTjI7bbtYxY+R6jfgEUAjaPakvO9YHeqgQqYb4WodtcmSJCVMbK5PURRgpyTxymuaDZkf1EqzcCT2T8RxbqnA2JKBorA==)"
     # Only chat-generation models are included. Prompt-guard, safeguard, speech-to-text and
     # text-to-speech models are intentionally excluded from the software agent pool.
     models:
       # Only software-agent models are used: coding, planning, reasoning and fast code iteration.
       # Safety, embedding, vision, speech, structured-data and unrelated general models are excluded.
       build: "${AGENT_MODEL_BUILD:nvidia:nvidia/nemotron-3-ultra-550b-a55b,groq:openai/gpt-oss-120b,nvidia:nvidia/nemotron-3-super-120b-a12b,groq:qwen/qwen3.8-27b}"
-      chat: "${AGENT_MODEL_CHAT:nvidia:nvidia/nemotron-3.5-lightning-30b-a3b,groq:openai/gpt-oss-20b,groq:qwen/qwen3.8-27b,nvidia:deepseek-ai/deepseek-v4.1-flash}"
+      chat: "${AGENT_MODEL_CHAT:groq:openai/gpt-oss-20b,groq:qwen/qwen3.8-27b,nvidia:deepseek-ai/deepseek-v4.1-flash}"
       plan: "${AGENT_MODEL_PLAN:nvidia:nvidia/nemotron-3-super-120b-a12b,groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b,nvidia:deepseek-ai/deepseek-v4.1-flash}"
+      free-build: "mistral:codestral-latest,mistral:mistral-medium-latest,groq:openai/gpt-oss-120b,nvidia:nvidia/nemotron-3-super-120b-a12b"
+      free-chat: "mistral:mistral-small-latest,groq:openai/gpt-oss-20b,groq:qwen/qwen3.8-27b,nvidia:deepseek-ai/deepseek-v4.1-flash"
+      free-plan: "mistral:magistral-medium-latest,mistral:mistral-medium-latest,groq:openai/gpt-oss-120b,nvidia:deepseek-ai/deepseek-v4.1-flash"
     # Per-project code lives here (one dir per project).
     workspace-base-path: ${AGENT_WORKSPACE_PATH:./workspaces}
     # Safety limits for a single run.

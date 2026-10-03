@@ -74,11 +74,11 @@ export default function Auth() {
       if (isSignup) await signup(values.email, values.password, values.name || undefined)
       else await login(values.email, values.password)
 
-      const pendingPrompt = sessionStorage.getItem('kiln_pending_prompt')
+      const pendingPrompt = sessionStorage.getItem('rendra_pending_prompt')
       if (pendingPrompt) {
-        const pendingMode = (sessionStorage.getItem('kiln_pending_mode') || 'BUILD') as ProjectType
-        sessionStorage.removeItem('kiln_pending_prompt')
-        sessionStorage.removeItem('kiln_pending_mode')
+        const pendingMode = (sessionStorage.getItem('rendra_pending_mode') || 'BUILD') as ProjectType
+        sessionStorage.removeItem('rendra_pending_prompt')
+        sessionStorage.removeItem('rendra_pending_mode')
         const project = await startProject(pendingPrompt, pendingMode)
         nav(`/project/${project.id}`)
       } else {

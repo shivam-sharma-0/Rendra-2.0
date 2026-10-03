@@ -1,8 +1,11 @@
 package com.code.pal.agent.config;
 
 import com.code.pal.project.domain.ProjectType;
+import com.code.pal.shared.config.KeyVault;
+import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -14,6 +17,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Configuration for agent execution and its provider connection. */
+@Slf4j
 @Component
 @ConfigurationProperties(prefix = "app.agent")
 @Getter
@@ -25,6 +29,9 @@ public class AgentProperties {
     private final Sandbox sandbox = new Sandbox();
     /** Provider-specific endpoints. The legacy {@code llm} block remains the compatibility fallback. */
     private Map<String, Provider> providers = new LinkedHashMap<>();
+    private BillingMode billingMode = BillingMode.PAID;
+
+    public enum BillingMode { FREE, PAID }
 
     /** Root directory holding one sub-folder per project's code. */
     private String workspaceBasePath = "./workspaces";
@@ -73,6 +80,77 @@ public class AgentProperties {
         return Math.max(30_000, heartbeatIntervalMs * 3);
     }
 
+    @PostConstruct
+    void decryptKeys() {
+        String masterKey = System.getenv("GATEWAY_MASTER_KEY");
+        if (masterKey == null || masterKey.isBlank()) {
+            int cleared = 0;
+            for (Provider p : providers.values()) {
+                if (KeyVault.isEncrypted(p.getApiKey())) { p.setApiKey(""); cleared++; }
+                if (p.getApiKeys().stream().anyMatch(KeyVault::isEncrypted)) {
+                    p.setApiKeys(p.getApiKeys().stream()
+                            .map(k -> KeyVault.isEncrypted(k) ? "" : k)
+                            .filter(k -> !k.isBlank()).toList());
+                    cleared++;
+                }
+            }
+            if (cleared > 0) {
+                log.error("GATEWAY_MASTER_KEY is not set — {} provider(s) with ENC() keys are disabled. "
+                        + "Set the env var and restart.", cleared);
+            }
+            sanitizeModelLists();
+            return;
+        }
+        int count = 0;
+        if (KeyVault.isEncrypted(llm.getApiKey())) {
+            llm.setApiKey(KeyVault.decryptIfEncrypted(llm.getApiKey(), masterKey));
+            count++;
+        }
+        for (Provider p : providers.values()) {
+            if (KeyVault.isEncrypted(p.getApiKey())) {
+                p.setApiKey(KeyVault.decryptIfEncrypted(p.getApiKey(), masterKey));
+                count++;
+            }
+            if (!p.getApiKeys().isEmpty()) {
+                List<String> decrypted = new ArrayList<>();
+                for (String k : p.getApiKeys()) {
+                    if (KeyVault.isEncrypted(k)) {
+                        decrypted.add(KeyVault.decryptIfEncrypted(k, masterKey));
+                        count++;
+                    } else {
+                        decrypted.add(k);
+                    }
+                }
+                p.setApiKeys(decrypted);
+            }
+        }
+        if (count > 0) log.info("Decrypted {} API key(s)", count);
+        sanitizeModelLists();
+    }
+
+    private void sanitizeModelLists() {
+        models.setFreeBuild(filterUsable(models.getFreeBuild()));
+        models.setFreeChat(filterUsable(models.getFreeChat()));
+        models.setFreePlan(filterUsable(models.getFreePlan()));
+        models.setBuild(filterUsable(models.getBuild()));
+        models.setChat(filterUsable(models.getChat()));
+        models.setPlan(filterUsable(models.getPlan()));
+    }
+
+    private List<String> filterUsable(List<String> modelList) {
+        if (modelList == null || modelList.isEmpty()) return modelList;
+        List<String> filtered = modelList.stream().filter(m -> {
+            int sep = m.indexOf(':');
+            if (sep <= 0) return true;
+            String provider = m.substring(0, sep).toLowerCase(Locale.ROOT);
+            Provider p = providers.get(provider);
+            return p != null && !p.resolvedKeys().isEmpty();
+        }).toList();
+        int removed = modelList.size() - filtered.size();
+        if (removed > 0) log.warn("Removed {} model(s) with unconfigured providers from routing", removed);
+        return filtered;
+    }
+
     @Getter
     @Setter
     public static class Llm {
@@ -92,6 +170,15 @@ public class AgentProperties {
     public static class Provider {
         private String baseUrl;
         private String apiKey;
+        private List<String> apiKeys = new ArrayList<>();
+
+        public List<String> resolvedKeys() {
+            if (!apiKeys.isEmpty()) {
+                return apiKeys.stream().filter(k -> k != null && !k.isBlank()).toList();
+            }
+            if (apiKey != null && !apiKey.isBlank()) return List.of(apiKey);
+            return List.of();
+        }
     }
 
     @Getter
@@ -128,13 +215,23 @@ public class AgentProperties {
         private List<String> chat = new ArrayList<>();
         private List<String> plan = new ArrayList<>();
 
+        private List<String> freeBuild = new ArrayList<>();
+        private List<String> freeChat = new ArrayList<>();
+        private List<String> freePlan = new ArrayList<>();
+
         private final AtomicInteger buildIndex = new AtomicInteger();
         private final AtomicInteger chatIndex = new AtomicInteger();
         private final AtomicInteger planIndex = new AtomicInteger();
+        private final AtomicInteger freeBuildIndex = new AtomicInteger();
+        private final AtomicInteger freeChatIndex = new AtomicInteger();
+        private final AtomicInteger freePlanIndex = new AtomicInteger();
 
         String nextBuild() { return roundRobin(build, buildIndex); }
         String nextChat() { return roundRobin(chat, chatIndex); }
         String nextPlan() { return roundRobin(plan, planIndex); }
+        String nextFreeBuild() { return roundRobin(freeBuild, freeBuildIndex); }
+        String nextFreeChat() { return roundRobin(freeChat, freeChatIndex); }
+        String nextFreePlan() { return roundRobin(freePlan, freePlanIndex); }
 
         private static String roundRobin(List<String> options, AtomicInteger index) {
             if (options == null || options.isEmpty()) return null;
@@ -144,9 +241,9 @@ public class AgentProperties {
 
     public ModelSelection modelFor(ProjectType mode) {
         String configured = switch (mode) {
-            case CHAT -> models.nextChat();
-            case PLAN -> models.nextPlan();
-            case BUILD -> models.nextBuild();
+            case CHAT -> billingMode == BillingMode.FREE ? models.nextFreeChat() : models.nextChat();
+            case PLAN -> billingMode == BillingMode.FREE ? models.nextFreePlan() : models.nextPlan();
+            case BUILD -> billingMode == BillingMode.FREE ? models.nextFreeBuild() : models.nextBuild();
         };
         if (configured == null || configured.isBlank()) return new ModelSelection(defaultProvider(), configured);
 
@@ -164,7 +261,14 @@ public class AgentProperties {
     }
 
     private String defaultProvider() {
-        return providers.containsKey("nvidia") ? "nvidia" : "openrouter";
+        List<String> priority = billingMode == BillingMode.FREE
+                ? List.of("mistral", "groq", "nvidia", "openrouter")
+                : List.of("nvidia", "openrouter", "mistral", "groq");
+        for (String name : priority) {
+            Provider p = providers.get(name);
+            if (p != null && !p.resolvedKeys().isEmpty()) return name;
+        }
+        return priority.getFirst();
     }
 
     public record ModelSelection(String provider, String model) {}

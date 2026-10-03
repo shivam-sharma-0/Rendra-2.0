@@ -225,7 +225,7 @@ public class ProjectServiceImpl implements ProjectService {
     public ProjectMemberResponse share(Long actorId, UUID projectId, String email, ProjectRole role) {
         Project project = requireManageable(actorId, projectId);
         UserSummary user = userDirectory.findByEmail(email)
-                .orElseThrow(() -> new ProjectMemberNotFoundException("No Kiln account for that email"));
+                .orElseThrow(() -> new ProjectMemberNotFoundException("No Rendra account for that email"));
         if (projectMemberRepository.existsByProjectIdAndUserId(projectId, user.id())) {
             throw new AlreadyProjectMemberException("They already have access to this project");
         }

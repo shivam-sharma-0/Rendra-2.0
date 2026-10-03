@@ -53,7 +53,7 @@ export default function Templates() {
         <div className="kap-ph">
           <div>
             <h1>Start from something <em>beautiful</em></h1>
-            <p>Pick a template, then ask Kiln to make it yours.</p>
+            <p>Pick a template, then ask Rendra to make it yours.</p>
           </div>
           {start.isPending && <Spinner />}
         </div>

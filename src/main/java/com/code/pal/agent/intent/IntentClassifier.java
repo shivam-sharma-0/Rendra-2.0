@@ -3,6 +3,8 @@ package com.code.pal.agent.intent;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.domain.AgentIntent;
 import com.code.pal.agent.llm.LlmClient;
+import com.code.pal.agent.prompt.PromptLoader;
+import com.code.pal.agent.prompt.PromptLoader.Prompt;
 import com.code.pal.agent.llm.LlmClient.LlmMessage;
 import com.code.pal.agent.llm.LlmClient.LlmRequest;
 import com.code.pal.agent.llm.LlmClient.LlmResult;
@@ -67,13 +69,7 @@ public class IntentClassifier {
     /** Fallback for short, ambiguous messages the heuristics can't confidently resolve either way. */
     private AgentIntent classifyWithModel(String userRequest) {
         try {
-            String system = """
-                    Classify the user's message as exactly one word: CONVERSATIONAL or TASK.
-                    CONVERSATIONAL = small talk, greeting, acknowledgement, or anything with no actionable
-                    request about the project. TASK = anything that asks to look at, plan, explain, or
-                    change the project (a feature, a fix, a question about the codebase, etc).
-                    Reply with exactly one word and nothing else.
-                    """;
+            String system = PromptLoader.load(Prompt.INTENT_CLASSIFIER);
             AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
             LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
                     List.of(LlmMessage.system(system), LlmMessage.user(userRequest)), List.of(), 0.0));

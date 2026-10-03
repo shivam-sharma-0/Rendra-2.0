@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 /**
  * Shared loading / empty / error primitives so every screen renders these three states the same
  * way (consistency + DRY). Purely presentational; callers own the data-fetching. Styling leans on
- * the Kiln palette via inline styles so the components work inside any CSS-scoped screen.
+ * the Rendra palette via inline styles so the components work inside any CSS-scoped screen.
  */
 
 export function Spinner({ size = 22, label = 'Loading' }: { size?: number; label?: string }) {
@@ -14,7 +14,7 @@ export function Spinner({ size = 22, label = 'Loading' }: { size?: number; label
       style={{
         display: 'inline-block', width: size, height: size, borderRadius: '50%',
         border: '2px solid #E3DFD6', borderTopColor: '#FF5B2E',
-        animation: 'kiln-spin .7s linear infinite',
+        animation: 'rendra-spin .7s linear infinite',
       }}
     />
   )
@@ -69,7 +69,7 @@ export function Skeleton({ width = '100%', height = 16, radius = 8 }: { width?: 
       style={{
         display: 'block', width, height, borderRadius: radius,
         background: 'linear-gradient(90deg, #EFEBE3 25%, #F6F4EF 37%, #EFEBE3 63%)',
-        backgroundSize: '400% 100%', animation: 'kiln-shimmer 1.4s ease infinite',
+        backgroundSize: '400% 100%', animation: 'rendra-shimmer 1.4s ease infinite',
       }}
     />
   )

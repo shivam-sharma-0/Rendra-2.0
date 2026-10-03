@@ -40,7 +40,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 
     private final HttpClient http;
     private final ObjectMapper objectMapper;
-    private final Map<String, Endpoint> endpoints;
+    private final Map<String, EndpointPool> endpointPools;
     private final double defaultTemperature;
     private final int maxAttempts;
     private final long initialBackoffMs;
@@ -55,21 +55,23 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         this.initialBackoffMs = Math.max(50, llm.getRetryInitialBackoffMs());
         this.maxBackoffMs = Math.max(initialBackoffMs, llm.getRetryMaxBackoffMs());
         this.requestTimeout = Duration.ofMillis(Math.max(1_000, llm.getRequestTimeoutMs()));
-        Map<String, Endpoint> configured = new HashMap<>();
+        Map<String, EndpointPool> configured = new HashMap<>();
         if (props.getProviders() != null) {
             props.getProviders().forEach((name, provider) -> {
                 if (provider != null && provider.getBaseUrl() != null && !provider.getBaseUrl().isBlank()) {
-                    configured.put(name.toLowerCase(java.util.Locale.ROOT),
-                            new Endpoint(provider.getBaseUrl(), provider.getApiKey()));
+                    List<String> keys = provider.resolvedKeys();
+                    if (keys.isEmpty()) keys = List.of("");
+                    List<Endpoint> eps = keys.stream()
+                            .map(k -> new Endpoint(provider.getBaseUrl(), k))
+                            .toList();
+                    configured.put(name.toLowerCase(java.util.Locale.ROOT), new EndpointPool(eps));
                 }
             });
         }
-        // Preserve the old AGENT_LLM_BASE_URL / AGENT_LLM_API_KEY setup when no provider block
-        // is configured. Existing deployments therefore keep working during the migration.
         if (!configured.containsKey("openrouter") && llm.getBaseUrl() != null && !llm.getBaseUrl().isBlank()) {
-            configured.put("openrouter", new Endpoint(llm.getBaseUrl(), llm.getApiKey()));
+            configured.put("openrouter", new EndpointPool(List.of(new Endpoint(llm.getBaseUrl(), llm.getApiKey()))));
         }
-        this.endpoints = Map.copyOf(configured);
+        this.endpointPools = Map.copyOf(configured);
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .version(HttpClient.Version.HTTP_1_1)
@@ -80,26 +82,36 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     public LlmResult chatStreaming(LlmRequest request, Consumer<String> onTextDelta) {
         String provider = request.provider() == null || request.provider().isBlank()
                 ? "openrouter" : request.provider().toLowerCase(java.util.Locale.ROOT);
-        Endpoint endpoint = endpoints.get(provider);
-        if (endpoint == null || endpoint.apiKey().isBlank()) {
+        EndpointPool pool = endpointPools.get(provider);
+        if (pool == null || !pool.isConfigured()) {
             throw new LlmException("LLM provider is not configured: " + provider);
         }
 
+        int totalAttempts = maxAttempts * pool.size();
+        int keysTriedInRound = 0;
         long backoffMs = initialBackoffMs;
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+        for (int attempt = 1; attempt <= totalAttempts; attempt++) {
+            Endpoint endpoint = pool.next();
             try {
                 return streamOnce(endpoint, request, onTextDelta);
             } catch (RetryableLlmException e) {
-                if (attempt == maxAttempts) throw e;
-                long base = e.retryAfterMs() > 0 ? e.retryAfterMs() : backoffMs;
-                long delay = withJitter(base);
-                log.warn("LLM request attempt {}/{} failed ({}); retrying in {} ms", attempt, maxAttempts,
-                        e.getMessage(), delay);
-                sleep(delay);
-                backoffMs = Math.min(maxBackoffMs, backoffMs * 2);
+                if (attempt == totalAttempts) throw e;
+                keysTriedInRound++;
+                if (keysTriedInRound >= pool.size()) {
+                    long base = e.retryAfterMs() > 0 ? e.retryAfterMs() : backoffMs;
+                    long delay = withJitter(base);
+                    log.warn("All {} key(s) for '{}' exhausted (round {}); backing off {} ms",
+                            pool.size(), provider, attempt / pool.size(), delay);
+                    sleep(delay);
+                    backoffMs = Math.min(maxBackoffMs, backoffMs * 2);
+                    keysTriedInRound = 0;
+                } else {
+                    log.info("Key {} of {} for '{}' rate-limited; rotating instantly",
+                            keysTriedInRound, pool.size(), provider);
+                }
             }
         }
-        throw new LlmException("LLM request failed");
+        throw new LlmException("LLM request failed after " + totalAttempts + " attempts");
     }
 
     private LlmResult streamOnce(Endpoint endpoint, LlmRequest request, Consumer<String> onTextDelta) {
@@ -298,6 +310,16 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 
     private static final class UsageBuilder { private int promptTokens; private int completionTokens; }
 
+    private static final class EndpointPool {
+        private final List<Endpoint> endpoints;
+        private final java.util.concurrent.atomic.AtomicInteger index = new java.util.concurrent.atomic.AtomicInteger();
+
+        EndpointPool(List<Endpoint> endpoints) { this.endpoints = List.copyOf(endpoints); }
+        Endpoint next() { return endpoints.get(Math.floorMod(index.getAndIncrement(), endpoints.size())); }
+        int size() { return endpoints.size(); }
+        boolean isConfigured() { return !endpoints.isEmpty() && endpoints.stream().anyMatch(e -> !e.apiKey().isBlank()); }
+    }
+
     private record Endpoint(URI completionsUri, String apiKey) {
         private Endpoint(String baseUrl, String apiKey) {
             this(completionsUri(baseUrl), apiKey == null ? "" : apiKey);
@@ -305,7 +327,9 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 
         private static URI completionsUri(String baseUrl) {
             String normalized = baseUrl.replaceAll("/+$", "");
-            String path = normalized.endsWith("/v1") ? "/chat/completions" : "/v1/chat/completions";
+            if (normalized.endsWith("/chat/completions")) return URI.create(normalized);
+            String path = (normalized.endsWith("/v1") || normalized.endsWith("/openai"))
+                    ? "/chat/completions" : "/v1/chat/completions";
             return URI.create(normalized + path);
         }
     }
