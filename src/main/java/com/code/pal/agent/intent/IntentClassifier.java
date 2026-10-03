@@ -29,6 +29,8 @@ import java.util.regex.Pattern;
 public class IntentClassifier {
 
     private static final int SHORT_MESSAGE_CHARS = 60;
+    /** A one-word answer; past this, the reply waits on a slow provider for nothing, so assume TASK. */
+    private static final java.time.Duration CLASSIFICATION_BUDGET = java.time.Duration.ofSeconds(10);
 
     private static final Pattern CONVERSATIONAL_PATTERN = Pattern.compile(
             "^(hi+|hey+|hello+|yo|sup|namaste|namaskar|"
@@ -72,7 +74,8 @@ public class IntentClassifier {
             String system = PromptLoader.load(Prompt.INTENT_CLASSIFIER);
             AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
             LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
-                    List.of(LlmMessage.system(system), LlmMessage.user(userRequest)), List.of(), 0.0));
+                    List.of(LlmMessage.system(system), LlmMessage.user(userRequest)), List.of(), 0.0,
+                    CLASSIFICATION_BUDGET));
             String answer = result.content() == null ? "" : result.content().trim().toUpperCase(Locale.ROOT);
             return answer.startsWith("CONVERSATIONAL") ? AgentIntent.CONVERSATIONAL : AgentIntent.TASK;
         } catch (RuntimeException e) {

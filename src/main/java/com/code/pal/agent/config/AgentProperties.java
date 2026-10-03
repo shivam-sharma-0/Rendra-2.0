@@ -3,6 +3,7 @@ package com.code.pal.agent.config;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.shared.config.KeyVault;
 import jakarta.annotation.PostConstruct;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Configuration for agent execution and its provider connection. */
@@ -30,6 +32,12 @@ public class AgentProperties {
     /** Provider-specific endpoints. The legacy {@code llm} block remains the compatibility fallback. */
     private Map<String, Provider> providers = new LinkedHashMap<>();
     private BillingMode billingMode = BillingMode.PAID;
+    /** Routing state, not configuration: models that recently failed, with their cooldown end (nanoTime). */
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
+    private final Map<String, Long> unavailableUntil = new ConcurrentHashMap<>();
+    /** Upper bound on candidates inspected per routing decision. */
+    private static final int MAX_ROUTING_PROBES = 16;
 
     public enum BillingMode { FREE, PAID }
 
@@ -159,6 +167,18 @@ public class AgentProperties {
         private double temperature = 0.2;
         /** Per-provider HTTP timeout; keep this shorter than the overall agent run timeout. */
         private long requestTimeoutMs = 60_000;
+        /**
+         * A streaming response that sends no bytes for this long is treated as a dead connection. The
+         * request timeout only covers the wait for response headers, never the streamed body.
+         */
+        private long streamIdleTimeoutMs = 60_000;
+        /**
+         * Wall-clock budget for one agent model call, retries included, so one failing provider cannot
+         * consume the whole run; the runner then falls back to the next configured model.
+         */
+        private long callBudgetMs = 90_000;
+        /** A model whose call failed is skipped by routing for this long while others are available. */
+        private long providerCooldownMs = 60_000;
         /** Initial request plus this many retry attempts are bounded by maxAttempts. */
         private int maxAttempts = 3;
         private long retryInitialBackoffMs = 500;
@@ -239,7 +259,46 @@ public class AgentProperties {
         }
     }
 
+    /**
+     * Next model for {@code mode} in round-robin order, skipping models that failed recently (see
+     * {@link #markModelUnavailable}). If every configured model is cooling down, the first candidate
+     * is returned anyway: trying a possibly-recovered model beats failing without a call.
+     */
     public ModelSelection modelFor(ProjectType mode) {
+        ModelSelection first = null;
+        for (int probe = 0; probe < MAX_ROUTING_PROBES; probe++) {
+            ModelSelection candidate = nextModelFor(mode);
+            if (first == null) first = candidate;
+            else if (candidate.equals(first)) break;        // went once around the list
+            if (!coolingDown(candidate)) return candidate;
+        }
+        return first;
+    }
+
+    /** A provider/model that just failed is skipped for {@code llm.providerCooldownMs}. */
+    public void markModelUnavailable(ModelSelection selection) {
+        long cooldown = Math.max(0, llm.getProviderCooldownMs());
+        if (selection == null || cooldown == 0) return;
+        unavailableUntil.put(routingKey(selection), System.nanoTime() + cooldown * 1_000_000);
+    }
+
+    public void markModelAvailable(ModelSelection selection) {
+        if (selection != null) unavailableUntil.remove(routingKey(selection));
+    }
+
+    private boolean coolingDown(ModelSelection selection) {
+        Long until = unavailableUntil.get(routingKey(selection));
+        if (until == null) return false;
+        if (System.nanoTime() - until < 0) return true;
+        unavailableUntil.remove(routingKey(selection), until);
+        return false;
+    }
+
+    private static String routingKey(ModelSelection selection) {
+        return selection.provider() + ":" + selection.model();
+    }
+
+    private ModelSelection nextModelFor(ProjectType mode) {
         String configured = switch (mode) {
             case CHAT -> billingMode == BillingMode.FREE ? models.nextFreeChat() : models.nextChat();
             case PLAN -> billingMode == BillingMode.FREE ? models.nextFreePlan() : models.nextPlan();

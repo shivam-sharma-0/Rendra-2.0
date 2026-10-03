@@ -26,6 +26,8 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.function.Consumer;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -46,6 +48,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private final long initialBackoffMs;
     private final long maxBackoffMs;
     private final Duration requestTimeout;
+    private final long streamIdleTimeoutNanos;
 
     public OpenAiCompatibleLlmClient(AgentProperties props, ObjectMapper objectMapper) {
         AgentProperties.Llm llm = props.getLlm();
@@ -55,6 +58,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         this.initialBackoffMs = Math.max(50, llm.getRetryInitialBackoffMs());
         this.maxBackoffMs = Math.max(initialBackoffMs, llm.getRetryMaxBackoffMs());
         this.requestTimeout = Duration.ofMillis(Math.max(1_000, llm.getRequestTimeoutMs()));
+        this.streamIdleTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(100, llm.getStreamIdleTimeoutMs()));
         Map<String, EndpointPool> configured = new HashMap<>();
         if (props.getProviders() != null) {
             props.getProviders().forEach((name, provider) -> {
@@ -87,38 +91,69 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
             throw new LlmException("LLM provider is not configured: " + provider);
         }
 
-        int totalAttempts = maxAttempts * pool.size();
+        // Retry policy:
+        //  - 429 is per key: rotate to the next key at once; back off only after every key of the
+        //    provider is limited, for at most maxAttempts rounds.
+        //  - Network errors, stalls and 5xx are per provider: another key cannot help, so they are
+        //    retried at most maxAttempts times in total, with backoff.
+        //  - Everything stays inside the request's budget; when it runs out the call fails so the
+        //    caller can fall back to another model instead of waiting on this one.
+        long deadline = request.budget() == null ? Long.MAX_VALUE
+                : System.nanoTime() + request.budget().toNanos();
+        int maxRateLimited = maxAttempts * pool.size();
+        int rateLimited = 0;
+        int transientFailures = 0;
         int keysTriedInRound = 0;
         long backoffMs = initialBackoffMs;
-        for (int attempt = 1; attempt <= totalAttempts; attempt++) {
+        while (true) {
+            Duration attemptTimeout = attemptTimeout(deadline, provider);
             Endpoint endpoint = pool.next();
             try {
-                return streamOnce(endpoint, request, onTextDelta);
+                return streamOnce(endpoint, request, onTextDelta, attemptTimeout, deadline);
             } catch (RetryableLlmException e) {
-                if (attempt == totalAttempts) throw e;
-                keysTriedInRound++;
-                if (keysTriedInRound >= pool.size()) {
-                    long base = e.retryAfterMs() > 0 ? e.retryAfterMs() : backoffMs;
-                    long delay = withJitter(base);
-                    log.warn("All {} key(s) for '{}' exhausted (round {}); backing off {} ms",
-                            pool.size(), provider, attempt / pool.size(), delay);
-                    sleep(delay);
-                    backoffMs = Math.min(maxBackoffMs, backoffMs * 2);
+                if (e.rateLimited()) {
+                    if (++rateLimited >= maxRateLimited) throw e;
+                    if (++keysTriedInRound < pool.size()) {
+                        log.info("Key {} of {} for '{}' rate-limited; rotating instantly",
+                                keysTriedInRound, pool.size(), provider);
+                        continue;
+                    }
                     keysTriedInRound = 0;
-                } else {
-                    log.info("Key {} of {} for '{}' rate-limited; rotating instantly",
-                            keysTriedInRound, pool.size(), provider);
+                } else if (++transientFailures >= maxAttempts) {
+                    throw e;
                 }
+                long delay = withJitter(e.retryAfterMs() > 0 ? e.retryAfterMs() : backoffMs);
+                if (remainingNanos(deadline) <= TimeUnit.MILLISECONDS.toNanos(delay) + MIN_ATTEMPT_NANOS) {
+                    throw new LlmException("LLM time budget exhausted for '" + provider + "' after: " + e.getMessage(), e);
+                }
+                log.warn("LLM request to '{}' failed ({}); retrying in {} ms", provider, e.getMessage(), delay);
+                sleep(delay);
+                backoffMs = Math.min(maxBackoffMs, backoffMs * 2);
             }
         }
-        throw new LlmException("LLM request failed after " + totalAttempts + " attempts");
     }
 
-    private LlmResult streamOnce(Endpoint endpoint, LlmRequest request, Consumer<String> onTextDelta) {
+    /** Below this a new attempt cannot realistically complete, so the budget counts as spent. */
+    private static final long MIN_ATTEMPT_NANOS = TimeUnit.SECONDS.toNanos(1);
+
+    private Duration attemptTimeout(long deadline, String provider) {
+        long remaining = remainingNanos(deadline);
+        if (remaining <= MIN_ATTEMPT_NANOS) {
+            throw new LlmException("LLM time budget exhausted for '" + provider + "'");
+        }
+        return remaining >= requestTimeout.toNanos() ? requestTimeout : Duration.ofNanos(remaining);
+    }
+
+    private static long remainingNanos(long deadline) {
+        return deadline == Long.MAX_VALUE ? Long.MAX_VALUE : deadline - System.nanoTime();
+    }
+
+    private LlmResult streamOnce(Endpoint endpoint, LlmRequest request, Consumer<String> onTextDelta,
+                                 Duration attemptTimeout, long deadline) {
         HttpRequest httpRequest;
         try {
             httpRequest = HttpRequest.newBuilder(endpoint.completionsUri())
-                    .timeout(requestTimeout)
+                    .timeout(attemptTimeout)
                     .header("Authorization", "Bearer " + endpoint.apiKey())
                     .header("Content-Type", "application/json")
                     .header("Accept", "text/event-stream")
@@ -129,10 +164,15 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         }
 
         AtomicBoolean published = new AtomicBoolean(false);
+        StreamWatchdog watchdog = null;
         try {
             HttpResponse<InputStream> response = http.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
             int status = response.statusCode();
-            if (status == 429 || status >= 500) {
+            if (status == 429) {
+                closeQuietly(response.body());
+                throw RetryableLlmException.rateLimited(retryAfterMs(response));
+            }
+            if (status >= 500) {
                 closeQuietly(response.body());
                 throw new RetryableLlmException("HTTP " + status, retryAfterMs(response));
             }
@@ -140,18 +180,80 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                 String detail = readAtMost(response.body(), 1_000);
                 throw new LlmException("LLM call failed: HTTP " + status + (detail.isBlank() ? "" : " - " + detail));
             }
-            return readSse(response.body(), token -> {
+            // The request timeout stops at the response headers; the body needs its own guard.
+            watchdog = new StreamWatchdog(response.body(), streamIdleTimeoutNanos, deadline);
+            return readSse(watchdog.stream(), token -> {
                 published.set(true);
                 onTextDelta.accept(token);
             });
         } catch (IOException e) {
+            String reason = watchdog != null && watchdog.fired() != null
+                    ? watchdog.fired() : "network error: " + e.getMessage();
             // A reconnect after visible output would duplicate text and can produce a different tool call.
             // The client may retry only a request that failed before its first published delta.
-            if (published.get()) throw new LlmException("LLM stream interrupted after partial output", e);
-            throw new RetryableLlmException("network error: " + e.getMessage(), 0, e);
+            if (published.get()) throw new LlmException("LLM stream interrupted after partial output (" + reason + ")", e);
+            throw new RetryableLlmException(reason, 0, e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new LlmException("LLM request interrupted", e);
+        } finally {
+            if (watchdog != null) watchdog.stop();
+        }
+    }
+
+    /**
+     * Closes a response body that has gone silent for {@code idleNanos}, or that outlives the call's
+     * deadline. Closing unblocks the reader with an IOException, which the caller turns into a
+     * retry (no output yet) or a failure (output already published).
+     */
+    private static final class StreamWatchdog {
+        private static final long CHECK_INTERVAL_MS = 200;
+
+        private final InputStream source;
+        private final AtomicLong lastActivity = new AtomicLong(System.nanoTime());
+        private final InputStream tracked;
+        private final Thread thread;
+        private volatile boolean stopped;
+        private volatile String fired;
+
+        StreamWatchdog(InputStream source, long idleNanos, long deadline) {
+            this.source = source;
+            this.tracked = new java.io.FilterInputStream(source) {
+                @Override public int read() throws IOException {
+                    int value = super.read();
+                    lastActivity.set(System.nanoTime());
+                    return value;
+                }
+                @Override public int read(byte[] buffer, int offset, int length) throws IOException {
+                    int count = super.read(buffer, offset, length);
+                    lastActivity.set(System.nanoTime());
+                    return count;
+                }
+            };
+            this.thread = Thread.ofVirtual().name("llm-stream-watchdog").start(() -> watch(idleNanos, deadline));
+        }
+
+        private void watch(long idleNanos, long deadline) {
+            while (!stopped) {
+                long now = System.nanoTime();
+                if (now - lastActivity.get() >= idleNanos) { fire("stream stalled"); return; }
+                if (deadline != Long.MAX_VALUE && now >= deadline) { fire("time budget exhausted mid-stream"); return; }
+                try { Thread.sleep(CHECK_INTERVAL_MS); } catch (InterruptedException e) { return; }
+            }
+        }
+
+        private void fire(String reason) {
+            if (stopped) return;
+            fired = reason;
+            closeQuietly(source);
+        }
+
+        InputStream stream() { return tracked; }
+        String fired() { return fired; }
+
+        void stop() {
+            stopped = true;
+            thread.interrupt();
         }
     }
 

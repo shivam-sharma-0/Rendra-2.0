@@ -29,6 +29,12 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 public class RequirementServiceImpl implements RequirementService {
+    /**
+     * These calls run inside the user's HTTP request and already fall back to deterministic questions,
+     * so a slow provider must not hold the request open.
+     */
+    private static final java.time.Duration LLM_BUDGET = java.time.Duration.ofSeconds(30);
+
     private final ProjectService projects;
     private final RequirementSessionRepository sessions;
     private final RequirementQuestionRepository questions;
@@ -123,7 +129,7 @@ public class RequirementServiceImpl implements RequirementService {
                 """.formatted(Optional.ofNullable(project.getInitialPrompt()).orElse(""), summary);
         AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
         LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
-                List.of(LlmMessage.system("You are a strict product requirements reviewer."), LlmMessage.user(prompt)), List.of(), 0.0));
+                List.of(LlmMessage.system("You are a strict product requirements reviewer."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET));
         JsonNode root = objectMapper.readTree(stripJsonFence(result.content()));
         if (!root.isObject()) throw new IllegalArgumentException("Requirement assessment was not an object");
         return new Assessment(root.path("requirementsClear").asBoolean(false), parseQuestionDrafts(root.path("questions")));
@@ -231,7 +237,7 @@ public class RequirementServiceImpl implements RequirementService {
                     Do not ask questions already answered clearly by the user prompt. User prompt: %s
                     """.formatted(project.getInitialPrompt());
             LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
-                    List.of(LlmMessage.system("You are a product requirements analyst."), LlmMessage.user(prompt)), List.of(), 0.0));
+                    List.of(LlmMessage.system("You are a product requirements analyst."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET));
             List<QuestionDraft> parsed = parseQuestions(result.content());
             if (!parsed.isEmpty()) return parsed.stream().limit(8).toList();
         } catch (RuntimeException error) {

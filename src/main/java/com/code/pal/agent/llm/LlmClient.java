@@ -1,5 +1,6 @@
 package com.code.pal.agent.llm;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -15,10 +16,20 @@ public interface LlmClient {
         return chatStreaming(request, ignored -> { });
     }
 
-    record LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools, double temperature) {
+    /**
+     * @param budget wall-clock limit for the whole call, retries and streaming included; when it runs
+     *               out the call fails so the caller can fall back. {@code null} means only the
+     *               per-attempt request timeout applies.
+     */
+    record LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools,
+                      double temperature, Duration budget) {
+        public LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools, double temperature) {
+            this(provider, model, messages, tools, temperature, null);
+        }
+
         /** Backwards-compatible constructor: unqualified requests use the OpenRouter fallback. */
         public LlmRequest(String model, List<LlmMessage> messages, List<ToolSpec> tools, double temperature) {
-            this("openrouter", model, messages, tools, temperature);
+            this("openrouter", model, messages, tools, temperature, null);
         }
     }
 

@@ -148,6 +148,12 @@ app:
       max-attempts: ${AGENT_LLM_MAX_ATTEMPTS:3}
       retry-initial-backoff-ms: ${AGENT_LLM_RETRY_INITIAL_BACKOFF_MS:500}
       retry-max-backoff-ms: ${AGENT_LLM_RETRY_MAX_BACKOFF_MS:5000}
+      # A streamed response silent for this long counts as dead (request-timeout covers headers only).
+      stream-idle-timeout-ms: ${AGENT_LLM_STREAM_IDLE_TIMEOUT_MS:60000}
+      # Max wall-clock for one agent model call, retries included; then the next model is tried.
+      call-budget-ms: ${AGENT_LLM_CALL_BUDGET_MS:90000}
+      # A model whose call just failed is skipped for this long while another model is available.
+      provider-cooldown-ms: ${AGENT_LLM_PROVIDER_COOLDOWN_MS:60000}
     # Provider-specific OpenAI-compatible endpoints. The model routes below are selected one at a
     # time in round-robin order; no LLM requests from a single run are sent in parallel.
     providers:

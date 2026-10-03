@@ -246,15 +246,13 @@ public class AgentRunner implements AgentRuntime {
                 try {
                     res = llm.chatStreaming(new LlmRequest(
                             selection.provider(), selection.model(), runtime.messages(), specs,
-                            props.getLlm().getTemperature()), stream::append);
+                            props.getLlm().getTemperature(), callBudget(deadlineNanos)), stream::append);
                 } catch (LlmException providerFailure) {
                     // Keep the conversation intact when a provider rejects a request before it
                     // publishes output. The next round-robin model can support a different tool
                     // schema or have independent rate limits; the model-call cap still bounds cost.
-                    if (providerFailure.getMessage() != null
-                            && providerFailure.getMessage().contains("after partial output")) {
-                        throw providerFailure;
-                    }
+                    if (isPartialOutputFailure(providerFailure)) throw providerFailure;
+                    props.markModelUnavailable(selection);
                     log.warn(
                             "llm_provider_unavailable runId={} provider={} model={} reason={}; trying next configured model",
                             run.getId(), selection.provider(), selection.model(), providerFailure.getMessage());
@@ -263,6 +261,7 @@ public class AgentRunner implements AgentRuntime {
                             "retryable", providerFailure instanceof com.code.pal.agent.llm.RetryableLlmException));
                     continue;
                 }
+                props.markModelAvailable(selection);
                 stream.flush();
                 accountTokens(run, res);
 
@@ -417,6 +416,8 @@ public class AgentRunner implements AgentRuntime {
     }
 
     private static final int CONVERSATIONAL_HISTORY_TURNS = 6;
+    /** Chat models tried for one small-talk reply before it fails. */
+    private static final int CONVERSATIONAL_MODEL_ATTEMPTS = 3;
 
     /**
      * Direct reply for a conversational turn (a greeting, thanks, etc.), skipping
@@ -451,12 +452,29 @@ public class AgentRunner implements AgentRuntime {
                 .forEach(convo::add);
         convo.add(LlmMessage.user(userRequest));
 
-        requireBeforeDeadline(deadlineNanos);
-        AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
-        log.info("model_called runId={} conversational=true provider={} model={}", run.getId(), selection.provider(),
-                selection.model());
-        LlmResult res = llm.chatStreaming(new LlmRequest(selection.provider(), selection.model(), convo, List.of(),
-                props.getLlm().getTemperature()), stream::append);
+        LlmResult res = null;
+        LlmException lastFailure = null;
+        // Small talk gets the same fallback as the main loop: a provider that is down or out of
+        // budget hands over to the next configured chat model instead of failing the reply.
+        for (int attempt = 1; attempt <= CONVERSATIONAL_MODEL_ATTEMPTS && res == null; attempt++) {
+            requireBeforeDeadline(deadlineNanos);
+            requireNotCancelled(run);
+            AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
+            log.info("model_called runId={} conversational=true attempt={} provider={} model={}", run.getId(), attempt,
+                    selection.provider(), selection.model());
+            try {
+                res = llm.chatStreaming(new LlmRequest(selection.provider(), selection.model(), convo, List.of(),
+                        props.getLlm().getTemperature(), callBudget(deadlineNanos)), stream::append);
+                props.markModelAvailable(selection);
+            } catch (LlmException providerFailure) {
+                if (isPartialOutputFailure(providerFailure)) throw providerFailure;
+                props.markModelUnavailable(selection);
+                lastFailure = providerFailure;
+                log.warn("llm_provider_unavailable runId={} conversational=true provider={} model={} reason={}; trying next configured model",
+                        run.getId(), selection.provider(), selection.model(), providerFailure.getMessage());
+            }
+        }
+        if (res == null) throw lastFailure;
         stream.flush();
         accountTokens(run, res);
         if (res.reasoning() != null && !res.reasoning().isBlank()) {
@@ -550,6 +568,18 @@ public class AgentRunner implements AgentRuntime {
     private static void requireBeforeDeadline(long deadlineNanos) {
         if (System.nanoTime() >= deadlineNanos)
             throw new AgentTimeoutException();
+    }
+
+    /** One model call may use at most the configured call budget, and never more than the run has left. */
+    private java.time.Duration callBudget(long deadlineNanos) {
+        long remaining = Math.max(0, deadlineNanos - System.nanoTime());
+        long budget = TimeUnit.MILLISECONDS.toNanos(Math.max(1_000, props.getLlm().getCallBudgetMs()));
+        return java.time.Duration.ofNanos(Math.min(remaining, budget));
+    }
+
+    /** Text already reached the user, so retrying on another model would duplicate or contradict it. */
+    private static boolean isPartialOutputFailure(LlmException failure) {
+        return failure.getMessage() != null && failure.getMessage().contains("after partial output");
     }
 
     private static final class AgentTimeoutException extends RuntimeException {
