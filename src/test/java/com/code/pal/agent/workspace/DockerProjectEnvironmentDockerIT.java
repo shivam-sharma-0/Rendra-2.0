@@ -39,7 +39,7 @@ class DockerProjectEnvironmentDockerIT {
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(callers);
         try {
-            List<Future<DockerProjectEnvironment.CommandResult>> results = new ArrayList<>();
+            List<Future<SandboxPort.CommandResult>> results = new ArrayList<>();
             for (int i = 0; i < callers; i++) {
                 results.add(pool.submit(() -> {
                     start.await();
@@ -47,7 +47,7 @@ class DockerProjectEnvironmentDockerIT {
                 }));
             }
             start.countDown();
-            for (Future<DockerProjectEnvironment.CommandResult> result : results) {
+            for (Future<SandboxPort.CommandResult> result : results) {
                 assertEquals(0, result.get(3, TimeUnit.MINUTES).exitCode());
             }
         } finally {
@@ -81,7 +81,7 @@ class DockerProjectEnvironmentDockerIT {
             assertEquals("none", dockerOutput(properties, "container", "inspect", "-f", "{{.HostConfig.NetworkMode}}", container));
             assertEquals("kept", sandbox.readText(projectId, "marker.txt").trim(), "project files must survive the recreate");
 
-            DockerProjectEnvironment.CommandResult outbound = sandbox.exec(projectId, List.of("node", "-e",
+            SandboxPort.CommandResult outbound = sandbox.exec(projectId, List.of("node", "-e",
                     "require('https').get('https://registry.npmjs.org/',r=>{console.log('REACHED',r.statusCode);process.exit(0)})"
                             + ".on('error',e=>{console.log('BLOCKED',e.code);process.exit(3)})"));
             assertEquals(3, outbound.exitCode(), outbound.stdout());

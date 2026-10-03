@@ -1,7 +1,7 @@
 package com.code.pal.agent.workspace;
 
 import com.code.pal.agent.config.AgentProperties;
-import com.code.pal.agent.workspace.DockerProjectEnvironment.CommandResult;
+import com.code.pal.agent.workspace.SandboxPort.CommandResult;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -40,7 +40,8 @@ class DockerProjectEnvironmentTest {
             for (int i = 0; i < callers; i++) {
                 results.add(pool.submit(() -> {
                     start.await();
-                    return sandbox.ensure(projectId);
+                    sandbox.ensure(projectId);
+                    return null;
                 }));
             }
             start.countDown();

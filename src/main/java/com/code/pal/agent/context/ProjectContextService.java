@@ -1,7 +1,7 @@
 package com.code.pal.agent.context;
 
 import com.code.pal.agent.config.AgentProperties;
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.domain.MessageRole;
 import org.springframework.stereotype.Service;
@@ -100,13 +100,13 @@ public class ProjectContextService {
     }
 
     /** Build the same bounded project map from the persistent Docker volume, without host IO. */
-    public ProjectContext buildSandbox(DockerProjectEnvironment sandbox, UUID projectId, String sandboxRoot,
+    public ProjectContext buildSandbox(SandboxPort sandbox, UUID projectId, String sandboxRoot,
                                        String userRequest, List<Message> history,
                                        Collection<String> currentlyOpenFiles) {
-        List<DockerProjectEnvironment.Entry> entries = sandbox.list(projectId, sandboxRoot,
+        List<SandboxPort.Entry> entries = sandbox.list(projectId, sandboxRoot,
                 Math.max(1, properties.getProjectScanMaxDepth()));
         List<String> paths = entries.stream().filter(entry -> !entry.directory())
-                .map(DockerProjectEnvironment.Entry::path)
+                .map(SandboxPort.Entry::path)
                 .filter(path -> !ignoredSandboxPath(path) && !isBinaryAsset(Path.of(path)))
                 .sorted().limit(Math.max(1, properties.getProjectScanMaxFiles())).toList();
         boolean truncated = entries.stream().filter(entry -> !entry.directory()).count() > paths.size();
@@ -117,8 +117,8 @@ public class ProjectContextService {
         List<String> instructions = paths.stream().filter(INSTRUCTION_PATHS::contains).toList();
         Map<String, String> dependencies = readSandboxDependencies(sandbox, projectId, sandboxRoot);
         List<String> frameworks = detectFrameworks(dependencies, paths);
-        List<String> directories = entries.stream().filter(DockerProjectEnvironment.Entry::directory)
-                .map(DockerProjectEnvironment.Entry::path).filter(path -> !ignoredSandboxPath(path)).limit(100).toList();
+        List<String> directories = entries.stream().filter(SandboxPort.Entry::directory)
+                .map(SandboxPort.Entry::path).filter(path -> !ignoredSandboxPath(path)).limit(100).toList();
         List<String> routes = paths.stream().filter(path -> path.toLowerCase(Locale.ROOT).contains("route")).limit(MAX_ROUTES).toList();
         List<String> modules = paths.stream().filter(path -> path.contains("/components/") || path.startsWith("components/"))
                 .map(path -> path.substring(0, Math.max(0, path.lastIndexOf('/')))).distinct().limit(100).toList();
@@ -173,7 +173,7 @@ public class ProjectContextService {
                 trace.diagnostics(approximateChars), trace);
     }
 
-    private Map<String, String> readSandboxDependencies(DockerProjectEnvironment sandbox, UUID projectId, String root) {
+    private Map<String, String> readSandboxDependencies(SandboxPort sandbox, UUID projectId, String root) {
         try {
             String content = sandbox.readText(projectId, root, "package.json");
             @SuppressWarnings("unchecked") Map<String, Object> json = objectMapper.readValue(content, Map.class);

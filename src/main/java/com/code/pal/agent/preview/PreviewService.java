@@ -1,7 +1,7 @@
 package com.code.pal.agent.preview;
 
 import com.code.pal.agent.workspace.WorkspaceStorage;
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.agent.config.AgentProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -32,7 +32,7 @@ public class PreviewService {
     private static final Set<String> SKIP = Set.of(".git", ".ssh", ".secrets", "node_modules");
 
     private final WorkspaceStorage storage;
-    private final DockerProjectEnvironment sandbox;
+    private final SandboxPort sandbox;
     private final AgentProperties properties;
 
     public PreviewFile serve(UUID projectId, String path) {

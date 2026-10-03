@@ -38,7 +38,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 @Slf4j
 @Service
-public class DockerProjectEnvironment {
+public class DockerProjectEnvironment implements SandboxPort {
     private static final int MAX_PATH_LENGTH = 512;
     private static final String WORKSPACE_LABEL = "com.codepal.workspace=true";
     /** Bounds re-checks when the container is stopped between ensure() and taking the read lock. */
@@ -66,7 +66,13 @@ public class DockerProjectEnvironment {
         this.startedAt = clock.instant();
     }
 
-    public Environment ensure(UUID projectId) {
+    @Override
+    public void ensure(UUID projectId) {
+        readyEnvironment(projectId);
+    }
+
+    /** Provisions the project container if needed and returns its Docker coordinates. */
+    private Environment readyEnvironment(UUID projectId) {
         lastUsed.put(projectId, clock.instant());
         if (!ready.contains(projectId)) {
             Lock lock = lockFor(projectId).writeLock();
@@ -167,7 +173,7 @@ public class DockerProjectEnvironment {
                                           Duration timeout, byte[] stdin, int outputLimit) {
         boolean retried = false;
         for (int round = 1; ; round++) {
-            Environment environment = ensure(projectId);
+            Environment environment = readyEnvironment(projectId);
             List<String> args = new ArrayList<>();
             args.add("exec");
             args.addAll(options);
@@ -269,6 +275,7 @@ public class DockerProjectEnvironment {
     }
 
     /** Enforce a project volume quota without counting internal snapshots/change sets. */
+    @Override
     public void enforceQuota(UUID projectId) {
         long limit = properties.getSandbox().getMaxProjectBytes();
         if (limit <= 0) return;
@@ -283,27 +290,22 @@ public class DockerProjectEnvironment {
         }
     }
 
-    public CommandResult exec(UUID projectId, List<String> command) {
-        return exec(projectId, ".", command);
-    }
-
     /** Execute a trusted backend command in a project-relative directory. */
+    @Override
     public CommandResult exec(UUID projectId, String relativeRoot, List<String> command) {
         if (command == null || command.isEmpty()) throw new IllegalArgumentException("Sandbox command is empty");
         return execInContainer(projectId, List.of("--workdir", rootPath(relativeRoot)), command,
                 timeout(), null, outputLimit());
     }
 
-    public String readText(UUID projectId, String relativePath) {
-        return readText(projectId, ".", relativePath);
-    }
-
+    @Override
     public String readText(UUID projectId, String relativeRoot, String relativePath) {
         String path = safePath(relativeRoot, relativePath);
         return exec(projectId, relativeRoot, List.of("cat", "--", path)).requireSuccess().stdout();
     }
 
     /** Read binary-safe content from the volume for preview/download endpoints. */
+    @Override
     public byte[] readBytes(UUID projectId, String relativeRoot, String relativePath, int maxBytes) {
         String path = safePath(relativeRoot, relativePath);
         int limit = Math.max(1, maxBytes);
@@ -316,10 +318,7 @@ public class DockerProjectEnvironment {
         catch (IllegalArgumentException error) { throw new IllegalStateException("Could not decode sandbox file", error); }
     }
 
-    public void writeText(UUID projectId, String relativePath, String content) {
-        writeText(projectId, ".", relativePath, content);
-    }
-
+    @Override
     public void writeText(UUID projectId, String relativeRoot, String relativePath, String content) {
         String path = safePath(relativeRoot, relativePath);
         String parent = path.substring(0, Math.max(path.lastIndexOf('/'), properties.getSandbox().getWorkspacePath().length()));
@@ -329,6 +328,7 @@ public class DockerProjectEnvironment {
         enforceQuota(projectId);
     }
 
+    @Override
     public void writeBytes(UUID projectId, String relativePath, byte[] content) {
         if (content == null || content.length > 10_000_000) throw new IllegalArgumentException("Attachment is too large");
         String path = safePath(".", relativePath);
@@ -340,10 +340,7 @@ public class DockerProjectEnvironment {
         enforceQuota(projectId);
     }
 
-    public List<Entry> list(UUID projectId, int maxDepth) {
-        return list(projectId, ".", maxDepth);
-    }
-
+    @Override
     public List<Entry> list(UUID projectId, String relativeRoot, int maxDepth) {
         String root = rootPath(relativeRoot);
         CommandResult result = execInContainer(projectId, List.of(), List.of(
@@ -361,31 +358,28 @@ public class DockerProjectEnvironment {
         return List.copyOf(entries);
     }
 
-    public void delete(UUID projectId, String relativePath) {
-        delete(projectId, ".", relativePath);
-    }
-
+    @Override
     public void delete(UUID projectId, String relativeRoot, String relativePath) {
         exec(projectId, relativeRoot, List.of("rm", "-rf", "--", safePath(relativeRoot, relativePath))).requireSuccess();
     }
 
-    public void move(UUID projectId, String source, String target) {
-        move(projectId, ".", source, target);
-    }
-
+    @Override
     public void move(UUID projectId, String relativeRoot, String source, String target) {
         exec(projectId, relativeRoot, List.of("mkdir", "-p", "--", parentPath(safePath(relativeRoot, target)))).requireSuccess();
         exec(projectId, relativeRoot, List.of("mv", "--", safePath(relativeRoot, source), safePath(relativeRoot, target))).requireSuccess();
     }
 
+    @Override
     public boolean exists(UUID projectId, String relativeRoot, String relativePath) {
         return exec(projectId, relativeRoot, List.of("test", "-e", safePath(relativeRoot, relativePath))).success();
     }
 
+    @Override
     public boolean regularFile(UUID projectId, String relativeRoot, String relativePath) {
         return exec(projectId, relativeRoot, List.of("test", "-f", safePath(relativeRoot, relativePath))).success();
     }
 
+    @Override
     public long size(UUID projectId, String relativeRoot, String relativePath) {
         CommandResult result = exec(projectId, relativeRoot,
                 List.of("stat", "-c", "%s", safePath(relativeRoot, relativePath)));
@@ -394,6 +388,7 @@ public class DockerProjectEnvironment {
     }
 
     /** Stable content fingerprint used for optimistic concurrency in the agent tools. */
+    @Override
     public String version(UUID projectId, String relativeRoot, String relativePath) {
         if (!exists(projectId, relativeRoot, relativePath)) return "absent";
         if (!regularFile(projectId, relativeRoot, relativePath)) return "non-file";
@@ -402,6 +397,7 @@ public class DockerProjectEnvironment {
     }
 
     /** Copy a directory inside the persistent project volume without exposing it to the host. */
+    @Override
     public void copyTree(UUID projectId, String sourceRoot, String targetRoot) {
         String source = rootPath(sourceRoot);
         String target = rootPath(targetRoot);
@@ -413,6 +409,7 @@ public class DockerProjectEnvironment {
         enforceQuota(projectId);
     }
 
+    @Override
     public void copyFile(UUID projectId, String sourceRoot, String source, String targetRoot, String target) {
         String sourcePath = safePath(sourceRoot, source);
         String targetPath = safePath(targetRoot, target);
@@ -422,6 +419,7 @@ public class DockerProjectEnvironment {
         enforceQuota(projectId);
     }
 
+    @Override
     public void removeTree(UUID projectId, String relativeRoot) {
         String root = rootPath(relativeRoot);
         if ("/".equals(root) || root.equals(properties.getSandbox().getWorkspacePath())) {
@@ -431,6 +429,7 @@ public class DockerProjectEnvironment {
     }
 
     /** Restore a complete project tree from an internal snapshot while preserving the snapshot store. */
+    @Override
     public void restoreTree(UUID projectId, String snapshotRoot) {
         String source = rootPath(snapshotRoot);
         String workspace = properties.getSandbox().getWorkspacePath();
@@ -541,13 +540,6 @@ public class DockerProjectEnvironment {
     }
 
     public record Environment(UUID projectId, String container, String volume, String workspacePath) {}
-    public record Entry(String path, boolean directory, long size) {}
-    public record CommandResult(boolean success, int exitCode, String stdout, String error) {
-        public CommandResult requireSuccess() {
-            if (!success) throw new IllegalStateException(error.isBlank() ? stdout : error);
-            return this;
-        }
-    }
 
     private static final class BoundedOutputStream extends OutputStream {
         private final ByteArrayOutputStream delegate;

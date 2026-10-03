@@ -1,6 +1,6 @@
 package com.code.pal.agent.validation;
 
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
@@ -59,7 +59,7 @@ public class ProjectCommandResolver {
         return new CommandPlan(operation, true, capabilities.packageManager(), script, List.copyOf(command), null);
     }
 
-    public Capabilities inspectSandbox(DockerProjectEnvironment sandbox, UUID projectId, String root) {
+    public Capabilities inspectSandbox(SandboxPort sandbox, UUID projectId, String root) {
         try {
             String manifestText = sandbox.readText(projectId, root, "package.json");
             @SuppressWarnings("unchecked") Map<String, Object> manifest = objectMapper.readValue(manifestText, Map.class);
@@ -76,7 +76,7 @@ public class ProjectCommandResolver {
         }
     }
 
-    public CommandPlan resolveSandbox(DockerProjectEnvironment sandbox, UUID projectId, String root,
+    public CommandPlan resolveSandbox(SandboxPort sandbox, UUID projectId, String root,
                                       ValidationOperation operation, String scope) {
         Capabilities capabilities = inspectSandbox(sandbox, projectId, root);
         if (capabilities.error() != null) return CommandPlan.unavailable(operation, capabilities, capabilities.error());
@@ -125,7 +125,7 @@ public class ProjectCommandResolver {
         } catch (IOException | RuntimeException error) { return false; }
     }
 
-    public void preserveOriginalScripts(DockerProjectEnvironment sandbox, UUID projectId,
+    public void preserveOriginalScripts(SandboxPort sandbox, UUID projectId,
                                         String liveRoot, String candidateRoot) {
         try {
             @SuppressWarnings("unchecked") Map<String, Object> live = objectMapper.readValue(
@@ -141,7 +141,7 @@ public class ProjectCommandResolver {
         }
     }
 
-    public boolean validationScriptsChanged(DockerProjectEnvironment sandbox, UUID projectId,
+    public boolean validationScriptsChanged(SandboxPort sandbox, UUID projectId,
                                             String liveRoot, String stagedRoot) {
         try {
             @SuppressWarnings("unchecked") Map<String, Object> live = objectMapper.readValue(
@@ -177,7 +177,7 @@ public class ProjectCommandResolver {
         return "npm";
     }
 
-    private static String detectSandboxManager(DockerProjectEnvironment sandbox, UUID projectId, String root, String declared) {
+    private static String detectSandboxManager(SandboxPort sandbox, UUID projectId, String root, String declared) {
         if (declared != null && !declared.isBlank()) {
             String name = declared.split("@", 2)[0].toLowerCase(Locale.ROOT);
             if (Set.of("npm", "pnpm", "yarn", "bun").contains(name)) return name;
@@ -194,7 +194,7 @@ public class ProjectCommandResolver {
                     && path.getFileName().toString().endsWith(".json"));
         } catch (IOException ignored) { return false; }
     }
-    private static boolean hasTypeScriptConfig(DockerProjectEnvironment sandbox, UUID projectId, String root) {
+    private static boolean hasTypeScriptConfig(SandboxPort sandbox, UUID projectId, String root) {
         return sandbox.list(projectId, root, 1).stream().anyMatch(entry -> !entry.directory()
                 && entry.path().startsWith("tsconfig") && entry.path().endsWith(".json"));
     }

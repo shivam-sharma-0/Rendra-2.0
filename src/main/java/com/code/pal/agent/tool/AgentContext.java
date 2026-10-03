@@ -2,7 +2,7 @@ package com.code.pal.agent.tool;
 
 import com.code.pal.agent.context.ProjectContextTrace;
 import com.code.pal.agent.plan.AgentPlanState;
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.project.domain.ProjectType;
 
 import java.nio.file.Files;
@@ -14,7 +14,7 @@ import java.util.UUID;
 /** Context passed to a tool for a single agent run. */
 public record AgentContext(UUID projectId, Long userId, ProjectType mode, Path workspace,
                            AgentProjectMetadata projectMetadata, ProjectContextTrace contextTrace,
-                           UUID runId, AgentPlanState plan, DockerProjectEnvironment sandbox,
+                           UUID runId, AgentPlanState plan, SandboxPort sandbox,
                            String sandboxRoot) {
 
     public AgentContext(UUID projectId, Long userId, ProjectType mode, Path workspace,
@@ -37,7 +37,7 @@ public record AgentContext(UUID projectId, Long userId, ProjectType mode, Path w
 
     public AgentContext(UUID projectId, Long userId, ProjectType mode, Path workspace,
                         AgentProjectMetadata projectMetadata, ProjectContextTrace contextTrace,
-                        UUID runId, AgentPlanState plan, DockerProjectEnvironment sandbox,
+                        UUID runId, AgentPlanState plan, SandboxPort sandbox,
                         String sandboxRoot) {
         this.projectId = projectId;
         this.userId = userId;

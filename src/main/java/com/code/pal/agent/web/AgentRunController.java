@@ -16,7 +16,7 @@ import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.repository.AgentStepRepository;
 import com.code.pal.agent.snapshot.WorkspaceSnapshotService;
 import com.code.pal.agent.workspace.WorkspaceStorage;
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.shared.security.AuthPrincipal;
@@ -38,7 +38,7 @@ public class AgentRunController {
     private final AgentStepRepository steps;
     private final WorkspaceStorage workspace;
     private final WorkspaceSnapshotService snapshots;
-    private final DockerProjectEnvironment sandbox;
+    private final SandboxPort sandbox;
     private final AgentEvents events;
     private final AgentJobQueue queue;
     private final FileChangeRepository fileChanges;

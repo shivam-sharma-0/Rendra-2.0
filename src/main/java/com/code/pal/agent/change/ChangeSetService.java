@@ -8,6 +8,7 @@ import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.tool.AgentToolException;
 import com.code.pal.agent.validation.ProjectDiagnostic;
 import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,7 +40,7 @@ public class ChangeSetService {
     private final AgentRunRepository runs;
     private final ObjectMapper objectMapper;
     private final AgentProperties properties;
-    private final DockerProjectEnvironment sandbox;
+    private final SandboxPort sandbox;
     private final Map<UUID, ActiveChangeSet> active = new ConcurrentHashMap<>();
 
     /** Compatibility constructor for path-backed unit tests; runtime injection uses the full constructor. */

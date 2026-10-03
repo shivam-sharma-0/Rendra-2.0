@@ -2,7 +2,7 @@ package com.code.pal.project.artifact;
 
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.workspace.WorkspaceStorage;
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.project.domain.RequirementQuestion;
 import lombok.RequiredArgsConstructor;
@@ -22,7 +22,7 @@ public class ProjectArtifactService {
     private static final int MAX_READ_BYTES = 512_000;
     private final WorkspaceStorage workspaces;
     private final ObjectMapper objectMapper;
-    private final DockerProjectEnvironment sandbox;
+    private final SandboxPort sandbox;
     private final AgentProperties properties;
 
     public void writeRequirements(UUID projectId, UUID sessionId, List<RequirementQuestion> questions) {

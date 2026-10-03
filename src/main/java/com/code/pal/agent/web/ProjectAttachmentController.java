@@ -1,7 +1,7 @@
 package com.code.pal.agent.web;
 
 import com.code.pal.agent.config.AgentProperties;
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.shared.security.AuthPrincipal;
 import lombok.RequiredArgsConstructor;
@@ -24,7 +24,7 @@ import java.util.UUID;
 @RequestMapping("/api/projects/{projectId}/attachments")
 public class ProjectAttachmentController {
     private final ProjectService projects;
-    private final DockerProjectEnvironment sandbox;
+    private final SandboxPort sandbox;
     private final AgentProperties properties;
 
     @PostMapping(consumes = "multipart/form-data")

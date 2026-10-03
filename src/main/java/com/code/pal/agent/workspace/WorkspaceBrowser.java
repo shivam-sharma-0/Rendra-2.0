@@ -34,10 +34,10 @@ public class WorkspaceBrowser {
             ".git", ".ssh", ".secrets", ".codepal", "node_modules", "dist", "build", ".next", ".turbo", ".cache");
 
     private final WorkspaceStorage storage;
-    private final DockerProjectEnvironment sandbox;
+    private final SandboxPort sandbox;
     private final AgentProperties properties;
 
-    public WorkspaceBrowser(WorkspaceStorage storage, DockerProjectEnvironment sandbox, AgentProperties properties) {
+    public WorkspaceBrowser(WorkspaceStorage storage, SandboxPort sandbox, AgentProperties properties) {
         this.storage = storage;
         this.sandbox = sandbox;
         this.properties = properties;
@@ -99,7 +99,7 @@ public class WorkspaceBrowser {
 
     private List<FileNode> sandboxTree(UUID projectId) {
         Map<String, Node> nodes = new LinkedHashMap<>();
-        for (DockerProjectEnvironment.Entry entry : sandbox.list(projectId, ".", MAX_DEPTH)) {
+        for (SandboxPort.Entry entry : sandbox.list(projectId, ".", MAX_DEPTH)) {
             String path = entry.path().replace('\\', '/');
             if (blocked(path)) continue;
             String[] parts = path.split("/");

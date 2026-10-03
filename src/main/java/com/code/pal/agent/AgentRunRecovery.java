@@ -9,7 +9,7 @@ import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.snapshot.WorkspaceSnapshotService;
 import com.code.pal.agent.workspace.WorkspaceStorage;
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.message.domain.MessageStatus;
 import com.code.pal.message.dto.MessageResponse;
 import com.code.pal.message.repository.MessageRepository;
@@ -35,7 +35,7 @@ public class AgentRunRecovery {
     private final RealtimeService realtime;
     private final WorkspaceStorage workspace;
     private final WorkspaceSnapshotService snapshots;
-    private final DockerProjectEnvironment sandbox;
+    private final SandboxPort sandbox;
     private final ChangeSetService changeSets;
 
     @Scheduled(fixedDelayString = "${app.agent.stale-sweep-interval-ms:30000}")

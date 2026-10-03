@@ -5,6 +5,7 @@ import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.tool.AgentToolException;
 import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -32,7 +33,7 @@ public class ProjectValidationService {
     private final ChangeSetService changeSets;
     private final ProjectCommandResolver resolver;
     private final AgentProperties properties;
-    private final DockerProjectEnvironment sandbox;
+    private final SandboxPort sandbox;
     private final Map<UUID, ValidationReport> lastReports = new ConcurrentHashMap<>();
 
     /** Compatibility constructor for path-backed tests; production injection includes Docker. */

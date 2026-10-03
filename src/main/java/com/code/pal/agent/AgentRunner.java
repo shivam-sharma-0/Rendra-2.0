@@ -37,6 +37,7 @@ import com.code.pal.agent.tool.ToolExecutionResult;
 import com.code.pal.agent.usage.AgentUsagePolicy;
 import com.code.pal.agent.workspace.WorkspaceStorage;
 import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.agent.validation.ProjectValidationService;
 import com.code.pal.agent.validation.ValidationReport;
 import com.code.pal.message.domain.Message;
@@ -98,7 +99,7 @@ public class AgentRunner implements AgentRuntime {
     private final MessageRepository messageRepository;
     private final RealtimeService realtime;
     private final WorkspaceStorage workspace;
-    private final DockerProjectEnvironment sandbox;
+    private final SandboxPort sandbox;
     private final AgentHeartbeat heartbeat;
     private final AgentJobQueue queue;
     private final ObjectMapper objectMapper;
@@ -119,7 +120,7 @@ public class AgentRunner implements AgentRuntime {
             ObjectMapper objectMapper, ChangeSetService changeSets,
             ProjectValidationService validation, NotificationService notifications,
             ProjectArtifactService artifacts, GeneratedDatabaseService databases,
-            DockerProjectEnvironment sandbox, AgentUsagePolicy usage) {
+            SandboxPort sandbox, AgentUsagePolicy usage) {
         this.usage = usage;
         this.llm = llm;
         this.intentClassifier = intentClassifier;
