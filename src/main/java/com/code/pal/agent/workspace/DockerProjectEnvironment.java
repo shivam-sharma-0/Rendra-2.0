@@ -1,7 +1,8 @@
 package com.code.pal.agent.workspace;
 
 import com.code.pal.agent.config.AgentProperties;
-import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -9,41 +10,90 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * Persistent per-project Docker environment. The project volume is the source of truth; this
  * adapter deliberately has no host-directory fallback. File paths are relative to /workspace.
+ *
+ * <p>Each project has a read/write lock. Commands inside the container hold the read lock, so they
+ * run in parallel; provisioning (volume + container + start) and idle stop/remove hold the write
+ * lock, so a container is never created twice by concurrent callers and never stopped under a
+ * running command. Once verified, a project is "ready" and later calls skip the Docker checks; a
+ * command that finds the container stopped or removed clears that state, re-provisions, and is
+ * retried once.
  */
+@Slf4j
 @Service
-@RequiredArgsConstructor
 public class DockerProjectEnvironment {
     private static final int MAX_PATH_LENGTH = 512;
     private static final String WORKSPACE_LABEL = "com.codepal.workspace=true";
+    /** Bounds re-checks when the container is stopped between ensure() and taking the read lock. */
+    private static final int MAX_EXEC_ROUNDS = 3;
 
     private final AgentProperties properties;
+    private final CommandRunner runner;
+    private final Clock clock;
     private final Map<UUID, Instant> lastUsed = new ConcurrentHashMap<>();
-    private final Instant startedAt = Instant.now();
+    /** Projects whose volume and running container this process has verified. */
+    private final Set<UUID> ready = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, ReentrantReadWriteLock> projectLocks = new ConcurrentHashMap<>();
+    private final Instant startedAt;
+
+    @Autowired
+    public DockerProjectEnvironment(AgentProperties properties) {
+        this(properties, null, Clock.systemUTC());
+    }
+
+    /** Test seam: {@code runner} receives Docker CLI arguments without the docker executable. */
+    DockerProjectEnvironment(AgentProperties properties, CommandRunner runner, Clock clock) {
+        this.properties = properties;
+        this.runner = runner != null ? runner : this::runProcess;
+        this.clock = clock;
+        this.startedAt = clock.instant();
+    }
 
     public Environment ensure(UUID projectId) {
-        lastUsed.put(projectId, Instant.now());
-        String volume = resourceName(properties.getSandbox().getVolumePrefix(), projectId);
-        String container = resourceName(properties.getSandbox().getContainerPrefix(), projectId);
+        lastUsed.put(projectId, clock.instant());
+        if (!ready.contains(projectId)) {
+            Lock lock = lockFor(projectId).writeLock();
+            lock.lock();
+            try {
+                if (!ready.contains(projectId)) {
+                    provision(projectId);
+                    ready.add(projectId);
+                }
+            } finally {
+                lock.unlock();
+            }
+        }
+        return environment(projectId);
+    }
+
+    private void provision(UUID projectId) {
+        Environment environment = environment(projectId);
+        String volume = environment.volume();
+        String container = environment.container();
         if (!succeeds(List.of("volume", "inspect", volume), Duration.ofSeconds(20), null)) {
             run(List.of("volume", "create", "--label", WORKSPACE_LABEL, "--label",
                     "com.codepal.project=" + projectId, volume), Duration.ofSeconds(30), null).requireSuccess();
         }
         CommandResult inspected = run(List.of("container", "inspect", container), Duration.ofSeconds(20), null);
         if (!inspected.success()) {
-            run(List.of("run", "-d", "--name", container, "--label", WORKSPACE_LABEL,
+            CommandResult created = run(List.of("run", "-d", "--name", container, "--label", WORKSPACE_LABEL,
                     "--label", "com.codepal.project=" + projectId,
                     "--cpus", Double.toString(Math.max(0.25, properties.getSandbox().getCpus())),
                     "--memory", Math.max(256, properties.getSandbox().getMemoryMb()) + "m",
@@ -51,20 +101,89 @@ public class DockerProjectEnvironment {
                     "--mount", "type=volume,source=" + volume + ",target=" + properties.getSandbox().getWorkspacePath(),
                     "--workdir", properties.getSandbox().getWorkspacePath(),
                     properties.getSandbox().getImage(), "sh", "-lc",
-                    "while :; do sleep 3600; done"), Duration.ofSeconds(90), null).requireSuccess();
-        } else {
-            CommandResult running = run(List.of("container", "inspect", "-f", "{{.State.Running}}", container),
-                    Duration.ofSeconds(20), null);
-            if (!running.stdout().trim().equalsIgnoreCase("true")) {
-                run(List.of("start", container), Duration.ofSeconds(30), null).requireSuccess();
+                    "while :; do sleep 3600; done"), Duration.ofSeconds(90), null);
+            // Another backend process may have created it between inspect and run; that is fine.
+            if (!created.success()) {
+                if (!created.stdout().contains("is already in use")) created.requireSuccess();
+                log.info("sandbox_container_created_elsewhere projectId={}", projectId);
+                startIfStopped(container);
+            } else {
+                log.info("sandbox_container_created projectId={}", projectId);
             }
+        } else {
+            startIfStopped(container);
         }
         // Internal manifests and snapshots live under .codepal, which is also used as a
         // working directory by artifact operations. Create it before any container exec.
-        run(withContainer(List.of("exec", "--workdir", properties.getSandbox().getWorkspacePath(), container),
-                        List.of("mkdir", "-p", properties.getSandbox().getWorkspacePath() + "/.codepal")),
+        run(List.of("exec", "--workdir", environment.workspacePath(), container,
+                        "mkdir", "-p", environment.workspacePath() + "/.codepal"),
                 Duration.ofSeconds(30), null).requireSuccess();
-        return new Environment(projectId, container, volume, properties.getSandbox().getWorkspacePath());
+    }
+
+    private void startIfStopped(String container) {
+        CommandResult running = run(List.of("container", "inspect", "-f", "{{.State.Running}}", container),
+                Duration.ofSeconds(20), null);
+        if (!running.stdout().trim().equalsIgnoreCase("true")) {
+            run(List.of("start", container), Duration.ofSeconds(30), null).requireSuccess();
+            log.info("sandbox_container_started container={}", container);
+        }
+    }
+
+    private Environment environment(UUID projectId) {
+        return new Environment(projectId,
+                resourceName(properties.getSandbox().getContainerPrefix(), projectId),
+                resourceName(properties.getSandbox().getVolumePrefix(), projectId),
+                properties.getSandbox().getWorkspacePath());
+    }
+
+    private ReentrantReadWriteLock lockFor(UUID projectId) {
+        return projectLocks.computeIfAbsent(projectId, ignored -> new ReentrantReadWriteLock());
+    }
+
+    /**
+     * Runs {@code docker exec [options] <container> command} under the project's read lock, so idle
+     * cleanup cannot stop the container while the command runs. If Docker still reports the
+     * container as stopped or missing (daemon restart, manual removal, another backend process), the
+     * ready state is dropped, the container is provisioned again, and the command is retried once.
+     * The command never started in that case, so the retry cannot apply it twice.
+     */
+    private CommandResult execInContainer(UUID projectId, List<String> options, List<String> command,
+                                          Duration timeout, byte[] stdin, int outputLimit) {
+        boolean retried = false;
+        for (int round = 1; ; round++) {
+            Environment environment = ensure(projectId);
+            List<String> args = new ArrayList<>();
+            args.add("exec");
+            args.addAll(options);
+            args.add(environment.container());
+            args.addAll(command);
+            Lock lock = lockFor(projectId).readLock();
+            CommandResult result;
+            lock.lock();
+            try {
+                // Idle cleanup may have stopped the container between ensure() and this lock.
+                if (!ready.contains(projectId) && round < MAX_EXEC_ROUNDS) continue;
+                result = run(args, timeout, stdin, outputLimit);
+            } finally {
+                lock.unlock();
+            }
+            if (retried || !containerUnavailable(result)) return result;
+            log.warn("sandbox_container_unavailable projectId={} action=reprovision_and_retry", projectId);
+            ready.remove(projectId);
+            retried = true;
+        }
+    }
+
+    /**
+     * Docker prints this before the command starts, so the error must be the start of the output; a
+     * command whose own output merely mentions it (e.g. a failing build) is not retried.
+     */
+    private static boolean containerUnavailable(CommandResult result) {
+        if (result.success()) return false;
+        String output = result.stdout().stripLeading().toLowerCase(Locale.ROOT);
+        if (!output.startsWith("error response from daemon")) return false;
+        String firstLine = output.lines().findFirst().orElse("");
+        return firstLine.contains("is not running") || firstLine.contains("no such container");
     }
 
     /** Keep running containers bounded while retaining project data in named volumes. */
@@ -72,30 +191,47 @@ public class DockerProjectEnvironment {
     public void cleanupIdleSandboxes() {
         if (!properties.getSandbox().isRequired()) return;
         discoverManagedContainers();
-        Instant now = Instant.now();
+        Instant now = clock.instant();
         long stopAfter = Math.max(60_000, properties.getSandbox().getIdleStopMs());
         long removeAfter = Math.max(stopAfter, properties.getSandbox().getIdleRemoveMs());
         for (Map.Entry<UUID, Instant> entry : lastUsed.entrySet()) {
             if (!entry.getValue().equals(lastUsed.get(entry.getKey()))) continue;
             long idleMs = Duration.between(entry.getValue(), now).toMillis();
             if (idleMs < stopAfter) continue;
-            String container = resourceName(properties.getSandbox().getContainerPrefix(), entry.getKey());
-            CommandResult status = run(List.of("container", "inspect", "-f", "{{.State.Status}}", container),
-                    Duration.ofSeconds(20), null);
-            if (!status.success()) {
-                lastUsed.remove(entry.getKey(), entry.getValue());
-                continue;
+            // The write lock waits for no one: a busy project (provisioning or running a command) is
+            // in use, so skip it this round instead of blocking the shared scheduler thread.
+            Lock lock = lockFor(entry.getKey()).writeLock();
+            if (!lock.tryLock()) continue;
+            try {
+                cleanupIdle(entry.getKey(), entry.getValue(), idleMs, removeAfter);
+            } finally {
+                lock.unlock();
             }
-            if ("running".equalsIgnoreCase(status.stdout().trim())) {
-                if (!entry.getValue().equals(lastUsed.get(entry.getKey()))) continue;
-                run(List.of("stop", "-t", "10", container), Duration.ofSeconds(30), null);
-                continue;
-            }
-            if (idleMs >= removeAfter) {
-                if (!entry.getValue().equals(lastUsed.get(entry.getKey()))) continue;
-                run(List.of("rm", container), Duration.ofSeconds(30), null);
-                lastUsed.remove(entry.getKey(), entry.getValue());
-            }
+        }
+    }
+
+    private void cleanupIdle(UUID projectId, Instant seenLastUsed, long idleMs, long removeAfter) {
+        String container = resourceName(properties.getSandbox().getContainerPrefix(), projectId);
+        CommandResult status = run(List.of("container", "inspect", "-f", "{{.State.Status}}", container),
+                Duration.ofSeconds(20), null);
+        if (!status.success()) {
+            ready.remove(projectId);
+            lastUsed.remove(projectId, seenLastUsed);
+            return;
+        }
+        if ("running".equalsIgnoreCase(status.stdout().trim())) {
+            if (!seenLastUsed.equals(lastUsed.get(projectId))) return;
+            ready.remove(projectId);
+            run(List.of("stop", "-t", "10", container), Duration.ofSeconds(30), null);
+            log.info("sandbox_container_stopped projectId={} idleMs={}", projectId, idleMs);
+            return;
+        }
+        if (idleMs >= removeAfter) {
+            if (!seenLastUsed.equals(lastUsed.get(projectId))) return;
+            ready.remove(projectId);
+            run(List.of("rm", container), Duration.ofSeconds(30), null);
+            lastUsed.remove(projectId, seenLastUsed);
+            log.info("sandbox_container_removed projectId={} idleMs={}", projectId, idleMs);
         }
     }
 
@@ -120,10 +256,9 @@ public class DockerProjectEnvironment {
     public void enforceQuota(UUID projectId) {
         long limit = properties.getSandbox().getMaxProjectBytes();
         if (limit <= 0) return;
-        Environment environment = ensure(projectId);
-        CommandResult result = run(withContainer(List.of("exec", environment.container()), List.of(
-                        "sh", "-lc", "du -sk --exclude=.codepal " + shellQuote(environment.workspacePath()))),
-                timeout(), null);
+        CommandResult result = execInContainer(projectId, List.of(), List.of(
+                        "sh", "-lc", "du -sk --exclude=.codepal " + shellQuote(properties.getSandbox().getWorkspacePath())),
+                timeout(), null, outputLimit());
         result.requireSuccess();
         String first = result.stdout().trim().split("\\s+", 2)[0];
         long bytes = parseSize(first) * 1024L;
@@ -138,11 +273,9 @@ public class DockerProjectEnvironment {
 
     /** Execute a trusted backend command in a project-relative directory. */
     public CommandResult exec(UUID projectId, String relativeRoot, List<String> command) {
-        Environment environment = ensure(projectId);
         if (command == null || command.isEmpty()) throw new IllegalArgumentException("Sandbox command is empty");
-        String workdir = rootPath(relativeRoot);
-        return run(withContainer(List.of("exec", "--workdir", workdir, environment.container()), command),
-                timeout(), null);
+        return execInContainer(projectId, List.of("--workdir", rootPath(relativeRoot)), command,
+                timeout(), null, outputLimit());
     }
 
     public String readText(UUID projectId, String relativePath) {
@@ -160,8 +293,8 @@ public class DockerProjectEnvironment {
         int limit = Math.max(1, maxBytes);
         String script = "size=$(wc -c < " + shellQuote(path) + ") && test $size -le " + limit
                 + " && base64 -w 0 -- " + shellQuote(path);
-        CommandResult result = run(withContainer(List.of("exec", "--workdir", rootPath(relativeRoot), ensure(projectId).container()),
-                        List.of("sh", "-lc", script)), timeout(), null, Math.max(1_000, limit * 2 + 100));
+        CommandResult result = execInContainer(projectId, List.of("--workdir", rootPath(relativeRoot)),
+                List.of("sh", "-lc", script), timeout(), null, Math.max(1_000, limit * 2 + 100));
         result.requireSuccess();
         try { return Base64.getDecoder().decode(result.stdout().trim()); }
         catch (IllegalArgumentException error) { throw new IllegalStateException("Could not decode sandbox file", error); }
@@ -175,10 +308,8 @@ public class DockerProjectEnvironment {
         String path = safePath(relativeRoot, relativePath);
         String parent = path.substring(0, Math.max(path.lastIndexOf('/'), properties.getSandbox().getWorkspacePath().length()));
         String script = "mkdir -p " + shellQuote(parent) + " && cat > " + shellQuote(path);
-        Environment environment = ensure(projectId);
-        run(withContainer(List.of("exec", "-i", "--workdir", rootPath(relativeRoot),
-                        environment.container()), List.of("sh", "-lc", script)),
-                timeout(), content.getBytes(StandardCharsets.UTF_8)).requireSuccess();
+        execInContainer(projectId, List.of("-i", "--workdir", rootPath(relativeRoot)), List.of("sh", "-lc", script),
+                timeout(), content.getBytes(StandardCharsets.UTF_8), outputLimit()).requireSuccess();
         enforceQuota(projectId);
     }
 
@@ -187,10 +318,9 @@ public class DockerProjectEnvironment {
         String path = safePath(".", relativePath);
         String parent = parentPath(path);
         String script = "mkdir -p " + shellQuote(parent) + " && base64 -d > " + shellQuote(path);
-        Environment environment = ensure(projectId);
         String encoded = Base64.getEncoder().encodeToString(content);
-        run(withContainer(List.of("exec", "-i", "--workdir", rootPath("."), environment.container()),
-                        List.of("sh", "-lc", script)), timeout(), encoded.getBytes(StandardCharsets.US_ASCII)).requireSuccess();
+        execInContainer(projectId, List.of("-i", "--workdir", rootPath(".")), List.of("sh", "-lc", script),
+                timeout(), encoded.getBytes(StandardCharsets.US_ASCII), outputLimit()).requireSuccess();
         enforceQuota(projectId);
     }
 
@@ -199,11 +329,10 @@ public class DockerProjectEnvironment {
     }
 
     public List<Entry> list(UUID projectId, String relativeRoot, int maxDepth) {
-        Environment environment = ensure(projectId);
         String root = rootPath(relativeRoot);
-        CommandResult result = run(withContainer(List.of("exec", environment.container()), List.of(
+        CommandResult result = execInContainer(projectId, List.of(), List.of(
                         "find", root, "-mindepth", "1", "-maxdepth", Integer.toString(Math.max(1, maxDepth)),
-                        "-printf", "%y\\t%p\\t%s\\n")), timeout(), null).requireSuccess();
+                        "-printf", "%y\\t%p\\t%s\\n"), timeout(), null, outputLimit()).requireSuccess();
         List<Entry> entries = new ArrayList<>();
         for (String line : result.stdout().split("\\R")) {
             if (line.isBlank()) continue;
@@ -338,17 +467,17 @@ public class DockerProjectEnvironment {
         return run(args, timeout, stdin).success();
     }
 
-    private List<String> withContainer(List<String> prefix, List<String> suffix) {
-        List<String> result = new ArrayList<>(prefix);
-        result.addAll(suffix);
-        return result;
-    }
+    private int outputLimit() { return properties.getSandbox().getOutputMaxChars(); }
 
     private CommandResult run(List<String> args, Duration timeout, byte[] stdin) {
-        return run(args, timeout, stdin, properties.getSandbox().getOutputMaxChars());
+        return run(args, timeout, stdin, outputLimit());
     }
 
     private CommandResult run(List<String> args, Duration timeout, byte[] stdin, int outputLimit) {
+        return runner.run(args, timeout, stdin, outputLimit);
+    }
+
+    private CommandResult runProcess(List<String> args, Duration timeout, byte[] stdin, int outputLimit) {
         List<String> command = new ArrayList<>();
         command.add(properties.getSandbox().getDockerCommand());
         String configuredArgs = properties.getSandbox().getDockerCommandArgs();
@@ -388,6 +517,12 @@ public class DockerProjectEnvironment {
 
     private static String shellQuote(String value) { return "'" + value.replace("'", "'\\''") + "'"; }
     private static long parseSize(String value) { try { return Long.parseLong(value); } catch (NumberFormatException ignored) { return 0; } }
+
+    /** Executes one Docker CLI invocation; {@code args} exclude the docker executable itself. */
+    @FunctionalInterface
+    interface CommandRunner {
+        CommandResult run(List<String> args, Duration timeout, byte[] stdin, int outputLimit);
+    }
 
     public record Environment(UUID projectId, String container, String volume, String workspacePath) {}
     public record Entry(String path, boolean directory, long size) {}
