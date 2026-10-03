@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { createPortal } from 'react-dom'
 import { Link, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { BACKEND_ORIGIN } from '../auth/api'
 import {
   agentApi, messageApi, projectApi, requirementsApi,
   type AgentRun, type AgentStep, type FileNode, type Message, type MessageFeedback, type MessageRole, type StagedFile,
@@ -1644,24 +1643,24 @@ function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest }: {
 
 /* ── Preview ──────────────────────────────────────────────────────────────── */
 function PreviewPanel({ project }: { project: Project | null }) {
-  const [previewToken, setPreviewToken] = useState<string | null>(null)
+  // The backend returns the full URL: previews live on a separate sites origin (never the API
+  // origin), so the generated app cannot reach the API with the viewer's cookies.
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState(false)
   const live = project?.deploymentStatus === 'LIVE'
 
   useEffect(() => {
-    setPreviewToken(null)
+    setPreviewUrl(null)
     setPreviewError(false)
     if (!project || live || project.lifecycleStage !== 'REVIEW') return
     let cancelled = false
     void projectApi.previewToken(project.id)
-      .then((response) => { if (!cancelled) setPreviewToken(response.token) })
+      .then((response) => { if (!cancelled) setPreviewUrl(response.url) })
       .catch(() => { if (!cancelled) setPreviewError(true) })
     return () => { cancelled = true }
   }, [project?.id, project?.lifecycleStage, live])
 
-  const url = live
-    ? project?.publishedUrl
-    : previewToken ? `${BACKEND_ORIGIN}/preview/${previewToken}` : null
+  const url = live ? project?.publishedUrl : previewUrl
   if (url) return <iframe title="App preview" src={url} className="pw-frame" sandbox="allow-scripts allow-same-origin allow-forms" />
   return (
     <div className="pw-empty pw-dots">

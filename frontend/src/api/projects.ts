@@ -91,7 +91,7 @@ export const projectApi = {
     opts?: { idempotencyKey?: string },
   ) => apiSend<Project>('POST', `/api/workspaces/${workspaceId}/projects`, body, opts),
   get: (id: string, opts?: ReadOpts) => apiGet<Project>(`/api/projects/${id}`, opts),
-  previewToken: (id: string, opts?: ReadOpts) => apiGet<{ token: string }>(`/api/projects/${id}/preview-token`, opts),
+  previewToken: (id: string, opts?: ReadOpts) => apiGet<{ token: string; url: string }>(`/api/projects/${id}/preview-token`, opts),
   uploadAttachments: (id: string, files: File[]) => apiUpload<Attachment[]>(`/api/projects/${id}/attachments`, files),
   remove: (id: string) => apiSend<void>('DELETE', `/api/projects/${id}`),
   publish: (id: string) => apiSend<Project>('POST', `/api/projects/${id}/publish`),

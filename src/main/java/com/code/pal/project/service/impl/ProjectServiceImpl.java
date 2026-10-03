@@ -30,6 +30,7 @@ import com.code.pal.workspace.service.WorkspaceService;
 import com.code.pal.workspace.domain.WorkspaceMember;
 import com.code.pal.workspace.domain.WorkspaceRole;
 import com.code.pal.workspace.exception.WorkspaceAccessDeniedException;
+import com.code.pal.shared.web.SitesOrigin;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -68,9 +69,8 @@ public class ProjectServiceImpl implements ProjectService {
     private final UserDirectory userDirectory;
     private final NotificationService notificationService;
     private final ApplicationEventPublisher events;
-
-    @org.springframework.beans.factory.annotation.Value("${app.public-base-url:http://localhost:8080}")
-    private String publicBaseUrl;
+    /** Published sites live on the separate user-content origin, never on the API origin. */
+    private final SitesOrigin sites;
 
     @Override
     @Transactional
@@ -284,7 +284,7 @@ public class ProjectServiceImpl implements ProjectService {
         project.setDeploymentStatus(DeploymentStatus.LIVE);
         project.setLifecycleStage(ProjectStage.LIVE);
         project.setIsPublic(true);
-        project.setPublishedUrl(publicBaseUrl + "/p/" + project.getPublicSlug());
+        project.setPublishedUrl(sites.publishedUrl(project.getPublicSlug()));
         log.info("Project published id={} slug={} by={}", projectId, project.getPublicSlug(), actorId);
         return ProjectResponse.from(project);
     }

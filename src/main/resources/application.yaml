@@ -122,6 +122,14 @@ app:
     auth-requests: ${RATE_LIMIT_AUTH_REQUESTS:20}
     auth-window-seconds: ${RATE_LIMIT_AUTH_WINDOW_SECONDS:60}
 
+  # User-generated sites (agent previews /preview/** and published projects /p/**)
+  # Untrusted generated code must never run on the API origin, so these are served ONLY from this
+  # separate origin (the API origin redirects them here). It must differ from the API by HOST —
+  # cookies ignore ports. Dev: 127.0.0.1 vs localhost. Production: a dedicated domain, never a
+  # subdomain sharing cookies with the API; behind a proxy set server.forward-headers-strategy.
+  sites:
+    base-url: ${APP_SITES_BASE_URL:http://127.0.0.1:8080}
+
   oauth2:
     success-redirect: ${OAUTH_SUCCESS_REDIRECT:http://localhost:5173/oauth/callback}
     failure-redirect: ${OAUTH_FAILURE_REDIRECT:http://localhost:5173/oauth/callback}
