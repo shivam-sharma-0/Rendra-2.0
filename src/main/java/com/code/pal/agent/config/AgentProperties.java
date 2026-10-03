@@ -29,6 +29,7 @@ public class AgentProperties {
     private final Llm llm = new Llm();
     private final Models models = new Models();
     private final Sandbox sandbox = new Sandbox();
+    private final Limits limits = new Limits();
     /** Provider-specific endpoints. The legacy {@code llm} block remains the compatibility fallback. */
     private Map<String, Provider> providers = new LinkedHashMap<>();
     private BillingMode billingMode = BillingMode.PAID;
@@ -66,6 +67,11 @@ public class AgentProperties {
     private long streamPersistIntervalMs = 3_000;
     /** How often a crashed/lost run is recovered. */
     private long staleSweepIntervalMs = 30_000;
+    /**
+     * A run still QUEUED and untouched after this long is requeued (its enqueue was probably lost).
+     * A run legitimately waiting behind a busy project is merely parked again, so this can be short.
+     */
+    private long queuedRecoveryMs = 60_000;
     /** A live worker renews its run's heartbeat + project lock at this interval. */
     private long heartbeatIntervalMs = 15_000;
     /** Restore the pre-run Git snapshot when a BUILD run fails. */
@@ -185,6 +191,18 @@ public class AgentProperties {
         private long retryMaxBackoffMs = 5_000;
     }
 
+    /** Per-user guards that stop one account from exhausting the shared (often free-tier) LLM quota. */
+    @Getter
+    @Setter
+    public static class Limits {
+        /** Agent turns a user may start per minute; 0 disables the check. */
+        private int turnsPerMinute = 10;
+        /** Runs a user may have queued or running at once; 0 disables the check. */
+        private int maxActiveRunsPerUser = 2;
+        /** Prompt + completion tokens a user may consume per UTC day; 0 disables the check. */
+        private long dailyTokenQuota = 2_000_000;
+    }
+
     @Getter
     @Setter
     public static class Provider {
@@ -206,11 +224,21 @@ public class AgentProperties {
     public static class Sandbox {
         /** Production runs require Docker; tests and legacy embedders may leave this false. */
         private boolean required = false;
+        /**
+         * Without the sandbox, validation runs generated code (npm scripts, build configs) directly on
+         * the backend host. The application refuses to start that way unless this is set explicitly.
+         */
+        private boolean allowHostExecution = false;
         /** Docker CLI used by the backend process. In WSL this is normally simply {@code docker}. */
         private String dockerCommand = "docker";
         /** Optional whitespace-separated arguments, e.g. {@code -e docker} when launched from Windows. */
         private String dockerCommandArgs = "";
         private String image = "node:22-bookworm-slim";
+        /**
+         * Docker network for project containers. "none" keeps generated code off the network while
+         * it is validated; an existing container on another network is recreated (its volume stays).
+         */
+        private String network = "none";
         private String containerPrefix = "codepal-sandbox-";
         private String volumePrefix = "codepal-project-";
         private String workspacePath = "/workspace";

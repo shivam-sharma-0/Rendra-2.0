@@ -16,6 +16,7 @@ import com.code.pal.project.service.ProjectService;
 import com.code.pal.project.exception.RequirementApprovalRequiredException;
 import com.code.pal.realtime.RealtimeService;
 import com.code.pal.realtime.dto.RealtimeMessage;
+import com.code.pal.shared.usage.AgentTurnAdmission;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -41,6 +42,7 @@ public class MessageServiceImpl implements MessageService {
     private final RealtimeService realtimeService;
     private final ApplicationEventPublisher events;
     private final MessageSequence sequence;
+    private final AgentTurnAdmission admission;
 
     @Override
     @Transactional
@@ -63,11 +65,15 @@ public class MessageServiceImpl implements MessageService {
             }
         }
 
+        boolean startsAgentTurn = request.aiMessageId() != null && !request.aiMessageId().isBlank();
+        // Check limits before anything is saved, so a rejected turn leaves no orphan message behind.
+        if (startsAgentTurn) admission.requireAdmitted(userId);
+
         List<Message> created = new ArrayList<>(2);
         Message userMessage = Message.user(projectId, request.id(), request.message(), mode, userId);
         userMessage.setSeq(sequence.next());
         created.add(messageRepository.save(userMessage));
-        if (request.aiMessageId() != null && !request.aiMessageId().isBlank()) {
+        if (startsAgentTurn) {
             Message assistantMessage = Message.assistantPlaceholder(projectId, request.aiMessageId(), request.id(), mode);
             assistantMessage.setSeq(sequence.next());
             created.add(messageRepository.save(assistantMessage));

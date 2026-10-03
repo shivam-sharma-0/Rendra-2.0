@@ -1,6 +1,7 @@
 package com.code.pal.agent;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.AgentStepType;
 import com.code.pal.agent.domain.RunStatus;
@@ -35,14 +36,24 @@ public class AgentRunRecovery {
     private final WorkspaceStorage workspace;
     private final WorkspaceSnapshotService snapshots;
     private final DockerProjectEnvironment sandbox;
+    private final ChangeSetService changeSets;
 
     @Scheduled(fixedDelayString = "${app.agent.stale-sweep-interval-ms:30000}")
     public void sweep() {
         Instant now = Instant.now();
 
-        // QUEUED: a run that has sat un-picked far longer than a whole run should take â€” its Redis
-        // enqueue was probably lost. Requeue it.
-        Instant queueCutoff = now.minusMillis(Math.max(1_000, props.getRunTimeoutMs()));
+        // Parked runs whose project is no longer locked: the worker that held the lock died before
+        // releasing them. Requeue them first so they are not counted as lost below.
+        try {
+            long released = queue.releaseOrphanedParked();
+            if (released > 0) log.info("Released {} orphaned parked agent run(s)", released);
+        } catch (RuntimeException redisUnavailable) {
+            log.debug("Parked-run sweep skipped: {}", redisUnavailable.getMessage());
+        }
+
+        // QUEUED and untouched for a while: the Redis enqueue was probably lost (e.g. Redis was down
+        // when the turn was posted). Requeuing is safe: a duplicate entry is ignored once the run starts.
+        Instant queueCutoff = now.minusMillis(Math.max(1_000, props.getQueuedRecoveryMs()));
         for (AgentRun run : runs.findByStatusAndUpdatedAtBefore(RunStatus.QUEUED, queueCutoff)) recoverQueued(run);
 
         // RUNNING: reclaim only when the heartbeat has genuinely stopped (worker died), never while a
@@ -77,6 +88,9 @@ public class AgentRunRecovery {
                 log.error("Could not restore abandoned run {}: {}", run.getId(), e.getMessage());
             }
         }
+        // The dead process took the in-memory change set with it; remove its staging area too.
+        changeSets.cleanupAbandoned(run.getProjectId(), run.getId(),
+                props.getSandbox().isRequired() ? null : workspace.projectDir(run.getProjectId()));
         run.setStatus(RunStatus.FAILED);
         run.setError("Agent worker stopped before the run completed");
         runs.save(run);

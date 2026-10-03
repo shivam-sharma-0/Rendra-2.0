@@ -192,6 +192,11 @@ app:
     max-iterations: ${AGENT_MAX_ITERATIONS:25}
     max-model-calls: ${AGENT_MAX_MODEL_CALLS:25}
     max-tool-calls: ${AGENT_MAX_TOOL_CALLS:60}
+    # Per-user guards so one account cannot exhaust the shared LLM quota (0 disables a check).
+    limits:
+      turns-per-minute: ${AGENT_LIMIT_TURNS_PER_MINUTE:10}
+      max-active-runs-per-user: ${AGENT_LIMIT_MAX_ACTIVE_RUNS:2}
+      daily-token-quota: ${AGENT_LIMIT_DAILY_TOKENS:2000000}
     context-budget-chars: ${AGENT_CONTEXT_BUDGET_CHARS:80000}
     project-map-budget-chars: ${AGENT_PROJECT_MAP_BUDGET_CHARS:18000}
     conversation-budget-chars: ${AGENT_CONVERSATION_BUDGET_CHARS:20000}
@@ -206,6 +211,8 @@ app:
     stream-persist-chars: ${AGENT_STREAM_PERSIST_CHARS:4000}
     stream-persist-interval-ms: ${AGENT_STREAM_PERSIST_INTERVAL_MS:3000}
     stale-sweep-interval-ms: ${AGENT_STALE_SWEEP_INTERVAL_MS:30000}
+    # A QUEUED run untouched this long is requeued (its Redis enqueue was probably lost).
+    queued-recovery-ms: ${AGENT_QUEUED_RECOVERY_MS:60000}
     heartbeat-interval-ms: ${AGENT_HEARTBEAT_INTERVAL_MS:15000}
     rollback-on-failure: ${AGENT_ROLLBACK_ON_FAILURE:true}
     max-repair-attempts: ${AGENT_MAX_REPAIR_ATTEMPTS:3}
@@ -214,9 +221,14 @@ app:
     validation-output-max-chars: ${AGENT_VALIDATION_OUTPUT_MAX_CHARS:80000}
     sandbox:
       required: ${AGENT_SANDBOX_REQUIRED:true}
+      # Without the sandbox, generated code runs on this host. Startup fails unless this is true
+      # (local development only).
+      allow-host-execution: ${AGENT_SANDBOX_ALLOW_HOST_EXECUTION:false}
       docker-command: ${AGENT_SANDBOX_DOCKER_COMMAND:wsl.exe}
       docker-command-args: ${AGENT_SANDBOX_DOCKER_COMMAND_ARGS:-e docker}
       image: ${AGENT_SANDBOX_IMAGE:node:22-bookworm-slim}
+      # "none": generated code gets no network while validated; older containers are recreated.
+      network: ${AGENT_SANDBOX_NETWORK:none}
       container-prefix: ${AGENT_SANDBOX_CONTAINER_PREFIX:codepal-sandbox-}
       volume-prefix: ${AGENT_SANDBOX_VOLUME_PREFIX:codepal-project-}
       workspace-path: ${AGENT_SANDBOX_WORKSPACE_PATH:/workspace}

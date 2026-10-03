@@ -14,6 +14,8 @@ import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.runtime.AgentRunResult;
 import com.code.pal.agent.tool.AgentToolExecutor;
 import com.code.pal.agent.tool.ToolExecutionResult;
+import com.code.pal.agent.usage.AgentUsagePolicy;
+import com.code.pal.agent.workspace.DockerProjectEnvironment;
 import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.tool.impl.ListFilesTool;
 import com.code.pal.agent.validation.ProjectValidationService;
@@ -134,6 +136,40 @@ class AgentRunnerLlmFallbackTest {
         assertEquals(List.of("chat-a", "chat-b", "chat-b"), model.models);
     }
 
+    @Test
+    void aRunStopsBeforeTheModelCallThatWouldExceedTheDailyQuota() throws Exception {
+        ScriptedModel model = new ScriptedModel(
+                request -> ScriptedModel.LIST_FILES,
+                request -> ScriptedModel.LIST_FILES,
+                request -> ScriptedModel.LIST_FILES,
+                request -> "never reached");
+        AgentUsagePolicy usage = mock(AgentUsagePolicy.class);
+        when(usage.dailyTokenQuota()).thenReturn(1_000L);
+        when(usage.tokensUsedToday(7L)).thenReturn(997L);   // each scripted call costs 2 tokens
+        Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.",
+                List.of("chat-a"), usage);
+
+        AgentRunResult result = fixture.runner.run(fixture.run);
+
+        assertEquals(RunStatus.FAILED, result.status());
+        assertEquals(AgentUsagePolicy.QUOTA_MESSAGE, result.response());
+        assertEquals(2, model.models.size(), "997 + 2 = 999 allows a second call; 1001 stops the third");
+    }
+
+    @Test
+    void aUserAlreadyOverQuotaGetsNoModelCallAtAll() throws Exception {
+        ScriptedModel model = new ScriptedModel(request -> "never reached");
+        AgentUsagePolicy usage = mock(AgentUsagePolicy.class);
+        when(usage.dailyTokenQuota()).thenReturn(1_000L);
+        when(usage.tokensUsedToday(7L)).thenReturn(1_000L);
+        Fixture fixture = new Fixture(model, AgentIntent.CONVERSATIONAL, "hello", List.of("chat-a"), usage);
+
+        AgentRunResult result = fixture.runner.run(fixture.run);
+
+        assertEquals(RunStatus.FAILED, result.status());
+        assertEquals(0, model.models.size());
+    }
+
     /** Answers each call with the next scripted step: throw, request a listFiles call, or return final text. */
     private static final class ScriptedModel implements LlmClient {
         static final String LIST_FILES = "<call listFiles>";
@@ -167,6 +203,11 @@ class AgentRunnerLlmFallbackTest {
         }
 
         Fixture(LlmClient model, AgentIntent intent, String prompt, List<String> chatModels) throws Exception {
+            this(model, intent, prompt, chatModels, null);
+        }
+
+        Fixture(LlmClient model, AgentIntent intent, String prompt, List<String> chatModels,
+                AgentUsagePolicy usage) throws Exception {
             UUID projectId = UUID.randomUUID();
             UUID runId = UUID.randomUUID();
             Path workspace = Files.createTempDirectory(Path.of("target"), "fallback-");
@@ -205,7 +246,8 @@ class AgentRunnerLlmFallbackTest {
                     tools, mock(AgentEvents.class), properties,
                     new ProjectContextService(properties, new ObjectMapper()), runs, projects, messages,
                     mock(RealtimeService.class), storage, heartbeat, mock(AgentJobQueue.class), new ObjectMapper(),
-                    mock(ChangeSetService.class), mock(ProjectValidationService.class), mock(NotificationService.class));
+                    mock(ChangeSetService.class), mock(ProjectValidationService.class), mock(NotificationService.class),
+                    null, null, new DockerProjectEnvironment(properties), usage);
         }
     }
 }

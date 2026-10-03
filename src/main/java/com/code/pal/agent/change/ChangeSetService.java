@@ -9,6 +9,7 @@ import com.code.pal.agent.tool.AgentToolException;
 import com.code.pal.agent.validation.ProjectDiagnostic;
 import com.code.pal.agent.workspace.DockerProjectEnvironment;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
@@ -25,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * touched live file against its baseline fingerprint, snapshots the original project, and rolls
  * back from a private archive if any apply operation fails.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor(onConstructor_ = @Autowired)
 public class ChangeSetService {
@@ -263,10 +265,17 @@ public class ChangeSetService {
         String snapshotRef = snapshots.createSnapshot(set.live, run.getId());
         run.setSnapshotRef(snapshotRef);
         runs.save(run);
-        Path archive = set.live.getParent().resolve(".agent-history").resolve(run.getId().toString()).resolve("original").normalize();
+        Path archive = hostArchiveRoot(set.live, run.getId()).resolve("original");
+        // Archive first, on its own: restoring treats a path missing from the archive as "did not
+        // exist before" and deletes it, so it must never run against an incomplete archive.
         try {
             Files.createDirectories(archive);
             archiveOriginals(set, archive);
+        } catch (IOException error) {
+            try { deleteTree(archive.getParent()); } catch (IOException ignored) { }
+            throw new IllegalStateException("Could not archive the original files; nothing was committed", error);
+        }
+        try {
             apply(set);
         } catch (Exception error) {
             restoreArchive(set, archive);
@@ -275,7 +284,13 @@ public class ChangeSetService {
         List<String> changed = set.touched.stream().sorted().toList();
         active.remove(run.getId());
         try { deleteTree(set.container); } catch (IOException ignored) { }
+        // Host rollback and crash recovery use the Git snapshot; the archive only guarded the apply.
+        try { deleteTree(archive.getParent()); } catch (IOException ignored) { }
         return new CommitResult(snapshotRef, changed);
+    }
+
+    private static Path hostArchiveRoot(Path live, UUID runId) {
+        return live.getParent().resolve(".agent-history").resolve(runId.toString()).normalize();
     }
 
     public void discard(UUID runId) {
@@ -301,9 +316,21 @@ public class ChangeSetService {
                         Map.of("path", baseline.getKey(), "expectedVersion", baseline.getValue(), "actualVersion", actual));
             }
         }
-        String archive = ".codepal/history/" + run.getId() + "/original";
+        String archiveRoot = SANDBOX_HISTORY + "/" + run.getId();
+        String archive = archiveRoot + "/original";
+        // Archive first, on its own: restoring an incomplete archive would delete live files.
         try {
             sandbox.copyTree(set.projectId, set.liveRelative, archive);
+        } catch (RuntimeException error) {
+            try { sandbox.removeTree(set.projectId, archiveRoot); } catch (RuntimeException ignored) { }
+            throw new IllegalStateException("Could not archive the project; nothing was committed", error);
+        }
+        // Record the restore point before the first live write: if the process dies mid-apply,
+        // AgentRunRecovery restores this archive instead of leaving a half-applied project.
+        String snapshotRef = "docker:" + run.getId();
+        run.setSnapshotRef(snapshotRef);
+        runs.save(run);
+        try {
             for (String path : set.touched.stream().sorted().toList()) {
                 if (sandbox.regularFile(set.projectId, set.stageRelative, path)) {
                     sandbox.copyFile(set.projectId, set.stageRelative, path, set.liveRelative, path);
@@ -315,13 +342,46 @@ public class ChangeSetService {
             restoreSandbox(set, archive);
             throw new IllegalStateException("Change-set commit failed; original files were restored", error);
         }
-        String snapshotRef = "docker:" + run.getId();
-        run.setSnapshotRef(snapshotRef);
-        runs.save(run);
         List<String> changed = set.touched.stream().sorted().toList();
         active.remove(run.getId());
         try { sandbox.removeTree(set.projectId, set.containerRelative); } catch (RuntimeException ignored) { }
+        pruneSandboxHistory(set.projectId, run.getId());
         return new CommitResult(snapshotRef, changed);
+    }
+
+    private static final String SANDBOX_HISTORY = ".codepal/history";
+
+    /**
+     * Each committed build archives the whole project (rollback restores it), and .codepal is outside
+     * the volume quota. Only the latest build can be rolled back, so older archives are removed.
+     */
+    private void pruneSandboxHistory(UUID projectId, UUID keepRunId) {
+        String history = properties.getSandbox().getWorkspacePath() + "/" + SANDBOX_HISTORY;
+        try {
+            sandbox.exec(projectId, ".", List.of("find", history, "-mindepth", "1", "-maxdepth", "1",
+                    "!", "-name", keepRunId.toString(), "-exec", "rm", "-rf", "--", "{}", "+"));
+        } catch (RuntimeException error) {
+            log.warn("sandbox_history_prune_failed projectId={} reason={}", projectId, error.getMessage());
+        }
+    }
+
+    /**
+     * Removes the staging area of a run whose process died: its in-memory change set is gone, so
+     * {@link #discard} can no longer find it. Called by crash recovery after any restore.
+     */
+    public void cleanupAbandoned(UUID projectId, UUID runId, Path hostLiveRoot) {
+        if (active.containsKey(runId)) return;    // still owned by a live run in this process
+        try {
+            if (properties.getSandbox().isRequired()) {
+                sandbox.removeTree(projectId, ".codepal/changesets/" + runId);
+            } else if (hostLiveRoot != null) {
+                Path live = hostLiveRoot.toAbsolutePath().normalize();
+                deleteTree(live.getParent().resolve(".agent-changesets").resolve(runId.toString()).normalize());
+                deleteTree(hostArchiveRoot(live, runId));
+            }
+        } catch (IOException | RuntimeException error) {
+            log.warn("abandoned_changeset_cleanup_failed runId={} reason={}", runId, error.getMessage());
+        }
     }
 
     private void restoreSandbox(ActiveChangeSet set, String archive) {

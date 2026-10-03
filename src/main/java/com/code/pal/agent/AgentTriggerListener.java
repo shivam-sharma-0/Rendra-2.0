@@ -29,7 +29,15 @@ public class AgentTriggerListener {
     public void onAssistantTurn(AssistantTurnRequested event) {
         AgentRun run = runCreator.create(event);
         events.emit(run, AgentStepType.STATUS, "Queued", Map.of("status", RunStatus.QUEUED.name()));
-        queue.enqueue(run.getId());
+        try {
+            queue.enqueue(run.getId());
+        } catch (RuntimeException redisUnavailable) {
+            // The run is durable in the database as QUEUED; AgentRunRecovery requeues it once Redis is
+            // reachable again (app.agent.queued-recovery-ms). The user's message is already saved.
+            log.warn("agent_enqueue_failed runId={} project={} reason={}; recovery will requeue it",
+                    run.getId(), event.projectId(), redisUnavailable.getMessage());
+            return;
+        }
         log.debug("Agent run queued id={} project={} msg={}", run.getId(), event.projectId(),
                 event.assistantMessageId());
     }

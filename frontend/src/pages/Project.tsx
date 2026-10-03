@@ -335,7 +335,14 @@ export default function ProjectPage() {
     }
   }, [id, oldestPage, loadingOlder])
 
+  // A nonce (not just the text) so editing the same message twice in a row still re-triggers the
+  // composer's "load this in" effect, even when the text hasn't changed since the first click.
+  const [editRequest, setEditRequest] = useState<{ text: string; nonce: number } | null>(null)
+  const requestEdit = useCallback((text: string) => setEditRequest({ text, nonce: Date.now() }), [])
+  const [sendError, setSendError] = useState<string>()
+
   const send = useCallback(async (prompt: string, mode: ProjectType, files: File[] = []) => {
+    setSendError(undefined)
     try {
       if (files.length) await projectApi.uploadAttachments(id, files)
       const created = await messageApi.post(id, prompt, mode)
@@ -348,15 +355,12 @@ export default function ProjectPage() {
         return [...previous, ...created.filter((m) => !known.has(m.id))]
       })
       window.setTimeout(() => { void refreshTimeline().catch(() => undefined) }, 350)
-    } catch {
-      // Keep the composer usable. The API error is not destructive and can be retried by the user.
+    } catch (error) {
+      // Nothing was saved (e.g. a usage limit): say why, and put the text back so it can be resent.
+      setSendError(error instanceof Error ? error.message : 'Could not send your message. Please try again.')
+      requestEdit(prompt)
     }
-  }, [id, refreshTimeline])
-
-  // A nonce (not just the text) so editing the same message twice in a row still re-triggers the
-  // composer's "load this in" effect, even when the text hasn't changed since the first click.
-  const [editRequest, setEditRequest] = useState<{ text: string; nonce: number } | null>(null)
-  const requestEdit = useCallback((text: string) => setEditRequest({ text, nonce: Date.now() }), [])
+  }, [id, refreshTimeline, requestEdit])
 
   const setFeedback = useCallback(async (messageId: string, feedback: MessageFeedback | null) => {
     setMessages((previous) => previous.map((m) => (m.id === messageId ? { ...m, feedback } : m)))
@@ -563,6 +567,7 @@ export default function ProjectPage() {
                     })
                   })()}
               {rollbackError && <p className="pw-error">{rollbackError}</p>}
+              {sendError && <p className="pw-error" role="alert">{sendError}</p>}
               {requirements?.complete && <RequirementAnswerCard projectName={project?.name} session={requirements} onPreview={() => setTab('preview')} />}
               {project?.lifecycleStage === 'REQUIREMENTS' && needsRequirementInterview(project) && <RequirementWaiting />}
               <div ref={bottomRef} />

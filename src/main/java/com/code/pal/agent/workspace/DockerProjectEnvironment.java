@@ -91,10 +91,21 @@ public class DockerProjectEnvironment {
             run(List.of("volume", "create", "--label", WORKSPACE_LABEL, "--label",
                     "com.codepal.project=" + projectId, volume), Duration.ofSeconds(30), null).requireSuccess();
         }
-        CommandResult inspected = run(List.of("container", "inspect", container), Duration.ofSeconds(20), null);
+        String network = network();
+        CommandResult inspected = run(List.of("container", "inspect", "-f", "{{.HostConfig.NetworkMode}}", container),
+                Duration.ofSeconds(20), null);
+        if (inspected.success() && !network.equals(inspected.stdout().trim())) {
+            // Created before the network policy (or with a different one). Only the container is
+            // replaced; project files live in the named volume and are untouched.
+            log.info("sandbox_container_recreated projectId={} network={} expected={}", projectId,
+                    inspected.stdout().trim(), network);
+            run(List.of("rm", "-f", container), Duration.ofSeconds(30), null).requireSuccess();
+            inspected = new CommandResult(false, 1, "", "removed for network policy");
+        }
         if (!inspected.success()) {
             CommandResult created = run(List.of("run", "-d", "--name", container, "--label", WORKSPACE_LABEL,
                     "--label", "com.codepal.project=" + projectId,
+                    "--network", network,
                     "--cpus", Double.toString(Math.max(0.25, properties.getSandbox().getCpus())),
                     "--memory", Math.max(256, properties.getSandbox().getMemoryMb()) + "m",
                     "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
@@ -118,6 +129,11 @@ public class DockerProjectEnvironment {
         run(List.of("exec", "--workdir", environment.workspacePath(), container,
                         "mkdir", "-p", environment.workspacePath() + "/.codepal"),
                 Duration.ofSeconds(30), null).requireSuccess();
+    }
+
+    private String network() {
+        String network = properties.getSandbox().getNetwork();
+        return network == null || network.isBlank() ? "none" : network.trim();
     }
 
     private void startIfStopped(String container) {

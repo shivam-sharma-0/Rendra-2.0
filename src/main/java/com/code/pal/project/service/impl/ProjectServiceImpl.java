@@ -31,6 +31,7 @@ import com.code.pal.workspace.domain.WorkspaceMember;
 import com.code.pal.workspace.domain.WorkspaceRole;
 import com.code.pal.workspace.exception.WorkspaceAccessDeniedException;
 import com.code.pal.shared.web.SitesOrigin;
+import com.code.pal.shared.usage.AgentTurnAdmission;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -71,6 +72,7 @@ public class ProjectServiceImpl implements ProjectService {
     private final ApplicationEventPublisher events;
     /** Published sites live on the separate user-content origin, never on the API origin. */
     private final SitesOrigin sites;
+    private final AgentTurnAdmission admission;
 
     @Override
     @Transactional
@@ -80,6 +82,10 @@ public class ProjectServiceImpl implements ProjectService {
         CreateMessageRequest initial = request.initialMessage();
         ProjectType type = request.type() != null ? request.type() : ProjectType.BUILD;
         boolean requirementsNeeded = type == ProjectType.BUILD && needsRequirements(initial);
+        boolean startsAgentTurn = initial != null && !requirementsNeeded
+                && initial.aiMessageId() != null && !initial.aiMessageId().isBlank();
+        // Before anything is saved, so a rejected first turn does not leave an empty project behind.
+        if (startsAgentTurn) admission.requireAdmitted(userId);
 
         Project project = projectRepository.save(Project.builder()
                 .workspaceId(workspaceId)

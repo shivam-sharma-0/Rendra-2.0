@@ -146,12 +146,14 @@ public class RequirementServiceImpl implements RequirementService {
         session.setApprovedAt(Instant.now());
         session.setApprovedBy(userId);
         List<RequirementQuestion> answered = questions.findBySessionIdOrderBySequenceAsc(session.getId());
-        artifacts.writeRequirements(projectId, session.getId(), answered);
         projects.advanceLifecycle(userId, projectId, ProjectStage.DESIGN);
         String suffix = UUID.randomUUID().toString().replace("-", "");
+        // Post first: it applies the usage limits, and a rejection rolls this whole transaction back
+        // before anything is written to the workspace. The build run starts only after commit.
         messages.post(userId, projectId, new CreateMessageRequest(
                 "req_" + suffix.substring(0, 27), approvedBuildPrompt(answered), ProjectType.BUILD,
                 "ai_" + UUID.randomUUID().toString().replace("-", "").substring(0, 27)));
+        artifacts.writeRequirements(projectId, session.getId(), answered);
         return view(session);
     }
 

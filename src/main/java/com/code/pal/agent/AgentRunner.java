@@ -34,6 +34,7 @@ import com.code.pal.agent.tool.AgentTool;
 import com.code.pal.agent.tool.AgentToolExecutor;
 import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.tool.ToolExecutionResult;
+import com.code.pal.agent.usage.AgentUsagePolicy;
 import com.code.pal.agent.workspace.WorkspaceStorage;
 import com.code.pal.agent.workspace.DockerProjectEnvironment;
 import com.code.pal.agent.validation.ProjectValidationService;
@@ -106,6 +107,8 @@ public class AgentRunner implements AgentRuntime {
     private final NotificationService notifications;
     private final ProjectArtifactService artifacts;
     private final GeneratedDatabaseService databases;
+    /** Per-user daily token quota; null in focused tests, where no quota applies. */
+    private final AgentUsagePolicy usage;
 
     @Autowired
     public AgentRunner(LlmClient llm, IntentClassifier intentClassifier, ToolRegistry tools,
@@ -116,7 +119,8 @@ public class AgentRunner implements AgentRuntime {
             ObjectMapper objectMapper, ChangeSetService changeSets,
             ProjectValidationService validation, NotificationService notifications,
             ProjectArtifactService artifacts, GeneratedDatabaseService databases,
-            DockerProjectEnvironment sandbox) {
+            DockerProjectEnvironment sandbox, AgentUsagePolicy usage) {
+        this.usage = usage;
         this.llm = llm;
         this.intentClassifier = intentClassifier;
         this.tools = tools;
@@ -153,7 +157,7 @@ public class AgentRunner implements AgentRuntime {
             ProjectValidationService validation, NotificationService notifications) {
         this(llm, intentClassifier, tools, toolExecutor, events, props, projectContexts, runRepository, projects,
                 messageRepository, realtime, workspace, heartbeat, queue, objectMapper, changeSets, validation,
-                notifications, null, null, new DockerProjectEnvironment(props));
+                notifications, null, null, new DockerProjectEnvironment(props), null);
     }
 
     /**
@@ -176,11 +180,15 @@ public class AgentRunner implements AgentRuntime {
             beat = heartbeat.start(run.getId(), run.getProjectId());
             updateAssistant(run, "", MessageStatus.STREAMING);
             requireNotCancelled(run); // cancelled while still queued — stop before any work
+            // Admission checked the quota when the turn was posted; a long run must also stop once it
+            // crosses it, so the user's usage so far is captured once and this run's tokens added on top.
+            long tokensBeforeRun = usage == null ? 0 : usage.tokensUsedToday(run.getUserId());
+            requireWithinDailyQuota(run, tokensBeforeRun);
 
             List<Message> history = loadHistory(run);
             String userRequest = currentUserRequest(history);
             if (intentClassifier.classify(userRequest) == AgentIntent.CONVERSATIONAL) {
-                return runConversational(run, stream, history, userRequest, deadlineNanos);
+                return runConversational(run, stream, history, userRequest, deadlineNanos, tokensBeforeRun);
             }
 
             Project project = run.getMode() == ProjectType.BUILD
@@ -232,6 +240,7 @@ public class AgentRunner implements AgentRuntime {
                 requireNotCancelled(run);
                 runtime.beginIteration();
                 requireModelCallAvailable(runtime);
+                requireWithinDailyQuota(run, tokensBeforeRun);
                 runtime.transitionTo(AgentRuntimeStatus.WAITING_FOR_MODEL);
                 runtime.recordModelCall();
                 boolean finalRepairReportCall = run.getMode() == ProjectType.BUILD
@@ -341,9 +350,11 @@ public class AgentRunner implements AgentRuntime {
                         moveProject(run, ProjectStage.REVIEW);
                     }
                     runtime.transitionPhase(AgentPhase.FINISH);
-                    stream.complete();
                     runtime.transitionTo(AgentRuntimeStatus.COMPLETED);
+                    // Run DONE before the reply shows as complete: a user who answers the moment it
+                    // appears must not be told a request is still in progress.
                     setStatus(run, RunStatus.DONE);
+                    stream.complete();
                     notifyBuild(run, true);
                     events.emit(run, AgentStepType.STATUS, "Agent completed", counters(runtime));
                     emitContextUsage(run, projectContext, runtime);
@@ -378,6 +389,23 @@ public class AgentRunner implements AgentRuntime {
             events.emit(run, AgentStepType.STATUS, "Agent cancelled", safeCounters(runtime));
             emitContextUsage(run, projectContext, runtime);
             return result(run, runtime, "Run cancelled.", run.getError());
+        } catch (AgentQuotaExceededException e) {
+            log.info("agent_quota_exceeded runId={} userId={}", run.getId(), run.getUserId());
+            if (runtime != null)
+                runtime.transitionTo(AgentRuntimeStatus.FAILED);
+            String message = run.getMode() == ProjectType.BUILD
+                    ? e.getMessage() + " The build was stopped before any change was committed."
+                    : e.getMessage();
+            run.setError(message);
+            setStatus(run, RunStatus.FAILED);
+            moveProject(run, ProjectStage.FAILED);
+            if (artifacts != null)
+                artifacts.writeBuild(run, "FAILED", List.of());
+            updateAssistant(run, message, MessageStatus.FAILED);
+            events.emit(run, AgentStepType.STATUS, "Agent stopped: daily quota", Map.of(
+                    "status", "FAILED", "reason", "DAILY_QUOTA_EXCEEDED", "message", message));
+            emitContextUsage(run, projectContext, runtime);
+            return result(run, runtime, message, message);
         } catch (AgentValidationFailedException e) {
             log.info("agent_validation_failed runId={}", run.getId());
             if (runtime != null)
@@ -427,7 +455,7 @@ public class AgentRunner implements AgentRuntime {
      * full explore/plan/implement pass it never needed.
      */
     private AgentRunResult runConversational(AgentRun run, DeltaBatcher stream, List<Message> history,
-            String userRequest, long deadlineNanos) {
+            String userRequest, long deadlineNanos, long tokensBeforeRun) {
         projects.requireAccessible(run.getUserId(), run.getProjectId());
         List<LlmMessage> convo = new ArrayList<>();
         convo.add(LlmMessage.system(PromptLoader.load(Prompt.CONVERSATIONAL)));
@@ -459,6 +487,7 @@ public class AgentRunner implements AgentRuntime {
         for (int attempt = 1; attempt <= CONVERSATIONAL_MODEL_ATTEMPTS && res == null; attempt++) {
             requireBeforeDeadline(deadlineNanos);
             requireNotCancelled(run);
+            requireWithinDailyQuota(run, tokensBeforeRun);
             AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
             log.info("model_called runId={} conversational=true attempt={} provider={} model={}", run.getId(), attempt,
                     selection.provider(), selection.model());
@@ -480,9 +509,9 @@ public class AgentRunner implements AgentRuntime {
         if (res.reasoning() != null && !res.reasoning().isBlank()) {
             events.emit(run, AgentStepType.THINKING, "Model reasoning", Map.of("reasoning", res.reasoning()));
         }
-        stream.complete();
         run.setConversational(true);
-        setStatus(run, RunStatus.DONE);
+        setStatus(run, RunStatus.DONE);   // before the reply completes; see the main loop
+        stream.complete();
         log.info("agent_completed runId={} conversational=true", run.getId());
         events.emit(run, AgentStepType.STATUS, "Agent completed",
                 Map.of("iterations", 1, "modelCalls", 1, "toolCalls", 0, "phase", "CONVERSATION"));
@@ -592,6 +621,19 @@ public class AgentRunner implements AgentRuntime {
         private AgentLimitExceededException(String message) {
             super(message);
         }
+    }
+
+    private static final class AgentQuotaExceededException extends RuntimeException {
+        private AgentQuotaExceededException(String message) {
+            super(message);
+        }
+    }
+
+    private void requireWithinDailyQuota(AgentRun run, long tokensBeforeRun) {
+        if (usage == null) return;
+        long quota = usage.dailyTokenQuota();
+        long used = tokensBeforeRun + run.getPromptTokens() + run.getCompletionTokens();
+        if (quota > 0 && used >= quota) throw new AgentQuotaExceededException(AgentUsagePolicy.QUOTA_MESSAGE);
     }
 
     private static final class AgentValidationFailedException extends RuntimeException {

@@ -45,4 +45,12 @@ public interface AgentRunRepository extends JpaRepository<AgentRun, UUID> {
 
     @Query("select coalesce(sum(r.promptTokens + r.completionTokens), 0) from AgentRun r where r.projectId = :projectId")
     long sumTokensByProjectId(@Param("projectId") UUID projectId);
+
+    /* ── Per-user usage limits ───────────────────────────────────────────────── */
+
+    long countByUserIdAndStatusIn(Long userId, java.util.Collection<RunStatus> statuses);
+
+    @Query("select coalesce(sum(r.promptTokens + r.completionTokens), 0) from AgentRun r "
+            + "where r.userId = :userId and r.createdAt >= :since")
+    long sumTokensByUserIdSince(@Param("userId") Long userId, @Param("since") Instant since);
 }

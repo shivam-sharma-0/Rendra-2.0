@@ -82,6 +82,35 @@ class DockerProjectEnvironmentTest {
     }
 
     @Test
+    void newContainersHaveNoNetwork() {
+        FakeDocker docker = new FakeDocker();
+        DockerProjectEnvironment sandbox = sandbox(docker, new MutableClock());
+
+        sandbox.ensure(UUID.randomUUID());
+
+        List<String> run = docker.calls.stream().filter(call -> call.get(0).equals("run")).findFirst().orElseThrow();
+        assertEquals("none", run.get(run.indexOf("--network") + 1));
+    }
+
+    @Test
+    void containerCreatedBeforeTheNetworkPolicyIsRecreatedKeepingItsVolume() {
+        FakeDocker docker = new FakeDocker();
+        docker.volumeExists = true;
+        docker.containerExists = true;
+        docker.running = true;
+        docker.networkMode = "bridge";            // an old container with network access
+        DockerProjectEnvironment sandbox = sandbox(docker, new MutableClock());
+
+        sandbox.ensure(UUID.randomUUID());
+
+        assertEquals(1, docker.count("rm"));
+        assertEquals(1, docker.count("run"));
+        assertEquals("none", docker.networkMode);
+        assertTrue(docker.calls.stream().noneMatch(call -> call.get(0).equals("volume") && call.get(1).equals("rm")),
+                "the project volume must never be removed");
+    }
+
+    @Test
     void stoppedContainerIsRestartedAndTheCommandRetriedOnce() {
         FakeDocker docker = new FakeDocker();
         DockerProjectEnvironment sandbox = sandbox(docker, new MutableClock());
@@ -179,6 +208,7 @@ class DockerProjectEnvironmentTest {
         volatile boolean containerExists;
         volatile boolean running;
         volatile boolean hideContainerOnFirstInspect;
+        volatile String networkMode = "none";
         volatile String execOutput;
         volatile CountDownLatch blockExec;
         volatile int unavailableExecs;
@@ -203,7 +233,7 @@ class DockerProjectEnvironmentTest {
                     hideContainerOnFirstInspect = false;
                     return result(false, "Error: No such container");
                 }
-                return result(containerExists, "");
+                return containerExists ? ok(networkMode) : result(false, "Error: No such container");
             }
             if (verb.equals("run")) {
                 synchronized (this) {
@@ -212,8 +242,14 @@ class DockerProjectEnvironmentTest {
                     }
                     containerExists = true;
                     running = true;
+                    networkMode = args.get(args.indexOf("--network") + 1);
                 }
                 return ok("container-id");
+            }
+            if (verb.equals("rm")) {
+                containerExists = false;
+                running = false;
+                return ok("");
             }
             if (verb.equals("start")) {
                 running = true;
