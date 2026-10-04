@@ -18,6 +18,14 @@ public interface SandboxPort {
     /** Makes the environment ready to use (create or start it); cheap and safe to call repeatedly. */
     void ensure(UUID projectId);
 
+    /**
+     * Startup check that the environment matches its configuration (for example, that the backend and
+     * the sandbox see the same project folders).
+     * @throws IllegalStateException with guidance when it does not
+     */
+    default void verifyEnvironment() {
+    }
+
     /** @throws IllegalStateException when the project's files exceed the configured quota */
     void enforceQuota(UUID projectId);
 

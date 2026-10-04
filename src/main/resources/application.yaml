@@ -230,7 +230,11 @@ app:
       # "none": generated code gets no network while validated; older containers are recreated.
       network: ${AGENT_SANDBOX_NETWORK:none}
       container-prefix: ${AGENT_SANDBOX_CONTAINER_PREFIX:codepal-sandbox-}
-      volume-prefix: ${AGENT_SANDBOX_VOLUME_PREFIX:codepal-project-}
+      # Project files live in <workspace-base-path>/<projectId> and are bind-mounted into the
+      # container. Blank derives the Docker-side path from workspace-base-path (WSL share or Linux).
+      host-workspace-path: ${AGENT_SANDBOX_HOST_WORKSPACE_PATH:}
+      # Container user; must match the owner of the files the backend writes (WSL default user).
+      user: ${AGENT_SANDBOX_USER:1000:1000}
       workspace-path: ${AGENT_SANDBOX_WORKSPACE_PATH:/workspace}
       command-timeout-ms: ${AGENT_SANDBOX_COMMAND_TIMEOUT_MS:120000}
       output-max-chars: ${AGENT_SANDBOX_OUTPUT_MAX_CHARS:80000}

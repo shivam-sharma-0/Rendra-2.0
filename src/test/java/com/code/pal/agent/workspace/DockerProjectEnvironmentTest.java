@@ -94,21 +94,39 @@ class DockerProjectEnvironmentTest {
     }
 
     @Test
-    void containerCreatedBeforeTheNetworkPolicyIsRecreatedKeepingItsVolume() {
+    void containerFromAnOlderConfigurationIsRecreatedOnTheProjectFolder() {
         FakeDocker docker = new FakeDocker();
-        docker.volumeExists = true;
         docker.containerExists = true;
         docker.running = true;
-        docker.networkMode = "bridge";            // an old container with network access
+        docker.networkMode = "bridge";            // as created before 0.7 and 1.2b:
+        docker.user = "";                         // network access, root,
+        docker.mounts = "volume=codepal-project-old;";   // files in a named volume
         DockerProjectEnvironment sandbox = sandbox(docker, new MutableClock());
+        UUID projectId = UUID.randomUUID();
 
-        sandbox.ensure(UUID.randomUUID());
+        sandbox.ensure(projectId);
 
         assertEquals(1, docker.count("rm"));
         assertEquals(1, docker.count("run"));
         assertEquals("none", docker.networkMode);
-        assertTrue(docker.calls.stream().noneMatch(call -> call.get(0).equals("volume") && call.get(1).equals("rm")),
-                "the project volume must never be removed");
+        assertEquals("1000:1000", docker.user);
+        assertEquals("bind=" + DOCKER_BASE + "/" + projectId + ";", docker.mounts);
+        assertTrue(docker.calls.stream().noneMatch(call -> call.get(0).equals("volume")),
+                "volumes are neither created nor removed any more");
+    }
+
+    @Test
+    void aContainerThatAlreadyMatchesIsKept() {
+        FakeDocker docker = new FakeDocker();
+        DockerProjectEnvironment sandbox = sandbox(docker, new MutableClock());
+        UUID projectId = UUID.randomUUID();
+        sandbox.ensure(projectId);                // creates it
+
+        DockerProjectEnvironment restarted = sandbox(docker, new MutableClock());
+        restarted.ensure(projectId);               // a new process sees the same container
+
+        assertEquals(0, docker.count("rm"));
+        assertEquals(1, docker.count("run"));
     }
 
     @Test
@@ -190,8 +208,16 @@ class DockerProjectEnvironmentTest {
     private static DockerProjectEnvironment sandbox(FakeDocker docker, Clock clock) {
         AgentProperties properties = new AgentProperties();
         properties.getSandbox().setRequired(true);    // cleanup only runs for a required sandbox
-        return new DockerProjectEnvironment(properties, docker, clock);
+        properties.getSandbox().setHostWorkspacePath(DOCKER_BASE);
+        try {
+            properties.setWorkspaceBasePath(java.nio.file.Files.createTempDirectory(java.nio.file.Path.of("target"), "docker-env-").toString());
+        } catch (java.io.IOException error) {
+            throw new IllegalStateException(error);
+        }
+        return new DockerProjectEnvironment(properties, new WorkspaceStorage(properties), docker, clock);
     }
+
+    private static final String DOCKER_BASE = "/srv/codepal/workspaces";
 
     private static final class MutableClock extends Clock {
         private volatile Instant now = Instant.parse("2026-10-02T10:00:00Z");
@@ -210,6 +236,8 @@ class DockerProjectEnvironmentTest {
         volatile boolean running;
         volatile boolean hideContainerOnFirstInspect;
         volatile String networkMode = "none";
+        volatile String user = "1000:1000";
+        volatile String mounts = "";
         volatile String execOutput;
         volatile CountDownLatch blockExec;
         volatile int unavailableExecs;
@@ -234,7 +262,7 @@ class DockerProjectEnvironmentTest {
                     hideContainerOnFirstInspect = false;
                     return result(false, "Error: No such container");
                 }
-                return containerExists ? ok(networkMode) : result(false, "Error: No such container");
+                return containerExists ? ok(networkMode + "|" + user + "|" + mounts) : result(false, "Error: No such container");
             }
             if (verb.equals("run")) {
                 synchronized (this) {
@@ -244,6 +272,9 @@ class DockerProjectEnvironmentTest {
                     containerExists = true;
                     running = true;
                     networkMode = args.get(args.indexOf("--network") + 1);
+                    user = args.get(args.indexOf("--user") + 1);
+                    String mount = args.get(args.indexOf("--mount") + 1);   // type=bind,source=X,target=Y
+                    mounts = mount.replaceAll("^type=(\\w+),source=([^,]+),.*$", "$1=$2;");
                 }
                 return ok("container-id");
             }

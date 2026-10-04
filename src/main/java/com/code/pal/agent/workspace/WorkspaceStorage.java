@@ -26,6 +26,11 @@ public class WorkspaceStorage {
         this.base = Path.of(props.getWorkspaceBasePath()).toAbsolutePath().normalize();
     }
 
+    /** Directory holding every project's folder, as this backend sees it. */
+    public Path base() {
+        return base;
+    }
+
     /** This project's root directory (not guaranteed to exist yet). */
     public Path projectDir(UUID projectId) {
         return base.resolve(projectId.toString()).normalize();

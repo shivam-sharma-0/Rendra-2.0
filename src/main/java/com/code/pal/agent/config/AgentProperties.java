@@ -240,7 +240,14 @@ public class AgentProperties {
          */
         private String network = "none";
         private String containerPrefix = "codepal-sandbox-";
-        private String volumePrefix = "codepal-project-";
+        /**
+         * The project base directory as the Docker daemon sees it, bind-mounted into each container.
+         * Blank derives it from {@code workspace-base-path}: the Linux path inside a
+         * {@code \\wsl.localhost\<distro>\...} share, or that path itself when the backend runs on Linux.
+         */
+        private String hostWorkspacePath = "";
+        /** uid:gid the container runs as; must own the project folders the backend writes. */
+        private String user = "1000:1000";
         private String workspacePath = "/workspace";
         private long commandTimeoutMs = 120_000;
         private int outputMaxChars = 80_000;

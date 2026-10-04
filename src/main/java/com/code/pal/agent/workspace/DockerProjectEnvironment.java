@@ -10,6 +10,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -24,6 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Persistent per-project Docker environment. The project volume is the source of truth; this
@@ -43,26 +47,91 @@ public class DockerProjectEnvironment implements SandboxPort {
     /** Bounds re-checks when the container is stopped between ensure() and taking the read lock. */
     private static final int MAX_EXEC_ROUNDS = 3;
 
+    /** What decides whether an existing container still matches the configuration. */
+    private static final String SIGNATURE_FORMAT =
+            "{{.HostConfig.NetworkMode}}|{{.Config.User}}|{{range .Mounts}}{{.Type}}={{.Source}};{{end}}";
+    private static final Pattern WSL_SHARE = Pattern.compile("^//wsl(?:\\.localhost|\\$)/[^/]+(/.*)$", Pattern.CASE_INSENSITIVE);
+    private static final String MAPPING_MARKER = ".codepal-mapping-check";
+
     private final AgentProperties properties;
+    private final WorkspaceStorage storage;
     private final CommandRunner runner;
     private final Clock clock;
     private final Map<UUID, Instant> lastUsed = new ConcurrentHashMap<>();
-    /** Projects whose volume and running container this process has verified. */
+    /** Projects whose folder and running container this process has verified. */
     private final Set<UUID> ready = ConcurrentHashMap.newKeySet();
     private final Map<UUID, ReentrantReadWriteLock> projectLocks = new ConcurrentHashMap<>();
     private final Instant startedAt;
 
     @Autowired
+    public DockerProjectEnvironment(AgentProperties properties, WorkspaceStorage storage) {
+        this(properties, storage, null, Clock.systemUTC());
+    }
+
+    /** For tests and compatibility constructors that only have the configuration. */
     public DockerProjectEnvironment(AgentProperties properties) {
-        this(properties, null, Clock.systemUTC());
+        this(properties, new WorkspaceStorage(properties));
     }
 
     /** Test seam: {@code runner} receives Docker CLI arguments without the docker executable. */
-    DockerProjectEnvironment(AgentProperties properties, CommandRunner runner, Clock clock) {
+    DockerProjectEnvironment(AgentProperties properties, WorkspaceStorage storage, CommandRunner runner, Clock clock) {
         this.properties = properties;
+        this.storage = storage;
         this.runner = runner != null ? runner : this::runProcess;
         this.clock = clock;
         this.startedAt = clock.instant();
+    }
+
+    /**
+     * The backend and the Docker daemon must see the same project folders: the backend writes them and
+     * containers bind-mount them. Write a random token through the backend's path and read it back in
+     * a throwaway container through the daemon's path.
+     */
+    @Override
+    public void verifyEnvironment() {
+        Path base = storage.base();
+        Path marker = base.resolve(MAPPING_MARKER);
+        String token = UUID.randomUUID().toString();
+        try {
+            Files.createDirectories(base);
+            Files.writeString(marker, token);
+        } catch (IOException error) {
+            throw new IllegalStateException("Cannot write to the project workspace " + base + ": " + error.getMessage(), error);
+        }
+        try {
+            String dockerBase = dockerBase();
+            CommandResult read = run(List.of("run", "--rm", "--network", "none", "--user", user(),
+                    "--mount", "type=bind,source=" + dockerBase + ",target=/codepal-check,readonly",
+                    properties.getSandbox().getImage(), "cat", "/codepal-check/" + MAPPING_MARKER), Duration.ofSeconds(180), null);
+            if (!read.success() || !token.equals(read.stdout().trim())) {
+                throw new IllegalStateException("The backend workspace (" + base + ") and the sandbox workspace (" + dockerBase
+                        + ") are not the same folder, so containers would not see the project files. Point "
+                        + "AGENT_WORKSPACE_PATH at the WSL share (\\\\wsl.localhost\\<distro>\\home\\<user>\\...), or set "
+                        + "AGENT_SANDBOX_HOST_WORKSPACE_PATH to the same folder as Docker sees it. Docker said: "
+                        + (read.error().isBlank() ? read.stdout().trim() : read.error()));
+            }
+            log.info("sandbox_workspace_verified backend={} docker={}", base, dockerBase);
+        } finally {
+            try { Files.deleteIfExists(marker); } catch (IOException ignored) { }
+        }
+    }
+
+    /** The project base directory as the Docker daemon sees it. */
+    String dockerBase() {
+        String configured = properties.getSandbox().getHostWorkspacePath();
+        if (configured != null && !configured.isBlank()) return configured.trim().replaceAll("/+$", "");
+        String backend = storage.base().toString().replace('\\', '/');
+        Matcher share = WSL_SHARE.matcher(backend);
+        if (share.matches()) return share.group(1).replaceAll("/+$", "");
+        if (!backend.matches("^[A-Za-z]:/.*") && backend.startsWith("/")) return backend;   // backend on Linux
+        throw new IllegalStateException("Cannot bind-mount " + storage.base() + " into the sandbox: keep project files "
+                + "in WSL (AGENT_WORKSPACE_PATH=\\\\wsl.localhost\\<distro>\\home\\<user>\\codepal\\workspaces) or set "
+                + "AGENT_SANDBOX_HOST_WORKSPACE_PATH. Windows folders through /mnt/c are ~35x slower for builds.");
+    }
+
+    private String user() {
+        String user = properties.getSandbox().getUser();
+        return user == null || user.isBlank() ? "1000:1000" : user.trim();
     }
 
     @Override
@@ -90,31 +159,30 @@ public class DockerProjectEnvironment implements SandboxPort {
 
     private void provision(UUID projectId) {
         Environment environment = environment(projectId);
-        String volume = environment.volume();
         String container = environment.container();
-        if (!succeeds(List.of("volume", "inspect", volume), Duration.ofSeconds(20), null)) {
-            run(List.of("volume", "create", "--label", WORKSPACE_LABEL, "--label",
-                    "com.codepal.project=" + projectId, volume), Duration.ofSeconds(30), null).requireSuccess();
-        }
-        String network = network();
-        CommandResult inspected = run(List.of("container", "inspect", "-f", "{{.HostConfig.NetworkMode}}", container),
+        // Created by the backend, so the folder belongs to the sandbox user rather than to root (a
+        // bind source Docker had to create itself would be root-owned and unwritable for both sides).
+        storage.ensure(projectId);
+        String expected = network() + "|" + user() + "|bind=" + environment.hostPath() + ";";
+        CommandResult inspected = run(List.of("container", "inspect", "-f", SIGNATURE_FORMAT, container),
                 Duration.ofSeconds(20), null);
-        if (inspected.success() && !network.equals(inspected.stdout().trim())) {
-            // Created before the network policy (or with a different one). Only the container is
-            // replaced; project files live in the named volume and are untouched.
-            log.info("sandbox_container_recreated projectId={} network={} expected={}", projectId,
-                    inspected.stdout().trim(), network);
+        if (inspected.success() && !expected.equals(inspected.stdout().trim())) {
+            // Created under an older configuration (named volume, network, or user). Only the container
+            // is replaced; the project folder is untouched.
+            log.info("sandbox_container_recreated projectId={} actual={} expected={}", projectId,
+                    inspected.stdout().trim(), expected);
             run(List.of("rm", "-f", container), Duration.ofSeconds(30), null).requireSuccess();
-            inspected = new CommandResult(false, 1, "", "removed for network policy");
+            inspected = new CommandResult(false, 1, "", "removed: configuration changed");
         }
         if (!inspected.success()) {
             CommandResult created = run(List.of("run", "-d", "--name", container, "--label", WORKSPACE_LABEL,
                     "--label", "com.codepal.project=" + projectId,
-                    "--network", network,
+                    "--network", network(),
+                    "--user", user(),
                     "--cpus", Double.toString(Math.max(0.25, properties.getSandbox().getCpus())),
                     "--memory", Math.max(256, properties.getSandbox().getMemoryMb()) + "m",
                     "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-                    "--mount", "type=volume,source=" + volume + ",target=" + properties.getSandbox().getWorkspacePath(),
+                    "--mount", "type=bind,source=" + environment.hostPath() + ",target=" + properties.getSandbox().getWorkspacePath(),
                     "--workdir", properties.getSandbox().getWorkspacePath(),
                     properties.getSandbox().getImage(), "sh", "-lc",
                     "while :; do sleep 3600; done"), Duration.ofSeconds(90), null);
@@ -153,7 +221,7 @@ public class DockerProjectEnvironment implements SandboxPort {
     private Environment environment(UUID projectId) {
         return new Environment(projectId,
                 resourceName(properties.getSandbox().getContainerPrefix(), projectId),
-                resourceName(properties.getSandbox().getVolumePrefix(), projectId),
+                dockerBase() + "/" + projectId,
                 properties.getSandbox().getWorkspacePath());
     }
 
@@ -456,10 +524,6 @@ public class DockerProjectEnvironment implements SandboxPort {
 
     private Duration timeout() { return Duration.ofMillis(Math.max(1_000, properties.getSandbox().getCommandTimeoutMs())); }
 
-    private boolean succeeds(List<String> args, Duration timeout, byte[] stdin) {
-        return run(args, timeout, stdin).success();
-    }
-
     private int outputLimit() { return properties.getSandbox().getOutputMaxChars(); }
 
     private CommandResult run(List<String> args, Duration timeout, byte[] stdin) {
@@ -517,7 +581,8 @@ public class DockerProjectEnvironment implements SandboxPort {
         CommandResult run(List<String> args, Duration timeout, byte[] stdin, int outputLimit);
     }
 
-    public record Environment(UUID projectId, String container, String volume, String workspacePath) {}
+    /** Docker coordinates of a project: container name and the bind-mount source as the daemon sees it. */
+    public record Environment(UUID projectId, String container, String hostPath, String workspacePath) {}
 
     private static final class BoundedOutputStream extends OutputStream {
         private final ByteArrayOutputStream delegate;
