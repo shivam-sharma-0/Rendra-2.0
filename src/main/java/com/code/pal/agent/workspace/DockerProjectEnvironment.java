@@ -39,7 +39,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 @Slf4j
 @Service
 public class DockerProjectEnvironment implements SandboxPort {
-    private static final int MAX_PATH_LENGTH = 512;
     private static final String WORKSPACE_LABEL = "com.codepal.workspace=true";
     /** Bounds re-checks when the container is stopped between ensure() and taking the read lock. */
     private static final int MAX_EXEC_ROUNDS = 3;
@@ -441,34 +440,13 @@ public class DockerProjectEnvironment implements SandboxPort {
     }
 
     private String safePath(String relativeRoot, String relativePath) {
-        String root = normalizeRelative(relativeRoot, true);
-        String path = normalizeRelative(relativePath, false);
-        String combined = root.equals(".") ? path : root + "/" + path;
-        return properties.getSandbox().getWorkspacePath() + "/" + combined.replaceAll("/{2,}", "/");
+        return properties.getSandbox().getWorkspacePath() + "/" + ProjectPaths.combine(relativeRoot, relativePath);
     }
 
     private String rootPath(String relativeRoot) {
-        String root = normalizeRelative(relativeRoot, true);
+        String root = ProjectPaths.normalize(relativeRoot, true);
         return root.equals(".") ? properties.getSandbox().getWorkspacePath()
                 : properties.getSandbox().getWorkspacePath() + "/" + root;
-    }
-
-    private String normalizeRelative(String relativePath, boolean allowDot) {
-        if (relativePath == null || relativePath.isBlank() || relativePath.length() > MAX_PATH_LENGTH
-                || relativePath.indexOf('\0') >= 0 || relativePath.startsWith("/") || relativePath.startsWith("\\")) {
-            throw new IllegalArgumentException("Invalid sandbox path");
-        }
-        String normalized = relativePath.replace('\\', '/');
-        for (String part : normalized.split("/")) {
-            if (part.equals("..") || part.equalsIgnoreCase(".git") || part.equalsIgnoreCase(".secrets")
-                    || part.equalsIgnoreCase(".ssh")) {
-                throw new IllegalArgumentException("Protected sandbox path");
-            }
-        }
-        if (!allowDot && (normalized.equals(".") || normalized.isBlank())) {
-            throw new IllegalArgumentException("File path must not be a directory root");
-        }
-        return normalized.replaceAll("/{2,}", "/");
     }
 
     private String parentPath(String path) {
