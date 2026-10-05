@@ -324,6 +324,25 @@ public class ProjectServiceImpl implements ProjectService {
     }
 
     @Override
+    @Transactional
+    public String previewKey(UUID projectId) {
+        Project project = projectRepository.findById(projectId).orElseThrow(ProjectNotFoundException::new);
+        if (project.getPreviewKey() == null) {
+            StringBuilder key = new StringBuilder(24);
+            String alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";   // a DNS label: lowercase letters and digits
+            for (int i = 0; i < 24; i++) key.append(alphabet.charAt(RANDOM.nextInt(alphabet.length())));
+            project.setPreviewKey(key.toString());
+        }
+        return project.getPreviewKey();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public UUID resolvePreviewKey(String previewKey) {
+        return projectRepository.findByPreviewKey(previewKey).map(Project::getId).orElseThrow(ProjectNotFoundException::new);
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public UUID resolvePublishedProject(String slug) {
         return projectRepository.findByPublicSlug(slug)

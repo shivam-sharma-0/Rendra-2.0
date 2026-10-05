@@ -22,9 +22,9 @@ Stacks: a new project uses one of these.
   "typecheck": "tsc -b"; tsconfig.json; vite.config.ts with the React plugin; index.html in the root
   loading /src/main.tsx. The backend installs, validates and builds it, then serves the build output.
 Prefer the static site for simple pages; use Vite + React for interactive apps or when React is asked
-for. Sites are served under a path prefix: in static sites use relative URLs (styles.css, not
-/styles.css), and use HashRouter rather than BrowserRouter for client-side routes. Keep an existing
-project's stack.
+for. Each site is served at the root of its own origin, so BrowserRouter (react-router-dom) works for
+client-side routes; still prefer relative URLs for files (styles.css, ./logo.png), which work everywhere.
+Keep an existing project's stack.
 
 Supabase: when the project context says Supabase is connected, use it for data and sign-in. Add
 @supabase/supabase-js, create the client once in src/lib/supabase.ts from

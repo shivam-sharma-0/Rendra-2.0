@@ -37,13 +37,17 @@ public class ProjectPreviewTokenController {
                                       @PathVariable UUID projectId) {
         projects.requireAccessible(principal.userId(), projectId);
         String token = jwt.generatePreviewToken(projectId);
+        // Host-per-site: the project's own stable preview host; otherwise a short-lived path token.
+        String key = sites.hostPerSite() ? projects.previewKey(projectId) : null;
         DraftPreviewService.ActiveDraft active = drafts.activeDraft(projectId);
         Draft draft = null;
         if (active != null) {
-            String draftToken = jwt.generatePreviewToken(projectId, active.runId());
-            draft = new Draft(active.runId(), active.version(), sites.previewUrl(draftToken));
+            String draftUrl = key != null ? sites.draftHostUrl(key)
+                    : sites.previewUrl(jwt.generatePreviewToken(projectId, active.runId()));
+            draft = new Draft(active.runId(), active.version(), draftUrl);
         }
-        return new PreviewTokenResponse(token, sites.previewUrl(token), preview.available(projectId), builds.status(projectId), draft);
+        String url = key != null ? sites.previewHostUrl(key) : sites.previewUrl(token);
+        return new PreviewTokenResponse(token, url, preview.available(projectId), builds.status(projectId), draft);
     }
 
     /**

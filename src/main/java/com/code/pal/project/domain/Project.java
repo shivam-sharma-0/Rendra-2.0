@@ -106,6 +106,13 @@ public class Project {
     @Column(name = "updated_at", nullable = false)
     Instant updatedAt;
 
+    /**
+     * Names the project's private preview host ({@code pv--<key>.<sites domain>}): random and unguessable,
+     * given only to members, and stable so the previewed app keeps its own origin (and storage) across builds.
+     */
+    @Column(name = "preview_key", length = 32, unique = true)
+    String previewKey;
+
     /** Soft-delete marker — null means the project is active. */
     @Column(name = "deleted_at")
     Instant deletedAt;

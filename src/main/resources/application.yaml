@@ -129,6 +129,12 @@ app:
   # subdomain sharing cookies with the API; behind a proxy set server.forward-headers-strategy.
   sites:
     base-url: ${APP_SITES_BASE_URL:http://127.0.0.1:8080}
+    # Host per site: <slug>.<domain> (published), pv--<key>.<domain> (private preview), dr--<key>.<domain>
+    # (draft). Each site then runs at the root of its own origin, so client-side routing and absolute paths
+    # work and projects cannot read each other's storage. Browsers resolve *.localhost to this machine.
+    # Production: a wildcard DNS record + certificate for a domain on the public suffix list. Empty =
+    # sites under paths of base-url (/preview/<token>/, /p/<slug>/).
+    wildcard-domain: ${APP_SITES_WILDCARD_DOMAIN:sites.localhost}
   # Encrypts secrets stored in the database (Supabase access tokens). Without it they cannot be stored.
   data-key: ${APP_DATA_KEY:}
   supabase:

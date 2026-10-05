@@ -74,4 +74,10 @@ public interface ProjectService {
 
     /** Resolve a LIVE published project by slug for public serving; 404 if unknown or not live. */
     UUID resolvePublishedProject(String slug);
+
+    /** The key of the project's private preview host, created on first use. Callers check access first. */
+    String previewKey(UUID projectId);
+
+    /** The project a preview host key belongs to; 404 when unknown (or the project was deleted). */
+    UUID resolvePreviewKey(String previewKey);
 }

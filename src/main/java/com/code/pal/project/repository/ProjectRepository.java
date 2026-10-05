@@ -32,6 +32,8 @@ public interface ProjectRepository extends JpaRepository<Project, UUID> {
             value = "select id from projects where deleted_at is not null and id in (:ids)")
     java.util.List<UUID> findDeletedIdsIn(@org.springframework.data.repository.query.Param("ids") Collection<UUID> ids);
 
+    Optional<Project> findByPreviewKey(String previewKey);
+
     /** Resolve a published project by its public slug (for the public {@code /p/{slug}} serving). */
     Optional<Project> findByPublicSlug(String publicSlug);
 }
