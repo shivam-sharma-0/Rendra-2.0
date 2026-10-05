@@ -10,6 +10,10 @@ public final class ProjectContextTrace {
     private final Map<String, ContextDiagnostics.SelectedPath> selected = new LinkedHashMap<>();
     private final List<ContextDiagnostics.OmittedPath> omitted = new ArrayList<>();
     private final Map<String, Fingerprint> reads = new LinkedHashMap<>();
+    /** File read requests so far in the run; a repeat is only deduplicated while the read it repeats is recent. */
+    private int readCount;
+    /** Beyond this many later reads, a model may have lost the content in a long conversation: send it again. */
+    static final int RECENT_READS = 6;
     private int omittedConversationMessages;
     private int initialChars;
     private int budgetChars;
@@ -26,11 +30,14 @@ public final class ProjectContextTrace {
     }
 
     public synchronized boolean wasReadUnchanged(String path, long size, String version) {
-        return new Fingerprint(size, version).equals(reads.get(normalize(path)));
+        readCount++;   // every request counts, so asking for the same file again and again gets its content back
+        Fingerprint previous = reads.get(normalize(path));
+        return previous != null && previous.size() == size && previous.version().equals(version)
+                && readCount - previous.readIndex() < RECENT_READS;
     }
 
     public synchronized void recordRead(String path, long size, String version, int approximateChars) {
-        reads.put(normalize(path), new Fingerprint(size, version));
+        reads.put(normalize(path), new Fingerprint(size, version, readCount));
         selected(path, ContextSelectionReason.FILE_READ, approximateChars);
     }
 
@@ -53,6 +60,6 @@ public final class ProjectContextTrace {
         return path.replace('\\', '/');
     }
 
-    private record Fingerprint(long size, String version) {
+    private record Fingerprint(long size, String version, int readIndex) {
     }
 }

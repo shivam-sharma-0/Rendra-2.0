@@ -20,7 +20,11 @@ public class SupabaseConnection {
     @Column(nullable = false, length = 200) String url;
     @Column(name = "anon_key", nullable = false, length = 2000) String anonKey;
     @Column(name = "access_token_cipher", length = 4000) String accessTokenCipher;
+    @Enumerated(EnumType.STRING) @Column(nullable = false, length = 16) @Builder.Default Mode mode = Mode.CLOUD;
     @Column(name = "connected_by", nullable = false) Long connectedBy;
     @CreationTimestamp @Column(name = "created_at", nullable = false, updatable = false) Instant createdAt;
     @UpdateTimestamp @Column(name = "updated_at", nullable = false) Instant updatedAt;
+
+    /** CLOUD: supabase.co via the Management API. SELF_HOSTED: the server's configured instance via its database. */
+    public enum Mode { CLOUD, SELF_HOSTED }
 }

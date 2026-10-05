@@ -133,6 +133,13 @@ app:
   data-key: ${APP_DATA_KEY:}
   supabase:
     api-url: ${SUPABASE_API_URL:https://api.supabase.com}
+    # A Supabase instance this server runs (local CLI stack or self-hosted). Projects connect to it by
+    # this URL; approved migrations run over db-url. Blank: only supabase.co projects can be connected.
+    self-hosted:
+      url: ${SUPABASE_SELF_HOSTED_URL:}
+      db-url: ${SUPABASE_SELF_HOSTED_DB_URL:}
+      db-user: ${SUPABASE_SELF_HOSTED_DB_USER:postgres}
+      db-password: ${SUPABASE_SELF_HOSTED_DB_PASSWORD:}
 
   oauth2:
     success-redirect: ${OAUTH_SUCCESS_REDIRECT:http://localhost:5173/oauth/callback}

@@ -34,11 +34,17 @@ public class SupabaseClient {
         this.managementApi = managementApi.replaceAll("/+$", "");
     }
 
-    /** @throws SupabaseException when the URL or the anon key is not accepted by Supabase */
+    /**
+     * Asks the auth service who is signed in, sending only the key. Supabase's gateway answers 401 for a
+     * key it does not know; an accepted key reaches the auth service, which answers 403 (no session).
+     * Endpoints such as {@code /auth/v1/settings} answer 200 for any key, so they prove nothing.
+     *
+     * @throws SupabaseException when the URL or the key is not accepted
+     */
     public void verifyAnonKey(String projectUrl, String anonKey) {
-        HttpResponse<String> response = send(HttpRequest.newBuilder(URI.create(projectUrl + "/auth/v1/settings"))
-                .header("apikey", anonKey).header("Authorization", "Bearer " + anonKey).timeout(CHECK_TIMEOUT).GET().build());
-        if (response.statusCode() != 200) {
+        HttpResponse<String> response = send(HttpRequest.newBuilder(URI.create(projectUrl + "/auth/v1/user"))
+                .header("apikey", anonKey).timeout(CHECK_TIMEOUT).GET().build());
+        if (response.statusCode() != 403 && response.statusCode() != 200) {
             throw new SupabaseException("Supabase did not accept this URL and anon key (HTTP " + response.statusCode() + ")");
         }
     }

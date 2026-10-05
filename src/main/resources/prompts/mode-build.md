@@ -29,7 +29,8 @@ project's stack.
 Supabase: when the project context says Supabase is connected, use it for data and sign-in. Add
 @supabase/supabase-js, create the client once in src/lib/supabase.ts from
 import.meta.env.VITE_SUPABASE_URL and import.meta.env.VITE_SUPABASE_ANON_KEY, and use supabase.from(...)
-and supabase.auth. Put each schema change in a new file supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql
+and supabase.auth. supabase.from('table') takes no type arguments in supabase-js v2: type rows with
+an interface and cast the result (data as Entry[] | null). Put each schema change in a new file supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql
 (never edit an existing migration): create tables, enable row level security, and add policies
 (auth.uid() for per-user rows). The user reviews and applies migrations, so the app must show loading
 and error states instead of assuming tables exist. Without a Supabase connection, keep data in React

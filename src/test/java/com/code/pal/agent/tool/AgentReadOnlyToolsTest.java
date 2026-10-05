@@ -112,6 +112,22 @@ class AgentReadOnlyToolsTest {
     }
 
     @Test
+    void aFileRequestedOverAndOverIsSentAgainSoTheModelCannotGetStuck() throws Exception {
+        Files.writeString(workspace.resolve("App.tsx"), "export const App = () => null;");
+        AgentContext context = context();
+        ReadFileTool tool = new ReadFileTool();
+
+        tool.execute(Map.of("path", "App.tsx"), context);
+        boolean contentReturned = false;
+        for (int attempt = 0; attempt < 10 && !contentReturned; attempt++) {
+            @SuppressWarnings("unchecked") Map<String, Object> again = (Map<String, Object>) tool.execute(Map.of("path", "App.tsx"), context);
+            contentReturned = again.containsKey("content");
+        }
+
+        assertTrue(contentReturned, "a model that keeps asking has lost the content: it must get it back");
+    }
+
+    @Test
     void fileSummaryDiscoversDirectImportsWithoutReadingTheirContents() throws Exception {
         Files.createDirectories(workspace.resolve("src/auth"));
         Files.writeString(workspace.resolve("src/auth/Login.tsx"),

@@ -65,6 +65,19 @@ public class SecurityConfig {
     @Value("${app.cors.allowed-origins:http://localhost:5173}")
     private List<String> allowedOrigins;
 
+    /**
+     * The operator's own Supabase instance (often plain http locally). Sites may call any https API; this
+     * one origin is added so apps connected to it work too, never arbitrary http hosts.
+     */
+    @Value("${app.supabase.self-hosted.url:}")
+    private String selfHostedSupabase;
+
+    private String siteSources() {
+        String origin = selfHostedSupabase == null ? "" : selfHostedSupabase.trim().replaceAll("/+$", "");
+        if (origin.isEmpty()) return "";
+        return " " + origin + " " + origin.replaceFirst("^http", "ws");
+    }
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
@@ -87,7 +100,8 @@ public class SecurityConfig {
                             if (request.getRequestURI().startsWith("/p/")
                                     || request.getRequestURI().startsWith("/preview/")) {
                                 response.setHeader("Content-Security-Policy",
-                                        "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-ancestors 'self' "
+                                        "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: wss:" + siteSources()
+                                                + "; frame-ancestors 'self' "
                                                 + String.join(" ", allowedOrigins));
                             } else {
                                 response.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");

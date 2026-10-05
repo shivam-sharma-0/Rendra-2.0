@@ -48,6 +48,7 @@ public class SupabaseService {
     private final SupabaseMigrationRepository migrations;
     private final ProjectEnvironmentVariableRepository variables;
     private final SupabaseClient supabase;
+    private final SelfHostedSupabase selfHosted;
     private final DataCipher cipher;
     private final ProjectFiles files;
     private final ApplicationEventPublisher events;
@@ -56,7 +57,7 @@ public class SupabaseService {
     private final Map<UUID, ReentrantLock> applying = new ConcurrentHashMap<>();
 
     public SupabaseService(ProjectService projects, SupabaseConnectionRepository connections, SupabaseMigrationRepository migrations,
-                           ProjectEnvironmentVariableRepository variables, SupabaseClient supabase, DataCipher cipher,
+                           ProjectEnvironmentVariableRepository variables, SupabaseClient supabase, SelfHostedSupabase selfHosted, DataCipher cipher,
                            ProjectFiles files, ApplicationEventPublisher events, PlatformTransactionManager transactionManager,
                            @Value("${app.supabase.project-url-pattern:^https://([a-z0-9]{20})\\.supabase\\.co$}") String projectUrlPattern) {
         this.projects = projects;
@@ -64,6 +65,7 @@ public class SupabaseService {
         this.migrations = migrations;
         this.variables = variables;
         this.supabase = supabase;
+        this.selfHosted = selfHosted;
         this.cipher = cipher;
         this.files = files;
         this.events = events;
@@ -81,7 +83,7 @@ public class SupabaseService {
         return tx.execute(state -> {
             projects.requireCanEdit(userId, projectId);
             return connections.findById(projectId)
-                    .map(c -> new Status(true, c.getUrl(), c.getProjectRef(), c.getAccessTokenCipher() != null))
+                    .map(c -> new Status(true, c.getUrl(), c.getProjectRef(), migrationsEnabled(c)))
                     .orElse(new Status(false, null, null, false));
         });
     }
@@ -90,11 +92,15 @@ public class SupabaseService {
     public Status connect(Long userId, UUID projectId, String url, String anonKey, String accessToken) {
         tx.executeWithoutResult(state -> projects.requireManageable(userId, projectId));
         String cleanUrl = url == null ? "" : url.trim().replaceAll("/+$", "");
+        boolean onThisServer = selfHosted.matches(cleanUrl);
         Matcher match = projectUrl.matcher(cleanUrl);
-        if (!match.matches()) throw new SupabaseException("Use the project URL from Supabase settings, like https://<project>.supabase.co");
-        String projectRef = match.group(1);
+        if (!onThisServer && !match.matches()) {
+            throw new SupabaseException("Use the project URL from Supabase settings, like https://<project>.supabase.co");
+        }
+        String projectRef = onThisServer ? "self-hosted" : match.group(1);
         if (anonKey == null || anonKey.isBlank() || anonKey.length() > 2_000) throw new SupabaseException("The anon (public) key is required");
-        String token = accessToken == null || accessToken.isBlank() ? null : accessToken.trim();
+        // The self-hosted instance applies migrations over the server's own database connection: no token.
+        String token = onThisServer || accessToken == null || accessToken.isBlank() ? null : accessToken.trim();
         if (token != null && !cipher.available()) {
             throw new WorkflowStageException("This server cannot store access tokens yet (APP_DATA_KEY is not configured)");
         }
@@ -111,14 +117,16 @@ public class SupabaseService {
             connection.setUrl(cleanUrl);
             connection.setAnonKey(anonKey.trim());
             if (token != null) connection.setAccessTokenCipher(tokenCipher);
+            connection.setMode(onThisServer ? SupabaseConnection.Mode.SELF_HOSTED : SupabaseConnection.Mode.CLOUD);
+            if (onThisServer) connection.setAccessTokenCipher(null);
             connection.setConnectedBy(userId);
             connections.save(connection);
             setVariable(projectId, URL_VARIABLE, cleanUrl);
             setVariable(projectId, KEY_VARIABLE, anonKey.trim());
             events.publishEvent(new BuildVariables.Changed(projectId));
         });
-        log.info("supabase_connected projectId={} ref={} migrations={}", projectId, projectRef, tokenCipher != null);
-        return new Status(true, cleanUrl, projectRef, tokenCipher != null || hasToken(projectId));
+        log.info("supabase_connected projectId={} ref={} selfHosted={}", projectId, projectRef, onThisServer);
+        return status(userId, projectId);
     }
 
     public void disconnect(Long userId, UUID projectId) {
@@ -153,10 +161,18 @@ public class SupabaseService {
             projects.requireManageable(userId, projectId);
             return connections.findById(projectId).orElseThrow(() -> new WorkflowStageException("Connect Supabase first"));
         });
-        if (connection.getAccessTokenCipher() == null) {
-            throw new WorkflowStageException("Add a Supabase access token to apply migrations from here");
+        if (!migrationsEnabled(connection)) {
+            throw new WorkflowStageException(connection.getMode() == SupabaseConnection.Mode.SELF_HOSTED
+                    ? "This server has no database configured for its Supabase instance"
+                    : "Add a Supabase access token to apply migrations from here");
         }
-        String token = cipher.decrypt(connection.getAccessTokenCipher());
+        java.util.function.Consumer<String> runner;
+        if (connection.getMode() == SupabaseConnection.Mode.SELF_HOSTED) {
+            runner = selfHosted::runSql;
+        } else {
+            String token = cipher.decrypt(connection.getAccessTokenCipher());
+            runner = sql -> supabase.runSql(connection.getProjectRef(), token, sql);
+        }
         ReentrantLock lock = applying.computeIfAbsent(projectId, ignored -> new ReentrantLock());
         if (!lock.tryLock()) throw new WorkflowStageException("Migrations are already being applied for this project");
         try {
@@ -167,7 +183,7 @@ public class SupabaseService {
                 String name = pending.get(i);
                 String sql = read(projectId, name);
                 try {
-                    supabase.runSql(connection.getProjectRef(), token, sql);
+                    runner.accept(sql);
                 } catch (SupabaseException failure) {
                     log.warn("supabase_migration_failed projectId={} migration={} reason={}", projectId, name, failure.getMessage());
                     return new ApplyResult(done, name, failure.getMessage(), pending.subList(i + 1, pending.size()));
@@ -183,8 +199,9 @@ public class SupabaseService {
         }
     }
 
-    private boolean hasToken(UUID projectId) {
-        return tx.execute(state -> connections.findById(projectId).map(c -> c.getAccessTokenCipher() != null).orElse(false));
+    private boolean migrationsEnabled(SupabaseConnection connection) {
+        return connection.getMode() == SupabaseConnection.Mode.SELF_HOSTED
+                ? selfHosted.migrationsAvailable() : connection.getAccessTokenCipher() != null;
     }
 
     private Map<String, SupabaseMigration> appliedByName(UUID projectId) {

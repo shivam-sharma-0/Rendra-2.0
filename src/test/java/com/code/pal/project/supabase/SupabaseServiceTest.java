@@ -48,7 +48,7 @@ class SupabaseServiceTest {
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final DataCipher cipher = new DataCipher("test-data-key-0123456789");
     private final SupabaseService service = new SupabaseService(projects, connections(), migrations(), variables(),
-            new SupabaseClient(new ObjectMapper(), base), cipher, project.files, events, new FakeTransactions(),
+            new SupabaseClient(new ObjectMapper(), base), new SelfHostedSupabase("", "", "postgres", ""), cipher, project.files, events, new FakeTransactions(),
             "^http://127\\.0\\.0\\.1:\\d+/([a-z0-9]{20})$");
 
     @AfterEach
@@ -147,8 +147,9 @@ class SupabaseServiceTest {
                 String auth = exchange.getRequestHeaders().getFirst("Authorization");
                 int status;
                 String body = "{}";
-                if (path.equals("/" + REF + "/auth/v1/settings")) {
-                    status = ANON.equals(exchange.getRequestHeaders().getFirst("apikey")) ? 200 : 401;
+                if (path.equals("/" + REF + "/auth/v1/user")) {
+                    // Like Supabase: the gateway rejects an unknown key (401); auth answers 403 without a session.
+                    status = ANON.equals(exchange.getRequestHeaders().getFirst("apikey")) ? 403 : 401;
                 } else if (path.equals("/v1/projects/" + REF)) {
                     status = ("Bearer " + TOKEN).equals(auth) ? 200 : 401;
                 } else if (path.equals("/v1/projects/" + REF + "/database/query")) {
