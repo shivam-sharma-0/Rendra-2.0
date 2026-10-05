@@ -36,6 +36,7 @@ import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.tool.ToolExecutionResult;
 import com.code.pal.agent.usage.AgentUsagePolicy;
 import com.code.pal.agent.workspace.ProjectFiles;
+import com.code.pal.agent.preview.DraftPreviewService;
 import com.code.pal.agent.preview.SiteBuildService;
 import com.code.pal.agent.vision.VisionService;
 import com.code.pal.agent.validation.ProjectValidationService;
@@ -82,6 +83,8 @@ public class AgentRunner implements AgentRuntime {
     private static final Set<String> READ_ONLY_FOUNDATION_TOOLS = Set.of(
             "listFiles", "readFile", "searchCode", "getProjectMetadata", "getFileSummary");
     private static final Set<String> PLANNING_TOOLS = Set.of("setPlan", "updatePlanStep");
+    /** Tools that change staged files (a draft preview follows them). */
+    private static final Set<String> FILE_CHANGING_TOOLS = Set.of("createFile", "createFiles", "patchFile", "deleteFile", "renameFile");
     private static final Set<String> WRITE_TOOLS = Set.of("createFile", "createFiles", "patchFile", "deleteFile",
             "renameFile",
             "getDiagnostics", "runTypeCheck", "runBuild", "runTests", "validateChanges");
@@ -112,6 +115,8 @@ public class AgentRunner implements AgentRuntime {
     private final VisionService vision;
     /** Per-user daily token quota; null in focused tests, where no quota applies. */
     private final AgentUsagePolicy usage;
+    /** Draft previews of staged changes while a BUILD run works; null in focused tests. */
+    private final DraftPreviewService drafts;
 
     @Autowired
     public AgentRunner(LlmClient llm, IntentClassifier intentClassifier, ToolRegistry tools,
@@ -122,7 +127,8 @@ public class AgentRunner implements AgentRuntime {
             ObjectMapper objectMapper, ChangeSetService changeSets,
             ProjectValidationService validation, NotificationService notifications,
             ProjectArtifactService artifacts, GeneratedDatabaseService databases,
-            SiteBuildService sites, VisionService vision, AgentUsagePolicy usage) {
+            SiteBuildService sites, VisionService vision, AgentUsagePolicy usage, DraftPreviewService drafts) {
+        this.drafts = drafts;
         this.sites = sites;
         this.vision = vision;
         this.usage = usage;
@@ -161,7 +167,7 @@ public class AgentRunner implements AgentRuntime {
             ProjectValidationService validation, NotificationService notifications) {
         this(llm, intentClassifier, tools, toolExecutor, events, props, projectContexts, runRepository, projects,
                 messageRepository, realtime, files, heartbeat, queue, objectMapper, changeSets, validation,
-                notifications, null, null, null, null, null);
+                notifications, null, null, null, null, null, null);
     }
 
     /**
@@ -437,6 +443,7 @@ public class AgentRunner implements AgentRuntime {
             emitContextUsage(run, projectContext, runtime);
             return result(run, runtime, "Something went wrong while running the agent.", run.getError());
         } finally {
+            if (drafts != null) drafts.finish(run.getId());
             changeSets.discard(run.getId());
             validation.clear(run.getId());
             stopQuietly(beat);
@@ -575,6 +582,11 @@ public class AgentRunner implements AgentRuntime {
                     item.call.name());
             events.emit(run, AgentStepType.TOOL_RESULT, item.call.name(), auditToolResult(result));
         }
+        boolean wrote = false;
+        for (int index = 0; index < prepared.size(); index++) {
+            wrote |= results.get(index).success() && FILE_CHANGING_TOOLS.contains(prepared.get(index).call.name());
+        }
+        if (wrote && drafts != null && ctx.mode() == ProjectType.BUILD) drafts.changed(run.getProjectId(), run.getId(), ctx.root());
         return results.stream().map(this::toModelToolResult).toList();
     }
 
@@ -583,7 +595,7 @@ public class AgentRunner implements AgentRuntime {
             runtime.transitionPhase(AgentPhase.PLAN);
         else if (toolName.equals("updatePlanStep") && runtime.phase().ordinal() < AgentPhase.PLAN.ordinal())
             runtime.transitionPhase(AgentPhase.PLAN);
-        else if (Set.of("createFile", "createFiles", "patchFile", "deleteFile", "renameFile").contains(toolName))
+        else if (FILE_CHANGING_TOOLS.contains(toolName))
             runtime.transitionPhase(AgentPhase.MODIFY);
         else if (Set.of("getDiagnostics", "runTypeCheck", "runBuild", "runTests", "validateChanges").contains(toolName))
             runtime.transitionPhase(AgentPhase.VALIDATE);

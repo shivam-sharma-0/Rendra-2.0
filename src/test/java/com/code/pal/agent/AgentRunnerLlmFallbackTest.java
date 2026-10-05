@@ -244,7 +244,7 @@ class AgentRunnerLlmFallbackTest {
                     new ProjectContextService(properties, new ObjectMapper()), runs, projects, messages,
                     mock(RealtimeService.class), workspace.files, heartbeat, mock(AgentJobQueue.class), new ObjectMapper(),
                     mock(ChangeSetService.class), mock(ProjectValidationService.class), mock(NotificationService.class),
-                    null, null, null, null, usage);
+                    null, null, null, null, usage, null);
         }
     }
 }

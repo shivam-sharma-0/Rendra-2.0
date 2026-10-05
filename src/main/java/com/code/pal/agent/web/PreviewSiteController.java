@@ -21,15 +21,27 @@ import java.util.UUID;
 public class PreviewSiteController {
     private final JwtService jwt;
     private final PreviewService preview;
+    private final com.code.pal.agent.preview.DraftPreviewService drafts;
 
     @GetMapping({"/preview/{token}", "/preview/{token}/**"})
     public ResponseEntity<byte[]> serve(@PathVariable String token, HttpServletRequest request) {
         // Built sites reference assets relatively; resolved against a URL without the slash they would miss.
         if (request.getRequestURI().equals("/preview/" + token)) return slashRedirect(request);
         try {
-            UUID projectId = jwt.previewProjectId(jwt.parse(token));
+            var claims = jwt.parse(token);
+            UUID projectId = jwt.previewProjectId(claims);
+            UUID draftRun = jwt.previewDraftRun(claims);
             String path = relativePath(request.getRequestURI(), token);
-            PreviewService.PreviewFile file = preview.serve(projectId, path.isBlank() ? "index.html" : path);
+            String requested = path.isBlank() ? "index.html" : path;
+            PreviewService.PreviewFile file;
+            if (draftRun == null) {
+                file = preview.serve(projectId, requested);
+            } else {
+                // A draft lives only while its run does; afterwards the link is gone (the app shows the site).
+                String site = drafts.draftSite(projectId, draftRun);
+                if (site == null) throw new IllegalStateException("No draft");
+                file = preview.serveSite(projectId, site, requested);
+            }
             return ResponseEntity.ok()
                     .header(HttpHeaders.CONTENT_TYPE, file.contentType())
                     .header(HttpHeaders.CACHE_CONTROL, "no-store")

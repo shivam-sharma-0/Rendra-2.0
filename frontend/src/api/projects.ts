@@ -78,6 +78,10 @@ export const PROJECT_TYPES: ProjectType[] = ['BUILD', 'PLAN']
 
 /** The preview's build state; `version` changes whenever the served content does (realtime PREVIEW_STATUS). */
 export type PreviewStatus = { state: 'BUILDING' | 'READY' | 'FAILED'; version: string | null; error: string | null }
+/** A running build's unvalidated staged changes, built for the preview (realtime PREVIEW_DRAFT). */
+export type PreviewDraft = { runId: string; version: string; url: string }
+/** Realtime PREVIEW_DRAFT: a new draft (`active`) or the run ended and its draft is gone. */
+export type PreviewDraftEvent = { runId: string; version?: string; active: boolean }
 
 export const projectApi = {
   list: (
@@ -96,7 +100,7 @@ export const projectApi = {
   get: (id: string, opts?: ReadOpts) => apiGet<Project>(`/api/projects/${id}`, opts),
   // available: something can be shown (a built site, or a static site's files); status: the latest build
   previewToken: (id: string, opts?: ReadOpts) =>
-    apiGet<{ token: string; url: string; available: boolean; status: PreviewStatus }>(`/api/projects/${id}/preview-token`, opts),
+    apiGet<{ token: string; url: string; available: boolean; status: PreviewStatus; draft: PreviewDraft | null }>(`/api/projects/${id}/preview-token`, opts),
   uploadAttachments: (id: string, files: File[]) => apiUpload<Attachment[]>(`/api/projects/${id}/attachments`, files),
   remove: (id: string) => apiSend<void>('DELETE', `/api/projects/${id}`),
   publish: (id: string) => apiSend<Project>('POST', `/api/projects/${id}/publish`),

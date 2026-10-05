@@ -34,6 +34,8 @@ public class JwtService {
     private static final String CLAIM_PUBLIC_ID = "pub";
     private static final String CLAIM_ROLE = "role";
     private static final String CLAIM_PROJECT_ID = "pid";
+    /** On a preview token: the run whose draft (unvalidated staged changes) it shows. */
+    private static final String CLAIM_DRAFT_RUN = "drf";
 
     private final RSAPrivateKey privateKey;
     private final RSAPublicKey publicKey;
@@ -66,8 +68,15 @@ public class JwtService {
 
     /** Short-lived bearer-less URL token used only by an authenticated project's preview iframe. */
     public String generatePreviewToken(java.util.UUID projectId) {
+        return generatePreviewToken(projectId, null);
+    }
+
+    /** A preview token for one run's draft; {@code draftRunId} null is the project's normal preview. */
+    public String generatePreviewToken(java.util.UUID projectId, java.util.UUID draftRunId) {
         Instant now = Instant.now();
-        return Jwts.builder()
+        var builder = Jwts.builder();
+        if (draftRunId != null) builder.claim(CLAIM_DRAFT_RUN, draftRunId.toString());
+        return builder
                 .subject(projectId.toString())
                 .claim(CLAIM_TYPE, PREVIEW)
                 .claim(CLAIM_PROJECT_ID, projectId.toString())
@@ -115,5 +124,11 @@ public class JwtService {
     public java.util.UUID previewProjectId(Claims claims) {
         if (!PREVIEW.equals(tokenType(claims))) throw new IllegalArgumentException("Not a preview token");
         return java.util.UUID.fromString(claims.get(CLAIM_PROJECT_ID, String.class));
+    }
+
+    /** The run whose draft a preview token shows, or null for the normal preview. */
+    public java.util.UUID previewDraftRun(Claims claims) {
+        String run = claims.get(CLAIM_DRAFT_RUN, String.class);
+        return run == null ? null : java.util.UUID.fromString(run);
     }
 }

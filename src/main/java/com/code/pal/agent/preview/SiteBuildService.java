@@ -179,33 +179,59 @@ public class SiteBuildService {
             return Result.notNeeded();
         }
         String id = UUID.randomUUID().toString();
-        String work = WORK + "/" + id;
         long started = System.nanoTime();
+        String error = compile(projectId, stack, build, ".", SITE + "/" + id);
+        if (error != null) return Result.failed(error);
+        String previous = currentSite(projectId);
+        files.writeText(projectId, SITE, CURRENT, id);
+        // The previous site stays one more build: a request that read the old CURRENT can still finish.
+        java.util.Set<String> keep = new java.util.HashSet<>(List.of(id));
+        if (previous != null) keep.add(previous.substring(SITE.length() + 1));
+        prune(projectId, keep);
+        log.info("site_build_done projectId={} stack={} elapsedMs={}", projectId, stack.id(), (System.nanoTime() - started) / 1_000_000);
+        return new Result(true, null);
+    }
+
+    /**
+     * Builds {@code sourceRoot} (the agent's staged changes, for a draft) into {@code target}, which then
+     * holds an index.html. The served site is not touched. Returns why it failed, or null.
+     */
+    public String buildCopy(UUID projectId, String sourceRoot, String target) {
+        StackPack stack = stacks.detect(files, projectId, sourceRoot);
+        StackPack.PreviewBuild build = stack.previewBuild(files, projectId, sourceRoot);
+        if (build != null) return compile(projectId, stack, build, sourceRoot, target);
+        // A static site: its own files are the site, from the folder holding its entry page.
+        String entry = PreviewService.entryFolder(files, projectId, sourceRoot);
+        if (entry == null) return "The project has no index.html yet";
         try {
-            sandbox.copyTree(projectId, ".", work);
+            sandbox.copyTree(projectId, entry.equals(".") ? sourceRoot : sourceRoot + "/" + entry, target);
+            return null;
+        } catch (RuntimeException error) {
+            return "Copy failed: " + error.getMessage();
+        }
+    }
+
+    /** Builds a copy of {@code source} (dependencies linked in) and copies its output to {@code target}. */
+    private String compile(UUID projectId, StackPack stack, StackPack.PreviewBuild build, String source, String target) {
+        String work = WORK + "/" + UUID.randomUUID();
+        try {
+            sandbox.copyTree(projectId, source, work);
             stack.applyBuildVariables(files, projectId, work, variables.variables(projectId));
             DependencyService.Preparation deps = dependencies.prepare(projectId, work);
-            if (deps.failed()) return Result.failed(deps.error());
+            if (deps.failed()) return deps.error();
             SandboxPort.CommandResult result = sandbox.exec(projectId, work, build.command());
             if (!result.success()) {
-                return Result.failed("Build failed: " + (result.timedOut() ? "timed out" : tail(result.stdout() + "\n" + result.error())));
+                return "Build failed: " + (result.timedOut() ? "timed out" : tail(result.stdout() + "\n" + result.error()));
             }
             String output = build.outputDirectories().stream()
                     .filter(directory -> files.regularFile(projectId, work + "/" + directory, "index.html"))
                     .findFirst().orElse(null);
-            if (output == null) return Result.failed("The build produced no index.html in " + build.outputDirectories());
-            sandbox.copyTree(projectId, work + "/" + output, SITE + "/" + id);
-            String previous = currentSite(projectId);
-            files.writeText(projectId, SITE, CURRENT, id);
-            // The previous site stays one more build: a request that read the old CURRENT can still finish.
-            java.util.Set<String> keep = new java.util.HashSet<>(List.of(id));
-            if (previous != null) keep.add(previous.substring(SITE.length() + 1));
-            prune(projectId, keep);
-            log.info("site_build_done projectId={} stack={} elapsedMs={}", projectId, stack.id(), (System.nanoTime() - started) / 1_000_000);
-            return new Result(true, null);
+            if (output == null) return "The build produced no index.html in " + build.outputDirectories();
+            sandbox.copyTree(projectId, work + "/" + output, target);
+            return null;
         } catch (RuntimeException error) {
             log.warn("site_build_error projectId={} reason={}", projectId, error.getMessage());
-            return Result.failed("Build failed: " + error.getMessage());
+            return "Build failed: " + error.getMessage();
         } finally {
             removeQuietly(projectId, work);
         }

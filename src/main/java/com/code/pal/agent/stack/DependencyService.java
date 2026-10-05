@@ -37,6 +37,7 @@ public class DependencyService {
     private static final int MAX_SETS = 3;
     private static final int ERROR_TAIL_CHARS = 1_500;
 
+    private final java.util.Map<UUID, java.util.concurrent.locks.ReentrantLock> locks = new java.util.concurrent.ConcurrentHashMap<>();
     private final StackPacks stacks;
     private final ProjectFiles files;
     private final SandboxPort sandbox;
@@ -55,6 +56,18 @@ public class DependencyService {
      * returned so validation can report it to the model.
      */
     public Preparation prepare(UUID projectId, String root) {
+        // One at a time per project: a draft build and a validation may need the same set at once, and
+        // two installs into one folder (or a prune during an install) would break both.
+        java.util.concurrent.locks.ReentrantLock lock = locks.computeIfAbsent(projectId, id -> new java.util.concurrent.locks.ReentrantLock());
+        lock.lock();
+        try {
+            return prepareLocked(projectId, root);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private Preparation prepareLocked(UUID projectId, String root) {
         StackPack stack = stacks.detect(files, projectId, root);
         List<String> command = stack.installCommand(files, projectId, root);
         if (command.isEmpty() || stack.dependencyDirectory() == null) return new Preparation(false, false, null);

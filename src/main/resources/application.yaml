@@ -265,6 +265,8 @@ app:
       runtime-check: ${AGENT_SANDBOX_RUNTIME_CHECK:true}
       browser-image: ${AGENT_SANDBOX_BROWSER_IMAGE:codepal-browser}
       browser-timeout-ms: ${AGENT_SANDBOX_BROWSER_TIMEOUT_MS:60000}
+      # Draft preview: staged changes are built for the preview while the agent works (0 = off).
+      draft-preview-quiet-ms: ${AGENT_SANDBOX_DRAFT_PREVIEW_QUIET_MS:3000}
 
 # Logging 
 # Rolling file config (datewise folder -> hourwise files) lives in logback-spring.xml.

@@ -273,6 +273,11 @@ public class AgentProperties {
         /** Image repository for the browser probe; the tag is derived from the probe's content. */
         private String browserImage = "codepal-browser";
         private long browserTimeoutMs = 60_000;
+        /**
+         * While a BUILD run works, build its staged changes into a draft preview once the agent has
+         * stopped writing for this long; 0 turns drafts off.
+         */
+        private long draftPreviewQuietMs = 3_000;
         /** Building the browser image downloads Chromium once. */
         private long browserImageBuildTimeoutMs = 900_000;
     }

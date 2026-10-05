@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import {
   agentApi, messageApi, projectApi, requirementsApi,
   type AgentRun, type AgentStep, type FileNode, type Message, type MessageFeedback, type MessageRole, type StagedFile,
-  type Project, type ProjectType, type ProjectRole, type RequirementSession, type PreviewStatus,
+  type Project, type ProjectType, type ProjectRole, type RequirementSession, type PreviewStatus, type PreviewDraftEvent,
 } from '../api/projects'
 import {
   qk, useProjectMembers, useShareProject, useUpdateProjectMemberRole, useRemoveProjectMember,
@@ -82,7 +82,8 @@ export default function ProjectPage() {
   const [messages, setMessages] = useState<Message[]>([])
   // Latest preview build state pushed by the backend (PREVIEW_STATUS); the preview reloads on a new version.
   const [previewUpdate, setPreviewUpdate] = useState<PreviewStatus | null>(null)
-  useEffect(() => { setPreviewUpdate(null) }, [id])
+  const [draftUpdate, setDraftUpdate] = useState<PreviewDraftEvent | null>(null)
+  useEffect(() => { setPreviewUpdate(null); setDraftUpdate(null) }, [id])
   // The header's reload button: bumped here, followed by the preview panel.
   const [previewReloadRequest, setPreviewReloadRequest] = useState(0)
   const [runs, setRuns] = useState<AgentRun[]>([])
@@ -281,6 +282,11 @@ export default function ProjectPage() {
     if (message.type === 'CONNECTED') {
       void loadLatestMessages().then(setMessages).catch(() => undefined)
       void refreshTimeline().catch(() => undefined)
+      return
+    }
+    if (message.type === 'PREVIEW_DRAFT') {
+      const update = message.payload as (PreviewDraftEvent & { projectId?: string }) | undefined
+      if (update?.projectId === id) setDraftUpdate({ runId: update.runId, version: update.version, active: update.active })
       return
     }
     if (message.type === 'PREVIEW_STATUS') {
@@ -742,7 +748,7 @@ export default function ProjectPage() {
                   : tab === 'analytics' ? <AnalyticsPanel projectId={id} active={tab === 'analytics'} />
                     : tab === 'security' ? <SecurityPanel projectId={id} active={tab === 'security'} />
                       : tab === 'database' ? <DatabasePanel projectId={id} />
-                        : <PreviewPanel project={project} update={previewUpdate} reloadRequest={previewReloadRequest} />}
+                        : <PreviewPanel project={project} update={previewUpdate} draftUpdate={draftUpdate} reloadRequest={previewReloadRequest} />}
           </div>
         </section>
       </div>
@@ -1657,10 +1663,12 @@ function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest }: {
 }
 
 /* ── Preview ──────────────────────────────────────────────────────────────── */
-function PreviewPanel({ project, update, reloadRequest }: { project: Project | null; update: PreviewStatus | null; reloadRequest: number }) {
+function PreviewPanel({ project, update, draftUpdate, reloadRequest }: {
+  project: Project | null; update: PreviewStatus | null; draftUpdate: PreviewDraftEvent | null; reloadRequest: number
+}) {
   // The backend returns the full URL: previews live on a separate sites origin (never the API
   // origin), so the generated app cannot reach the API with the viewer's cookies.
-  const [preview, setPreview] = useState<{ url: string; available: boolean } | null>(null)
+  const [preview, setPreview] = useState<{ url: string; available: boolean; draft: { version: string; url: string } | null } | null>(null)
   const [status, setStatus] = useState<PreviewStatus | null>(null)
   const [previewError, setPreviewError] = useState(false)
   const [showPublished, setShowPublished] = useState(false)
@@ -1680,7 +1688,7 @@ function PreviewPanel({ project, update, reloadRequest }: { project: Project | n
     void projectApi.previewToken(projectId)
       .then((response) => {
         if (cancelled) return
-        setPreview({ url: response.url, available: response.available })
+        setPreview({ url: response.url, available: response.available, draft: response.draft })
         setStatus(response.status)
         shownVersion.current = response.status.version
       })
@@ -1689,15 +1697,24 @@ function PreviewPanel({ project, update, reloadRequest }: { project: Project | n
   }, [projectId, reloads])
 
   // A finished build with new content reloads the frame; building/failed only change the status line,
-  // so the last good version stays visible meanwhile.
+  // so the last good version stays visible meanwhile. While a draft is shown, the draft decides.
+  const draftShown = useRef<string | null>(null)
+  draftShown.current = preview?.draft?.version ?? null
   useEffect(() => {
     if (!update) return
     setStatus(update)
-    if (update.state === 'READY' && update.version !== shownVersion.current) setReloads((n) => n + 1)
+    if (update.state === 'READY' && update.version !== shownVersion.current && !draftShown.current) setReloads((n) => n + 1)
   }, [update])
 
+  // A new draft while the agent works, or its end (back to the committed site): fetch the right URL.
+  useEffect(() => {
+    if (!draftUpdate) return
+    if (draftUpdate.active ? draftUpdate.version !== draftShown.current : draftShown.current !== null) setReloads((n) => n + 1)
+  }, [draftUpdate])
+
   const publishedView = live && showPublished
-  const url = publishedView ? project?.publishedUrl : preview?.available ? preview.url : null
+  const draft = publishedView ? null : preview?.draft ?? null
+  const url = publishedView ? project?.publishedUrl : draft ? draft.url : preview?.available ? preview.url : null
   const building = status?.state === 'BUILDING'
   const failed = status?.state === 'FAILED'
 
@@ -1710,8 +1727,10 @@ function PreviewPanel({ project, update, reloadRequest }: { project: Project | n
             <button type="button" role="tab" aria-selected={showPublished} className={showPublished ? 'on' : ''} onClick={() => setShowPublished(true)}>Published</button>
           </div>
         )}
-        <span className={'pw-preview-state' + (failed && !publishedView ? ' failed' : '')} title={failed && !publishedView ? status?.error ?? undefined : undefined} aria-live="polite">
+        {draft && <span className="pw-preview-draft">Draft</span>}
+        <span className={'pw-preview-state' + (failed && !publishedView && !draft ? ' failed' : '')} title={failed && !publishedView ? status?.error ?? undefined : undefined} aria-live="polite">
           {publishedView ? 'Published version'
+            : draft ? 'Draft — Rendra is still working, not checked yet'
             : building ? 'Updating preview…'
               : failed ? (preview?.available ? 'Build failed — showing the last working version' : 'Build failed')
                 : preview?.available ? 'Up to date' : ''}

@@ -45,6 +45,26 @@ public class PreviewService {
         return read(projectId, site != null ? siteFile(projectId, site, path) : projectFile(projectId, path));
     }
 
+    /** A file of a site folder that holds its own index.html (a draft of the agent's staged changes). */
+    public PreviewFile serveSite(UUID projectId, String site, String requested) {
+        return read(projectId, siteFile(projectId, site, safePath(requested)));
+    }
+
+    /** The folder under {@code root} holding a static site's entry page ("." for the root), or null. */
+    static String entryFolder(ProjectFiles files, UUID projectId, String root) {
+        for (String candidate : indexCandidates()) {
+            try {
+                if (files.regularFile(projectId, root, candidate)) {
+                    int slash = candidate.lastIndexOf('/');
+                    return slash < 0 ? "." : candidate.substring(0, slash);
+                }
+            } catch (IllegalArgumentException invalid) {
+                // not a servable path
+            }
+        }
+        return null;
+    }
+
     /** Whether the preview has anything to show: a built site, or the files of a project that needs no build. */
     public boolean available(UUID projectId) {
         if (sites.currentSite(projectId) != null) return true;
