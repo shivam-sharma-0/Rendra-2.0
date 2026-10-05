@@ -1,6 +1,7 @@
 package com.code.pal.agent.context;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.preview.BuildVariables;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.ProjectPaths;
 import com.code.pal.message.domain.Message;
@@ -58,10 +59,17 @@ public class ProjectContextService {
 
     private final AgentProperties properties;
     private final ObjectMapper objectMapper;
+    private final BuildVariables variables;
 
-    public ProjectContextService(AgentProperties properties, ObjectMapper objectMapper) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public ProjectContextService(AgentProperties properties, ObjectMapper objectMapper, BuildVariables variables) {
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.variables = variables;
+    }
+
+    public ProjectContextService(AgentProperties properties, ObjectMapper objectMapper) {
+        this(properties, objectMapper, BuildVariables.NONE);
     }
 
     /**
@@ -76,7 +84,7 @@ public class ProjectContextService {
         Set<String> mentioned = explicitPaths(userRequest);
         Set<String> open = normalizePaths(currentlyOpenFiles);
         ProjectMap map = createMap(sources, scan, mentioned, open);
-        RenderedMap rendered = render(sources, map, mentioned, open, trace);
+        RenderedMap rendered = render(sources, map, mentioned, open, trace, variables.variables(projectId).keySet());
         int remainingBudget = Math.max(256, properties.getContextBudgetChars() - rendered.text().length());
         int historyBudget = Math.min(Math.max(256, properties.getConversationBudgetChars()), remainingBudget);
         ConversationSelection conversation = selectConversation(history, userRequest, historyBudget);
@@ -174,7 +182,7 @@ public class ProjectContextService {
     }
 
     private RenderedMap render(Sources sources, ProjectMap map, Set<String> mentioned, Set<String> open,
-                               ProjectContextTrace trace) {
+                               ProjectContextTrace trace, Collection<String> variableNames) {
         int budget = Math.max(256, Math.min(properties.getProjectMapBudgetChars(),
                 Math.max(256, properties.getContextBudgetChars() / 2)));
         StringBuilder out = new StringBuilder();
@@ -188,6 +196,11 @@ public class ProjectContextService {
         append(out, budget, "Routes: " + joined(map.routes()) + "\n");
         append(out, budget, "Features/modules: " + joined(map.featureModules()) + "\n");
         append(out, budget, "Relevant dependencies: " + map.relevantDependencies() + "\n");
+        if (!variableNames.isEmpty()) {
+            // Names only: the user sets the values, and they are applied when the site is built.
+            append(out, budget, "Build-time environment variables (read with import.meta.env.NAME; values are set by the user): "
+                    + String.join(", ", variableNames) + "\n");
+        }
         map.manifests().forEach(path -> trace.selected(path, ContextSelectionReason.PROJECT_MANIFEST, 0));
         map.configurationFiles().forEach(path -> trace.selected(path, ContextSelectionReason.PROJECT_CONFIGURATION, 0));
 

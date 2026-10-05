@@ -95,6 +95,18 @@ class ProjectContextServiceTest {
     }
 
     @Test
+    void theAgentSeesVariableNamesButNeverTheirValues() {
+        project.write("package.json", "{}");
+        ProjectContextService service = new ProjectContextService(new AgentProperties(), new ObjectMapper(),
+                projectId -> java.util.Map.of("VITE_SUPABASE_URL", "https://secret-project.supabase.co"));
+
+        ProjectContext context = service.build(project.files, project.projectId, ".", "Add login", List.of(), List.of());
+
+        assertTrue(context.projectContextMessage().contains("VITE_SUPABASE_URL"));
+        assertFalse(context.projectContextMessage().contains("secret-project"));
+    }
+
+    @Test
     void summarizesImportsAndExportsWithoutReturningSourceBody() throws Exception {
         Path file = workspace.resolve("src/features/auth/Login.tsx");
         Files.createDirectories(file.getParent());

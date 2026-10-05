@@ -41,6 +41,7 @@ public class RuntimeCheckService {
     private final DependencyService dependencies;
     private final AgentProperties properties;
     private final ObjectMapper objectMapper;
+    private final com.code.pal.agent.preview.BuildVariables variables;
 
     /** Runtime problems the staged change introduced; empty when there are none or the check could not run. */
     public List<ProjectDiagnostic> check(AgentContext context) {
@@ -87,6 +88,7 @@ public class RuntimeCheckService {
         StackPack stack = stacks.detect(files, projectId, copy);
         StackPack.PreviewBuild build = stack.diagnosticBuild(files, projectId, copy);
         if (build == null) return files.regularFile(projectId, copy, "index.html") ? copy : null;
+        stack.applyBuildVariables(files, projectId, copy, variables.variables(projectId));
         // A broken install or build is already reported by validation; nothing to load then.
         if (dependencies.prepare(projectId, copy).failed()) return null;
         if (!sandbox.exec(projectId, copy, build.command()).success()) return null;

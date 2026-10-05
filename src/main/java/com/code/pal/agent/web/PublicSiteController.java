@@ -30,7 +30,7 @@ public class PublicSiteController {
         if (request.getRequestURI().equals("/p/" + slug)) return PreviewSiteController.slashRedirect(request);
         UUID projectId = projects.resolvePublishedProject(slug);
         String path = relativePath(request.getRequestURI(), slug);
-        PreviewService.PreviewFile file = preview.serve(projectId, path.isBlank() ? "index.html" : path);
+        PreviewService.PreviewFile file = preview.servePublished(projectId, path.isBlank() ? "index.html" : path);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, file.contentType())
                 .header(HttpHeaders.CACHE_CONTROL, "no-cache")

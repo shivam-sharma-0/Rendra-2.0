@@ -103,6 +103,19 @@ public class NodePack implements StackPack {
         return null;
     }
 
+    /**
+     * Vite loads {@code .env.production.local} last for a production build, so these values win over
+     * any .env file in the project. Single-quoted values are read literally (validated: no quotes or
+     * line breaks).
+     */
+    @Override
+    public void applyBuildVariables(ProjectFiles files, UUID projectId, String root, Map<String, String> variables) {
+        if (variables.isEmpty() || !files.regularFile(projectId, root, MANIFEST)) return;
+        StringBuilder dotenv = new StringBuilder("# Written by the backend for this build only.\n");
+        variables.forEach((name, value) -> dotenv.append(name).append("='").append(value).append("'\n"));
+        files.writeText(projectId, root, ".env.production.local", dotenv.toString());
+    }
+
     @Override
     public PreviewBuild diagnosticBuild(ProjectFiles files, UUID projectId, String root) {
         PreviewBuild build = previewBuild(files, projectId, root);

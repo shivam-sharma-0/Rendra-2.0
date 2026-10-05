@@ -36,7 +36,8 @@ class SiteBuildServiceTest {
     private final List<List<String>> commands = new ArrayList<>();
     private String nextBuildOutput = "<h1>v1</h1>";
     private final SiteBuildService sites = new SiteBuildService(new StackPacks(new ObjectMapper()), project.files, sandbox, dependencies);
-    private final PreviewService preview = new PreviewService(project.files, sites);
+    private final PublishedSiteService published = new PublishedSiteService(sites, project.files, sandbox);
+    private final PreviewService preview = new PreviewService(project.files, sites, published);
 
     SiteBuildServiceTest() {
         when(dependencies.prepare(any(), anyString())).thenReturn(new DependencyService.Preparation(true, false, null));
@@ -117,6 +118,65 @@ class SiteBuildServiceTest {
         assertThrows(ResponseStatusException.class, () -> preview.serve(project.projectId, "assets/missing.js"));
         assertEquals("<h1>v1</h1>", text(preview.serve(project.projectId, ".codepal/site/CURRENT")),
                 "internal files are never served");
+    }
+
+    @Test
+    void thePublishedSiteIsASnapshotUntilTheNextPublish() {
+        project.write("package.json", VITE);
+        nextBuildOutput = "<h1>reviewed</h1>";
+        published.publish(project.projectId);
+        nextBuildOutput = "<h1>agent kept working</h1>";
+        sites.build(project.projectId);
+
+        assertEquals("<h1>agent kept working</h1>", text(preview.serve(project.projectId, "")), "the preview follows the project");
+        assertEquals("<h1>reviewed</h1>", text(preview.servePublished(project.projectId, "")), "visitors keep the published snapshot");
+
+        published.publish(project.projectId);
+        assertEquals("<h1>agent kept working</h1>", text(preview.servePublished(project.projectId, "")));
+    }
+
+    @Test
+    void aBuildThatFailsPublishesNothingAndTheOldSnapshotStays() {
+        project.write("package.json", VITE);
+        published.publish(project.projectId);
+        nextBuildOutput = null;
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> published.publish(project.projectId));
+
+        assertTrue(failure.getMessage().contains("does not build"), failure.getMessage());
+        assertEquals("<h1>v1</h1>", text(preview.servePublished(project.projectId, "")));
+    }
+
+    @Test
+    void aStaticSiteIsPublishedFromItsFilesAndUnpublishingTakesItDown() {
+        project.write("index.html", "<h1>static</h1>").write("styles.css", "h1{}");
+
+        published.publish(project.projectId);
+        project.write("index.html", "<h1>edited after publishing</h1>");
+
+        assertEquals("<h1>static</h1>", text(preview.servePublished(project.projectId, "")));
+        assertEquals("h1{}", text(preview.servePublished(project.projectId, "styles.css")));
+        published.unpublish(project.projectId);
+        assertThrows(ResponseStatusException.class, () -> preview.servePublished(project.projectId, ""));
+    }
+
+    @Test
+    void buildVariablesReachTheBuildButNeverTheProject() {
+        project.write("package.json", VITE);
+        List<String> seen = new ArrayList<>();
+        doAnswer(call -> {
+            String root = call.getArgument(1);
+            seen.add(project.read(root + "/.env.production.local"));
+            project.write(root + "/dist/index.html", "<h1>ok</h1>");
+            return new SandboxPort.CommandResult(true, 0, "", "");
+        }).when(sandbox).exec(any(), anyString(), any());
+        SiteBuildService withVariables = new SiteBuildService(new StackPacks(new ObjectMapper()), project.files, sandbox,
+                dependencies, projectId -> java.util.Map.of("VITE_API_URL", "https://api.example.test"));
+
+        assertTrue(withVariables.build(project.projectId).built());
+
+        assertTrue(seen.getFirst().contains("VITE_API_URL='https://api.example.test'"), seen.toString());
+        assertFalse(project.exists(".env.production.local"), "values are not written into the project");
     }
 
     private static String text(PreviewService.PreviewFile file) {

@@ -30,11 +30,22 @@ public class PreviewService {
 
     private final ProjectFiles files;
     private final SiteBuildService sites;
+    private final PublishedSiteService published;
+
+    /** The published snapshot (for {@code /p/<slug>/}): 404 when nothing is published. */
+    public PreviewFile servePublished(UUID projectId, String requested) {
+        String site = published.publishedSite(projectId);
+        if (site == null) throw notFound();
+        return read(projectId, siteFile(projectId, site, safePath(requested)));
+    }
 
     public PreviewFile serve(UUID projectId, String requested) {
         String path = safePath(requested);
         String site = sites.currentSite(projectId);
-        String target = site != null ? siteFile(projectId, site, path) : projectFile(projectId, path);
+        return read(projectId, site != null ? siteFile(projectId, site, path) : projectFile(projectId, path));
+    }
+
+    private PreviewFile read(UUID projectId, String target) {
         if (target == null) throw notFound();
         try {
             return new PreviewFile(files.readBytes(projectId, ".", target, MAX_BYTES), contentType(target));

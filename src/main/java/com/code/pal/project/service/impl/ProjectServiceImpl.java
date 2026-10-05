@@ -73,6 +73,7 @@ public class ProjectServiceImpl implements ProjectService {
     /** Published sites live on the separate user-content origin, never on the API origin. */
     private final SitesOrigin sites;
     private final AgentTurnAdmission admission;
+    private final com.code.pal.agent.preview.PublishedSiteService publishedSites;
 
     @Override
     @Transactional
@@ -285,6 +286,12 @@ public class ProjectServiceImpl implements ProjectService {
                 && project.getLifecycleStage() != ProjectStage.LIVE) {
             throw new WorkflowStageException("Review the completed build before deploying it");
         }
+        // Visitors get a snapshot of the site as built now; later agent runs only change the preview.
+        try {
+            publishedSites.publish(projectId);
+        } catch (IllegalStateException notPublishable) {
+            throw new WorkflowStageException(notPublishable.getMessage());
+        }
         if (project.getPublicSlug() == null)
             project.setPublicSlug(uniqueSlug(project.getName()));
         project.setDeploymentStatus(DeploymentStatus.LIVE);
@@ -301,6 +308,7 @@ public class ProjectServiceImpl implements ProjectService {
         Project project = requireManageable(actorId, projectId);
         project.setDeploymentStatus(DeploymentStatus.NONE);
         project.setIsPublic(false);
+        publishedSites.unpublish(projectId);
         if (project.getType() == ProjectType.BUILD) project.setLifecycleStage(ProjectStage.REVIEW);
         log.info("Project unpublished id={} by={}", projectId, actorId);
         return ProjectResponse.from(project);

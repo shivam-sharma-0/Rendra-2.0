@@ -65,7 +65,8 @@ class RuntimeCheckDockerIT {
         FileChangeRepository changes = mock(FileChangeRepository.class);
         when(changes.save(any())).thenAnswer(call -> call.getArgument(0));
         ChangeSetService changeSets = new ChangeSetService(changes, mock(AgentRunRepository.class), mapper, properties, files, sandbox);
-        RuntimeCheckService runtime = new RuntimeCheckService(changeSets, stacks, files, sandbox, dependencies, properties, mapper);
+        RuntimeCheckService runtime = new RuntimeCheckService(changeSets, stacks, files, sandbox, dependencies, properties, mapper,
+                com.code.pal.agent.preview.BuildVariables.NONE);
         ProjectValidationService validation = new ProjectValidationService(changeSets, stacks, properties, files, sandbox,
                 dependencies, runtime);
 

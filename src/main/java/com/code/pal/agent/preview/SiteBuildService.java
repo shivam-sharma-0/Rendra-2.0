@@ -39,14 +39,29 @@ public class SiteBuildService {
     private final ProjectFiles files;
     private final SandboxPort sandbox;
     private final DependencyService dependencies;
+    private final BuildVariables variables;
     private final Map<UUID, ReentrantLock> locks = new ConcurrentHashMap<>();
     private final ExecutorService background = Executors.newVirtualThreadPerTaskExecutor();
 
-    public SiteBuildService(StackPacks stacks, ProjectFiles files, SandboxPort sandbox, DependencyService dependencies) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public SiteBuildService(StackPacks stacks, ProjectFiles files, SandboxPort sandbox, DependencyService dependencies,
+                            BuildVariables variables) {
         this.stacks = stacks;
         this.files = files;
         this.sandbox = sandbox;
         this.dependencies = dependencies;
+        this.variables = variables;
+    }
+
+    /** For tests: no build variables. */
+    public SiteBuildService(StackPacks stacks, ProjectFiles files, SandboxPort sandbox, DependencyService dependencies) {
+        this(stacks, files, sandbox, dependencies, BuildVariables.NONE);
+    }
+
+    /** New values must reach the preview: rebuild once the change is committed. */
+    @org.springframework.transaction.event.TransactionalEventListener(fallbackExecution = true)
+    public void onVariablesChanged(BuildVariables.Changed changed) {
+        buildLater(changed.projectId());
     }
 
     /** {@code built}: a new site is live. {@code error}: why not (the previous site, if any, stays live). */
@@ -102,6 +117,7 @@ public class SiteBuildService {
         long started = System.nanoTime();
         try {
             sandbox.copyTree(projectId, ".", work);
+            stack.applyBuildVariables(files, projectId, work, variables.variables(projectId));
             DependencyService.Preparation deps = dependencies.prepare(projectId, work);
             if (deps.failed()) return Result.failed(deps.error());
             SandboxPort.CommandResult result = sandbox.exec(projectId, work, build.command());

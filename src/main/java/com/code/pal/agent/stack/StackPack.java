@@ -72,6 +72,13 @@ public interface StackPack {
     }
 
     /**
+     * Makes the project's build-time variables visible to a build of the copy at {@code root}. Never
+     * applied to the project itself, so the values do not become project files.
+     */
+    default void applyBuildVariables(ProjectFiles files, UUID projectId, String root, java.util.Map<String, String> variables) {
+    }
+
+    /**
      * The build the runtime check loads: like {@link #previewBuild}, but readable when it fails (for
      * Vite: not minified, so errors name the component that threw).
      */

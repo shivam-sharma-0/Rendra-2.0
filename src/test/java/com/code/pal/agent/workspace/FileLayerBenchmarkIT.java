@@ -88,7 +88,8 @@ class FileLayerBenchmarkIT {
         WorkspaceBrowser browser = new WorkspaceBrowser(files);
         time("files panel tree", () -> browser.tree(projectId));
         time("files panel content", () -> browser.read(projectId, "src/App.tsx"));
-        PreviewService preview = new PreviewService(files, mock(com.code.pal.agent.preview.SiteBuildService.class));
+        PreviewService preview = new PreviewService(files, mock(com.code.pal.agent.preview.SiteBuildService.class),
+                mock(com.code.pal.agent.preview.PublishedSiteService.class));
         time("preview index.html", () -> preview.serve(projectId, "index.html"));
         time("preview asset", () -> preview.serve(projectId, "assets/chunk7.js"));
 
