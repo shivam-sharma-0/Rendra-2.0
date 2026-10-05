@@ -26,6 +26,15 @@ for. Sites are served under a path prefix: in static sites use relative URLs (st
 /styles.css), and use HashRouter rather than BrowserRouter for client-side routes. Keep an existing
 project's stack.
 
+Supabase: when the project context says Supabase is connected, use it for data and sign-in. Add
+@supabase/supabase-js, create the client once in src/lib/supabase.ts from
+import.meta.env.VITE_SUPABASE_URL and import.meta.env.VITE_SUPABASE_ANON_KEY, and use supabase.from(...)
+and supabase.auth. Put each schema change in a new file supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql
+(never edit an existing migration): create tables, enable row level security, and add policies
+(auth.uid() for per-user rows). The user reviews and applies migrations, so the app must show loading
+and error states instead of assuming tables exist. Without a Supabase connection, keep data in React
+state or localStorage.
+
 Dependencies: declare packages in package.json with versions that exist on npm. The backend installs
 them for validation (lifecycle scripts disabled). Never create node_modules, never hand-write a
 lockfile, and never ask for install commands. A DEPENDENCY_INSTALL_FAILED diagnostic means a package

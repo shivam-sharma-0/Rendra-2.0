@@ -97,6 +97,39 @@ class RuntimeCheckDockerIT {
         assertEquals("<!doctype html><div id=\"root\"></div><script src=\"app.js\"></script>", files.readText(projectId, "index.html"));
     }
 
+    @Test
+    void callsToOtherOriginsFailOfflineWithoutBeingBlamedOnTheSite() {
+        properties.getSandbox().setRequired(true);
+        properties.getSandbox().setDockerCommand("wsl.exe");
+        properties.getSandbox().setDockerCommandArgs("-e docker");
+        properties.setWorkspaceBasePath("//wsl.localhost/" + DISTRO + LINUX_BASE);
+        WorkspaceStorage storage = new WorkspaceStorage(properties);
+        sandbox = new DockerProjectEnvironment(properties, storage);
+        HostProjectFiles files = new HostProjectFiles(storage);
+        ObjectMapper mapper = new ObjectMapper();
+        StackPacks stacks = new StackPacks(mapper);
+        FileChangeRepository changes = mock(FileChangeRepository.class);
+        when(changes.save(any())).thenAnswer(call -> call.getArgument(0));
+        ChangeSetService changeSets = new ChangeSetService(changes, mock(AgentRunRepository.class), mapper, properties, files, sandbox);
+        RuntimeCheckService runtime = new RuntimeCheckService(changeSets, stacks, files, sandbox,
+                new DependencyService(stacks, files, sandbox, properties), properties, mapper,
+                com.code.pal.agent.preview.BuildVariables.NONE);
+
+        UUID runId = UUID.randomUUID();
+        String stage = changeSets.start(runId, projectId);
+        AgentPlanState plan = new AgentPlanState();
+        plan.revise(List.of("Write the site", "Validate"), "it");
+        AgentContext context = new AgentContext(projectId, 7L, ProjectType.BUILD, stage, null, new ProjectContextTrace(), runId, plan, files);
+        // What a Supabase-backed page does while its database is unreachable: fetch, fail, log, show a fallback.
+        changeSets.create(context, "index.html", "<!doctype html><h1>Todos</h1><p id=\"state\">Loading</p><script src=\"app.js\"></script>"
+                + "<img src=\"https://images.example.com/logo.png\">");
+        changeSets.create(context, "app.js", "fetch('https://abcdefghijklmnopqrst.supabase.co/rest/v1/todos')"
+                + ".then(r => r.json()).catch(error => { console.error('Could not load todos', error);"
+                + " document.getElementById('state').textContent = 'Offline'; });\n");
+
+        assertTrue(runtime.check(context).isEmpty(), "offline calls to other origins are not site errors");
+    }
+
     private static void run(String... command) throws Exception {
         List<String> args = new ArrayList<>(List.of("wsl.exe", "-d", DISTRO, "-e"));
         args.addAll(List.of(command));

@@ -66,7 +66,7 @@ public class DependencyService {
             if (error != null) return new Preparation(true, false, error);
             installed = true;
         }
-        files.writeText(projectId, set, COMPLETE, Long.toString(System.currentTimeMillis()));   // last use, for pruning
+        if (!installed) files.writeText(projectId, set, COMPLETE, Long.toString(System.currentTimeMillis()));   // last use, for pruning
         sandbox.link(projectId, ProjectPaths.combine(root, stack.dependencyDirectory()), set + "/" + stack.dependencyDirectory());
         prune(projectId, key);
         return new Preparation(true, installed, null);

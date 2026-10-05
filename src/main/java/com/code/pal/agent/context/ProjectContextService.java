@@ -201,6 +201,10 @@ public class ProjectContextService {
             append(out, budget, "Build-time environment variables (read with import.meta.env.NAME; values are set by the user): "
                     + String.join(", ", variableNames) + "\n");
         }
+        if (variableNames.contains("VITE_SUPABASE_URL") && variableNames.contains("VITE_SUPABASE_ANON_KEY")) {
+            append(out, budget, "Supabase is connected: use it for data and sign-in; schema changes go in new "
+                    + "supabase/migrations/*.sql files that the user reviews and applies.\n");
+        }
         map.manifests().forEach(path -> trace.selected(path, ContextSelectionReason.PROJECT_MANIFEST, 0));
         map.configurationFiles().forEach(path -> trace.selected(path, ContextSelectionReason.PROJECT_CONFIGURATION, 0));
 

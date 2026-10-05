@@ -277,11 +277,28 @@ public class HostProjectFiles implements ProjectFiles {
         }
     }
 
+    /**
+     * Windows refuses to replace a file another process briefly holds open (virus scanner, indexer) with
+     * an access-denied error that clears within milliseconds, so that case is retried a few times.
+     */
     private static void moveReplacing(Path from, Path to) throws IOException {
-        try {
-            Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException unsupported) {
-            Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
+        for (int attempt = 1; ; attempt++) {
+            try {
+                try {
+                    Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException unsupported) {
+                    Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
+                }
+                return;
+            } catch (java.nio.file.AccessDeniedException busy) {
+                if (attempt >= 5) throw busy;
+                try {
+                    Thread.sleep(25L * attempt);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw busy;
+                }
+            }
         }
     }
 

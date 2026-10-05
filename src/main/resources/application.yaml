@@ -129,6 +129,10 @@ app:
   # subdomain sharing cookies with the API; behind a proxy set server.forward-headers-strategy.
   sites:
     base-url: ${APP_SITES_BASE_URL:http://127.0.0.1:8080}
+  # Encrypts secrets stored in the database (Supabase access tokens). Without it they cannot be stored.
+  data-key: ${APP_DATA_KEY:}
+  supabase:
+    api-url: ${SUPABASE_API_URL:https://api.supabase.com}
 
   oauth2:
     success-redirect: ${OAUTH_SUCCESS_REDIRECT:http://localhost:5173/oauth/callback}

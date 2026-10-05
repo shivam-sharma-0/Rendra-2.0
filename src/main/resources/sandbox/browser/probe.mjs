@@ -16,8 +16,14 @@ const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/ja
 
 const issues = [];
 let siteUrl = "";
+// The probe has no network on purpose, so calls to other origins (an API, Supabase) fail here and
+// would fail for no fault of the site: those failures, and the errors they cause, are not reported.
+const OFFLINE = /Failed to fetch|NetworkError|Load failed|net::ERR_|ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ENOTFOUND|AuthRetryableFetchError/i;
+const sameOrigin = (url) => !url || url.startsWith(siteUrl) || url.startsWith("data:") || url.startsWith("blob:");
 const add = (kind, message, source) => {
-  message = String(message).replaceAll(siteUrl, "");
+  message = String(message);
+  if (kind !== "asset" && OFFLINE.test(message)) return;
+  message = message.replaceAll(siteUrl, "");
   if (issues.length < MAX_ISSUES && !issues.some((i) => i.kind === kind && i.message === message)) {
     issues.push({ kind, message: message.slice(0, 600), source: source ?? null });
   }
@@ -103,11 +109,13 @@ listeners.push((message) => {
       requestUrls.set(p.requestId, p.request?.url ?? "");
       break;
     case "Network.responseReceived":
-      if (p.response?.status >= 400 && !ignored(p.response.url)) add("asset", `${p.response.status} ${p.response.url}`, null);
+      if (p.response?.status >= 400 && sameOrigin(p.response.url) && !ignored(p.response.url)) {
+        add("asset", `${p.response.status} ${p.response.url}`, null);
+      }
       break;
     case "Network.loadingFailed": {
       const url = requestUrls.get(p.requestId) ?? "";
-      if (!p.canceled && !ignored(url) && !/net::ERR_ABORTED/.test(p.errorText)) add("asset", `${p.errorText} ${url}`, null);
+      if (!p.canceled && sameOrigin(url) && !ignored(url) && !/net::ERR_ABORTED/.test(p.errorText)) add("asset", `${p.errorText} ${url}`, null);
       break;
     }
     case "Page.loadEventFired":
