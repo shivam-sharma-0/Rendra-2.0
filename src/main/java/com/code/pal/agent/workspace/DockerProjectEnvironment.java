@@ -538,6 +538,33 @@ public class DockerProjectEnvironment implements SandboxPort {
         enforceQuota(projectId);
     }
 
+    @Override
+    public void destroy(UUID projectId) {
+        String container = resourceName(properties.getSandbox().getContainerPrefix(), projectId);
+        java.nio.file.Path folder = storage.projectDir(projectId);
+        Lock lock = lockFor(projectId).writeLock();
+        lock.lock();
+        try {
+            ready.remove(projectId);
+            lastUsed.remove(projectId);
+            if (java.nio.file.Files.isDirectory(folder)) {
+                // Emptying the folder inside the container is far faster than deleting thousands of files
+                // (node_modules) over the WSL share. Everything in it is written as the sandbox user.
+                provision(projectId);
+                CommandResult emptied = run(List.of("exec", container, "find",
+                        properties.getSandbox().getWorkspacePath(), "-mindepth", "1", "-delete"), Duration.ofMinutes(5), null);
+                if (!emptied.success()) log.warn("sandbox_destroy_partial projectId={} exit={} error={} output={}", projectId, emptied.exitCode(), emptied.error(), emptied.stdout());
+            }
+            run(List.of("rm", "-f", container), Duration.ofSeconds(30), null);
+            storage.delete(projectId);   // the (now empty) folder itself, or whatever the container left
+        } finally {
+            lock.unlock();
+        }
+        if (java.nio.file.Files.exists(folder)) throw new IllegalStateException("Could not remove " + folder);
+        projectLocks.remove(projectId);
+        log.info("sandbox_destroyed projectId={}", projectId);
+    }
+
     private String rootPath(String relativeRoot) {
         String root = ProjectPaths.normalize(relativeRoot, true);
         return root.equals(".") ? properties.getSandbox().getWorkspacePath()

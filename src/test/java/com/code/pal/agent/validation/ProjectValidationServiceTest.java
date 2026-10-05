@@ -25,6 +25,57 @@ class ProjectValidationServiceTest {
     private com.code.pal.agent.stack.DependencyService dependencies;
     /** No browser unless a test supplies one. */
     private RuntimeCheckService runtime;
+    /** Every type-check execution (baseline or candidate) appends one line here. */
+    private final java.nio.file.Path executions = newExecutionLog();
+
+    private static java.nio.file.Path newExecutionLog() {
+        try {
+            return java.nio.file.Files.createTempFile("codepal-validation-runs", ".log");
+        } catch (java.io.IOException error) {
+            throw new IllegalStateException(error);
+        }
+    }
+
+    private int executionCount() throws Exception {
+        return java.nio.file.Files.readAllLines(executions).size();
+    }
+
+    @Test
+    void theFinalGateReusesResultsTheAgentAlreadyRanForTheSameRevision() throws Exception {
+        runtime = mock(RuntimeCheckService.class);
+        when(runtime.check(any())).thenReturn(List.of());
+        Fixture fixture = fixture(3);
+        fixture.changeSets.create(fixture.context, "src/extra.ts", "export const x = 1;\n");
+
+        assertTrue(fixture.validation.run(fixture.context, ValidationOperation.TYPE_CHECK, null).changeValidationPassed());
+        assertEquals(2, executionCount(), "baseline + candidate");
+        assertTrue(fixture.changeSets.hasUnvalidatedChanges(fixture.context), "a single operation does not certify");
+
+        ValidationReport gate = fixture.validation.validateAll(fixture.context);
+        assertTrue(gate.changeValidationPassed());
+        assertEquals(2, executionCount(), "same revision: nothing runs again");
+        assertFalse(fixture.changeSets.hasUnvalidatedChanges(fixture.context));
+        fixture.validation.validateAll(fixture.context);
+        verify(runtime, times(1)).check(any());
+
+        fixture.changeSets.create(fixture.context, "src/more.ts", "export const y = 2;\n");
+        assertTrue(fixture.validation.validateAll(fixture.context).changeValidationPassed());
+        assertEquals(4, executionCount(), "a new revision is validated again");
+        verify(runtime, times(2)).check(any());
+    }
+
+    @Test
+    void aFailedResultIsReusedUntilTheAgentChangesSomething() throws Exception {
+        Fixture fixture = fixture(3);
+        fixture.changeSets.patch(fixture.context, "src/App.tsx", fixture.version(), "OK", "BROKEN");
+
+        assertFalse(fixture.validation.run(fixture.context, ValidationOperation.TYPE_CHECK, null).changeValidationPassed());
+        ValidationReport gate = fixture.validation.validateAll(fixture.context);
+
+        assertFalse(gate.changeValidationPassed());
+        assertEquals("src/App.tsx", gate.introducedDiagnostics().getFirst().file());
+        assertEquals(2, executionCount());
+    }
 
     @Test
     void aRuntimeErrorTheChangeIntroducedFailsTheFinalGate() throws Exception {
@@ -158,12 +209,13 @@ class ProjectValidationServiceTest {
                 .write("package-lock.json", "{\"lockfileVersion\":3}")
                 .write("validate.cjs", """
                         const fs = require('fs');
+                        fs.appendFileSync('%s', 'run\\n');
                         const value = fs.readFileSync('src/App.tsx', 'utf8');
                         if (value.includes('BROKEN')) {
                           console.error('src/App.tsx(1,1): error TS2307: Cannot find module theme');
                           process.exit(1);
                         }
-                        """);
+                        """.formatted(executions.toString().replace('\\', '/')));
 
         FileChangeRepository repository = mock(FileChangeRepository.class);
         when(repository.save(any(FileChange.class))).thenAnswer(call -> call.getArgument(0));

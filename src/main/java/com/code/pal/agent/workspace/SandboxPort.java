@@ -71,6 +71,12 @@ public interface SandboxPort {
     /** Replaces the whole project (except internal state) with the tree at {@code snapshotRoot}. */
     void restoreTree(UUID projectId, String snapshotRoot);
 
+    /**
+     * Removes the project's environment and every file it has, for a project that was deleted. Cannot be
+     * undone. Throws if anything is left, so the caller can try again later.
+     */
+    void destroy(UUID projectId);
+
     record CommandResult(boolean success, int exitCode, String stdout, String error) {
         public static final String NOT_STARTED = "Command could not be started";
         public static final String TIMED_OUT = "Command timed out";

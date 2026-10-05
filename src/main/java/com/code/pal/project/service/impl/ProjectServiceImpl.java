@@ -156,7 +156,15 @@ public class ProjectServiceImpl implements ProjectService {
     public void delete(Long userId, UUID projectId) {
         Project project = requireManageable(userId, projectId);
         project.setDeletedAt(Instant.now()); // soft delete â€” hidden by @SQLRestriction thereafter
+        // The agent module stops the project's runs and removes its files and sandbox after commit.
+        events.publishEvent(new com.code.pal.project.event.ProjectDeleted(projectId));
         log.info("Project soft-deleted id={} owner={}", projectId, userId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UUID> deletedAmong(Collection<UUID> projectIds) {
+        return projectIds.isEmpty() ? List.of() : projectRepository.findDeletedIdsIn(projectIds);
     }
 
     /**

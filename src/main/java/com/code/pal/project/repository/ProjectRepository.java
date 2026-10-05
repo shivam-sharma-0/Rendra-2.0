@@ -27,6 +27,11 @@ public interface ProjectRepository extends JpaRepository<Project, UUID> {
      */
     Page<Project> findByWorkspaceIdAndTypeIn(UUID workspaceId, Collection<ProjectType> types, Pageable pageable);
 
+    /** Which of these ids belong to soft-deleted projects (native: bypasses the deleted_at restriction). */
+    @org.springframework.data.jpa.repository.Query(nativeQuery = true,
+            value = "select id from projects where deleted_at is not null and id in (:ids)")
+    java.util.List<UUID> findDeletedIdsIn(@org.springframework.data.repository.query.Param("ids") Collection<UUID> ids);
+
     /** Resolve a published project by its public slug (for the public {@code /p/{slug}} serving). */
     Optional<Project> findByPublicSlug(String publicSlug);
 }

@@ -280,6 +280,13 @@ public class LocalProjectEnvironment implements SandboxPort {
         }
     }
 
+    @Override
+    public void destroy(UUID projectId) {
+        Path project = storage.projectDir(projectId);
+        deleteTree(project);
+        if (Files.exists(project, LinkOption.NOFOLLOW_LINKS)) throw new IllegalStateException("Could not remove " + project);
+    }
+
     /** Deletes a tree without following links (a link is removed, not its target). */
     private static void deleteTree(Path root) {
         if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) return;

@@ -210,6 +210,23 @@ class DockerProjectEnvironmentDockerIT {
         assertEquals("precious", files.readText(projectId, "keep.txt"));
     }
 
+    @Test
+    void destroyingADeletedProjectRemovesItsFolderAndContainer() throws Exception {
+        DockerProjectEnvironment sandbox = new DockerProjectEnvironment(properties);
+        UUID projectId = newProject();
+        Path backendView = new WorkspaceStorage(properties).projectDir(projectId);
+        sandbox.ensure(projectId);
+        assertEquals(0, sandbox.exec(projectId, List.of("sh", "-c",
+                "mkdir -p .codepal/deps/a/node_modules/react src && for i in $(seq 1 500); do echo x > .codepal/deps/a/node_modules/react/f$i.js; done"
+                        + " && ln -s .codepal/deps/a/node_modules node_modules && echo app > src/App.tsx")).exitCode());
+
+        sandbox.destroy(projectId);
+
+        assertTrue(Files.notExists(backendView), "project folder removed");
+        assertEquals("", dockerOutput("ps", "-aq", "--filter", "name=" + properties.getSandbox().getContainerPrefix() + projectId));
+        sandbox.destroy(projectId);   // nothing left: a second sweep is a no-op
+    }
+
     private UUID newProject() {
         UUID projectId = UUID.randomUUID();
         containers.add(properties.getSandbox().getContainerPrefix() + projectId);

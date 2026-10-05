@@ -37,6 +37,12 @@ public class ProjectValidationService {
     /** Browser check of the staged site; null where no browser is wired (focused tests). */
     private final RuntimeCheckService runtime;
     private final Map<UUID, ValidationReport> lastReports = new ConcurrentHashMap<>();
+    /**
+     * Comparisons already run for a staged revision, per run. The live project is locked for the run and
+     * the candidate is the staged revision, so an operation's result cannot change until the agent writes
+     * again; the final gate reuses what the agent's own typeCheck/build calls already ran.
+     */
+    private final Map<UUID, RevisionResults> results = new ConcurrentHashMap<>();
 
     public Object diagnostics(AgentContext context) {
         var capabilities = stack(context).inspect(files, context.projectId(), ".");
@@ -54,7 +60,7 @@ public class ProjectValidationService {
             lastReports.put(context.runId(), report);
             return report;
         }
-        Comparison comparison = compare(context, plan);
+        Comparison comparison = scope == null || scope.isBlank() ? compareOnce(context, plan) : compare(context, plan);
         ValidationReport report = toReport(context, plan, comparison);
         if (!comparison.after().started() || comparison.after().timedOut()) {
             changeSets.recordTerminalValidationFailure(context, report.introducedDiagnostics());
@@ -97,7 +103,7 @@ public class ProjectValidationService {
         for (ValidationOperation operation : List.of(ValidationOperation.TYPE_CHECK, ValidationOperation.BUILD)) {
             CommandPlan plan = plan(context, operation, null);
             if (!plan.available()) continue;
-            comparisons.add(compare(context, plan));
+            comparisons.add(compareOnce(context, plan));
             executed.add(operation.name());
         }
         List<ProjectDiagnostic> introduced = new ArrayList<>(comparisons.stream().flatMap(value -> value.introduced().stream()).toList());
@@ -106,7 +112,11 @@ public class ProjectValidationService {
         boolean terminal = comparisons.stream().anyMatch(value -> !value.after().started() || value.after().timedOut());
         // Only a change that type-checks and builds is worth loading in a browser.
         if (passed && runtime != null) {
-            List<ProjectDiagnostic> runtimeIssues = runtime.check(context);
+            List<ProjectDiagnostic> runtimeIssues = revisionResults(context).runtime;
+            if (runtimeIssues == null) {
+                runtimeIssues = runtime.check(context);
+                revisionResults(context).runtime = runtimeIssues;
+            }
             executed.add("RUNTIME");
             if (!runtimeIssues.isEmpty()) {
                 introduced.addAll(runtimeIssues);
@@ -130,7 +140,37 @@ public class ProjectValidationService {
     }
 
     public ValidationReport lastReport(UUID runId) { return lastReports.get(runId); }
-    public void clear(UUID runId) { lastReports.remove(runId); }
+    public void clear(UUID runId) {
+        lastReports.remove(runId);
+        results.remove(runId);
+    }
+
+    /** The comparison for this revision, run only if it has not run yet (or ended without a usable result). */
+    private Comparison compareOnce(AgentContext context, CommandPlan plan) {
+        RevisionResults current = revisionResults(context);
+        Comparison cached = current.comparisons.get(plan.operation());
+        if (cached != null) {
+            log.info("validation_reused run={} revision={} operation={}", context.runId(), current.revision, plan.operation());
+            return cached;
+        }
+        Comparison comparison = compare(context, plan);
+        // A timeout or a sandbox that did not start says nothing about the code: try again next time.
+        if (comparison.after().started() && !comparison.after().timedOut()) current.comparisons.put(plan.operation(), comparison);
+        return comparison;
+    }
+
+    private RevisionResults revisionResults(AgentContext context) {
+        int revision = changeSets.view(context).revision();
+        return results.compute(context.runId(), (run, existing) ->
+                existing != null && existing.revision == revision ? existing : new RevisionResults(revision));
+    }
+
+    private static final class RevisionResults {
+        final int revision;
+        final Map<ValidationOperation, Comparison> comparisons = new ConcurrentHashMap<>();
+        volatile List<ProjectDiagnostic> runtime;
+        RevisionResults(int revision) { this.revision = revision; }
+    }
 
     private Comparison compare(AgentContext context, CommandPlan plan) {
         String name = plan.operation().name().toLowerCase(Locale.ROOT);

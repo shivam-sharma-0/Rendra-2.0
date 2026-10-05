@@ -35,6 +35,9 @@ public interface ProjectService {
 
     void delete(Long userId, UUID projectId);
 
+    /** The ids among these whose projects were deleted (their files may still need removing). */
+    List<UUID> deletedAmong(Collection<UUID> projectIds);
+
     /**
      * Load a project the caller may access (workspace membership enforced), returning the managed
      * entity. Shared with the message module so access lives in one place.
