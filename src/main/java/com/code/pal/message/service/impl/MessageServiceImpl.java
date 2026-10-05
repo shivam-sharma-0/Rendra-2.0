@@ -57,16 +57,21 @@ public class MessageServiceImpl implements MessageService {
         if (existing.isPresent()) return List.of(MessageResponse.from(existing.get()));
 
         ProjectType mode = request.mode() != null ? request.mode() : project.getType();
+        // The opening prompt of a project created with pendingPrompt (its attachments uploaded first):
+        // stored for the requirements step, which builds from it once approved, so no turn starts now.
+        boolean openingPrompt = false;
         if (mode == ProjectType.BUILD && project.getLifecycleStage() == ProjectStage.REQUIREMENTS) {
             if (isConversationalPrompt(request.message())) {
                 project.setLifecycleStage(ProjectStage.DESIGN);
                 mode = ProjectType.CHAT;
+            } else if (messageRepository.countByProjectId(projectId) == 0) {
+                openingPrompt = true;
             } else {
                 throw new RequirementApprovalRequiredException();
             }
         }
 
-        boolean startsAgentTurn = request.aiMessageId() != null && !request.aiMessageId().isBlank();
+        boolean startsAgentTurn = !openingPrompt && request.aiMessageId() != null && !request.aiMessageId().isBlank();
         // Check limits before anything is saved, so a rejected turn leaves no orphan message behind.
         if (startsAgentTurn) admission.requireAdmitted(userId);
 
@@ -116,6 +121,13 @@ public class MessageServiceImpl implements MessageService {
             if (!valid.contains(normalized)) valid.add(normalized);
         }
         return String.join("\n", valid);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<String> openingAttachments(UUID projectId) {
+        return messageRepository.findFirstByProjectIdAndRoleOrderBySeqAsc(projectId, com.code.pal.message.domain.MessageRole.USER)
+                .map(Message::attachmentPaths).orElse(List.of());
     }
 
     @Override

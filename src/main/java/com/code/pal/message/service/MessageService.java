@@ -21,6 +21,9 @@ public interface MessageService {
      */
     List<MessageResponse> post(Long userId, UUID projectId, CreateMessageRequest request);
 
+    /** Files attached to the project's opening prompt (uploads/...), for flows that build from it later. */
+    List<String> openingAttachments(UUID projectId);
+
     /** A project's conversation, oldest-first. */
     Page<MessageResponse> list(Long userId, UUID projectId, Pageable pageable);
 

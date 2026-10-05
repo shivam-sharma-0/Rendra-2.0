@@ -94,7 +94,8 @@ export const projectApi = {
   },
   create: (
     workspaceId: string,
-    body: { name?: string; type?: ProjectType; initialMessage?: CreateMessageBody },
+    // pendingPrompt: the first prompt, posted separately once its attachments are uploaded
+    body: { name?: string; type?: ProjectType; initialMessage?: CreateMessageBody; pendingPrompt?: string },
     opts?: { idempotencyKey?: string },
   ) => apiSend<Project>('POST', `/api/workspaces/${workspaceId}/projects`, body, opts),
   get: (id: string, opts?: ReadOpts) => apiGet<Project>(`/api/projects/${id}`, opts),
@@ -210,8 +211,10 @@ export async function startProject(
   const files = opts?.files ?? []
   if (prompt && files.length) {
     // Attachments need a project to upload into, and the agent must see them with the first turn:
-    // create the project, upload, then send the prompt with the uploaded paths.
-    const project = await projectApi.create(targetId, { type: mode, name: prompt.slice(0, 60) }, opts)
+    // create the project, upload, then send the prompt with the uploaded paths. pendingPrompt lets the
+    // backend decide from the prompt whether the project starts with requirements, as it would with
+    // initialMessage; then the post only records the prompt and its images for that step.
+    const project = await projectApi.create(targetId, { type: mode, pendingPrompt: prompt }, opts)
     const uploaded = await projectApi.uploadAttachments(project.id, files)
     await messageApi.post(project.id, prompt, mode, uploaded.map((file) => file.path))
     return project

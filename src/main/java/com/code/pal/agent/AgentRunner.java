@@ -84,9 +84,9 @@ public class AgentRunner implements AgentRuntime {
             "listFiles", "readFile", "searchCode", "getProjectMetadata", "getFileSummary");
     private static final Set<String> PLANNING_TOOLS = Set.of("setPlan", "updatePlanStep");
     /** Tools that change staged files (a draft preview follows them). */
-    private static final Set<String> FILE_CHANGING_TOOLS = Set.of("createFile", "createFiles", "patchFile", "deleteFile", "renameFile");
+    private static final Set<String> FILE_CHANGING_TOOLS = Set.of("createFile", "createFiles", "patchFile", "deleteFile", "renameFile", "copyFile");
     private static final Set<String> WRITE_TOOLS = Set.of("createFile", "createFiles", "patchFile", "deleteFile",
-            "renameFile",
+            "renameFile", "copyFile",
             "getDiagnostics", "runTypeCheck", "runBuild", "runTests", "validateChanges");
 
     private final LlmClient llm;

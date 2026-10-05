@@ -20,4 +20,7 @@ public interface MessageRepository extends JpaRepository<Message, String> {
     Optional<Message> findByIdAndProjectId(String id, UUID projectId);
 
     long countByProjectId(UUID projectId);
+
+    /** The project's first message by the given role (its opening prompt, for USER). */
+    Optional<Message> findFirstByProjectIdAndRoleOrderBySeqAsc(UUID projectId, com.code.pal.message.domain.MessageRole role);
 }

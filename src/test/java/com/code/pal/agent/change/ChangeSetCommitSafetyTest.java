@@ -189,6 +189,29 @@ class ChangeSetCommitSafetyTest {
 
     /* ── helpers ─────────────────────────────────────────────────────────────── */
 
+    @Test
+    void anUploadedImageIsCopiedIntoTheSiteByteForByteAndTheUploadStays() throws Exception {
+        byte[] png = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 0, 0, 0, 13, 'I', 'H', 'D', 'R', (byte) 0xFF, 0, 7};
+        java.nio.file.Files.createDirectories(project.path("uploads"));
+        java.nio.file.Files.write(project.path("uploads/abc-design.png"), png);
+        ChangeSetService service = service(project.properties);
+        UUID runId = UUID.randomUUID();
+        AgentContext context = context(service, runId);
+
+        ChangeSetService.MutationResult copied = service.copy(context, "uploads/abc-design.png", "public/hero.png");
+
+        assertEquals(FileOperation.COPY, copied.operation());
+        assertTrue(service.validate(context).valid(), "binary files are not checked as text");
+        assertThrows(com.code.pal.agent.tool.AgentToolException.class,
+                () -> service.copy(context, "uploads/abc-design.png", "public/hero.png"), "never overwrites");
+        service.recordProjectValidation(context, true, List.of());
+        ChangeSetService.CommitResult committed = service.commit(context, run(runId));
+
+        assertEquals(List.of("public/hero.png"), committed.changedPaths(), "the source is not a change");
+        org.junit.jupiter.api.Assertions.assertArrayEquals(png, java.nio.file.Files.readAllBytes(project.path("public/hero.png")));
+        org.junit.jupiter.api.Assertions.assertArrayEquals(png, java.nio.file.Files.readAllBytes(project.path("uploads/abc-design.png")));
+    }
+
     private ChangeSetService service(AgentProperties properties) {
         return new ChangeSetService(changes, runs, new ObjectMapper(), properties, files, sandbox);
     }

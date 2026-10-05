@@ -36,6 +36,7 @@ public class ChangeSetService {
     /** Earlier name of the same archive reference. */
     private static final String LEGACY_SNAPSHOT_PREFIX = "docker:";
 
+    private static final long MAX_COPY_BYTES = 10_000_000;
     private final FileChangeRepository changes;
     private final AgentRunRepository runs;
     private final ObjectMapper objectMapper;
@@ -127,11 +128,36 @@ public class ChangeSetService {
         return record(set, target, source, FileOperation.RENAME, actual, files.version(set.projectId, set.stage, target));
     }
 
+    /**
+     * Copies a staged file, binary included, to a new path: how an image the user uploaded
+     * ({@code uploads/...}) becomes part of the site, e.g. {@code public/hero.png} in a Vite app.
+     */
+    public MutationResult copy(AgentContext context, String sourceRelative, String targetRelative) {
+        ActiveChangeSet set = requireActive(context);
+        requirePlan(context);
+        requireRepairAvailable(set);
+        String source = context.resolvePath(sourceRelative);
+        String target = context.resolvePath(targetRelative);
+        requireRegular(set, source);
+        if (files.exists(set.projectId, set.stage, target)) throw failure("FILE_ALREADY_EXISTS", "Copy target already exists", target);
+        if (files.size(set.projectId, set.stage, source) > MAX_COPY_BYTES) {
+            throw new AgentToolException("FILE_TOO_LARGE", "Files larger than 10 MB cannot be copied", Map.of("path", source));
+        }
+        rememberBaseline(set, target);
+        try {
+            files.copyFile(set.projectId, set.stage, source, set.stage, target);
+        } catch (RuntimeException error) {
+            throw new AgentToolException("COPY_FAILED", "Could not copy staged file", Map.of("path", source));
+        }
+        return record(set, target, source, FileOperation.COPY, FileVersions.ABSENT, files.version(set.projectId, set.stage, target));
+    }
+
     public ValidationResult validate(AgentContext context) {
         ActiveChangeSet set = requireActive(context);
         List<ValidationIssue> issues = new ArrayList<>();
         for (String path : set.touched) {
             if (!files.regularFile(set.projectId, set.stage, path)) continue;
+            if (isBinary(files.readHead(set.projectId, set.stage, path, 8_192))) continue;   // a copied image
             String text = files.readText(set.projectId, set.stage, path);
             if (text.contains("<<<<<<<") || text.contains(">>>>>>>")) {
                 issues.add(new ValidationIssue(path, "MERGE_MARKER", "Unresolved merge marker"));
@@ -264,7 +290,8 @@ public class ChangeSetService {
             set.repairPending = false;
         }
         set.touched.add(path);
-        if (source != null) set.touched.add(source);
+        // A rename changes its source too; a copy leaves it as it is.
+        if (source != null && operation != FileOperation.COPY) set.touched.add(source);
         set.revision++;
         set.validatedRevision = -1;
         changes.save(FileChange.builder().runId(set.runId).projectId(set.projectId).path(path).sourcePath(source)

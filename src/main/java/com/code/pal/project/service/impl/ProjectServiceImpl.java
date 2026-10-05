@@ -81,8 +81,9 @@ public class ProjectServiceImpl implements ProjectService {
         workspaceService.requireMembership(userId, workspaceId);
 
         CreateMessageRequest initial = request.initialMessage();
+        String firstPrompt = initial != null ? initial.message() : request.pendingPrompt();
         ProjectType type = request.type() != null ? request.type() : ProjectType.BUILD;
-        boolean requirementsNeeded = type == ProjectType.BUILD && needsRequirements(initial);
+        boolean requirementsNeeded = type == ProjectType.BUILD && needsRequirements(firstPrompt);
         boolean startsAgentTurn = initial != null && !requirementsNeeded
                 && initial.aiMessageId() != null && !initial.aiMessageId().isBlank();
         // Before anything is saved, so a rejected first turn does not leave an empty project behind.
@@ -91,10 +92,10 @@ public class ProjectServiceImpl implements ProjectService {
         Project project = projectRepository.save(Project.builder()
                 .workspaceId(workspaceId)
                 .ownerId(userId)
-                .name(deriveName(request.name(), initial))
+                .name(deriveName(request.name(), firstPrompt))
                 .type(type)
                 .lifecycleStage(requirementsNeeded ? ProjectStage.REQUIREMENTS : ProjectStage.DESIGN)
-                .initialPrompt(initial != null ? initial.message() : null)
+                .initialPrompt(firstPrompt)
                 .lastActivityAt(Instant.now())
                 .build());
 
@@ -374,21 +375,21 @@ public class ProjectServiceImpl implements ProjectService {
         messageRepository.save(userMessage);
     }
 
-    private static String deriveName(String name, CreateMessageRequest initial) {
+    private static String deriveName(String name, String firstPrompt) {
         if (name != null && !name.isBlank())
             return name.trim();
-        if (initial != null && !initial.message().isBlank()) {
-            String prompt = initial.message().trim();
+        if (firstPrompt != null && !firstPrompt.isBlank()) {
+            String prompt = firstPrompt.trim();
             return prompt.length() <= NAME_FROM_PROMPT_MAX
                     ? prompt
-                    : prompt.substring(0, NAME_FROM_PROMPT_MAX).trim() + "â€¦";
+                    : prompt.substring(0, NAME_FROM_PROMPT_MAX).trim() + "…";
         }
         return "Untitled project";
     }
 
-    private static boolean needsRequirements(CreateMessageRequest initial) {
-        if (initial == null || initial.message() == null) return false;
-        String prompt = initial.message().trim().toLowerCase();
+    private static boolean needsRequirements(String firstPrompt) {
+        if (firstPrompt == null) return false;
+        String prompt = firstPrompt.trim().toLowerCase();
         if (prompt.isBlank() || prompt.matches("^(hi|hello|hey|yo|good morning|good evening|ok|okay)[.! ]*$")) return false;
         return prompt.length() >= 9 && prompt.matches(".*\\b(build|create|make|develop|design|implement|generate|clone|app|application|website|dashboard|todo|tool|platform|system|project|page|portal|crm|portfolio|store|shop|blog|mern)\\b.*");
     }

@@ -82,9 +82,14 @@ public class RequirementServiceImpl implements RequirementService {
             Project project = projects.requireCanEdit(userId, projectId);
             RequirementSession session = sessions.findByProjectId(projectId).orElseGet(() -> sessions.save(
                     RequirementSession.builder().projectId(projectId).sourcePrompt(Optional.ofNullable(project.getInitialPrompt()).orElse("")).build()));
-            return questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty() ? ProjectBrief.of(project) : null;
+            return questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty()
+                    ? ProjectBrief.of(project, messages.openingAttachments(projectId)) : null;
         });
-        List<QuestionDraft> drafts = needsQuestions == null ? List.of() : generate(needsQuestions);
+        List<QuestionDraft> generated = needsQuestions == null ? List.of() : generate(needsQuestions);
+        // The attached images decide the look; asking about it anyway would contradict them.
+        List<QuestionDraft> withoutLook = needsQuestions == null || needsQuestions.attachments().isEmpty() ? generated
+                : generated.stream().filter(draft -> !isAboutTheLook(draft)).toList();
+        List<QuestionDraft> drafts = withoutLook.isEmpty() ? generated : withoutLook;
         return tx.execute(status -> {
             RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
             // A concurrent start may have saved its questions meanwhile; the first set wins.
@@ -112,7 +117,7 @@ public class RequirementServiceImpl implements RequirementService {
             question.setOtherText(other);
             session.setStatus(RequirementStatus.IN_PROGRESS);
             if (!complete(session)) return new Recorded(view(session), null, null);
-            return new Recorded(null, ProjectBrief.of(project), answerSummary(questions.findBySessionIdOrderBySequenceAsc(session.getId())));
+            return new Recorded(null, ProjectBrief.of(project, List.of()), answerSummary(questions.findBySessionIdOrderBySequenceAsc(session.getId())));
         });
         if (recorded.view() != null) return recorded.view();
 
@@ -197,9 +202,11 @@ public class RequirementServiceImpl implements RequirementService {
         String suffix = UUID.randomUUID().toString().replace("-", "");
         // Post first: it applies the usage limits, and a rejection rolls this whole transaction back
         // before anything is written to the workspace. The build run starts only after commit.
+        // Images attached to the opening prompt go with the build, which reads them (vision) and can use them.
+        List<String> attachments = messages.openingAttachments(projectId);
         messages.post(userId, projectId, new CreateMessageRequest(
                 "req_" + suffix.substring(0, 27), approvedBuildPrompt(answered), ProjectType.BUILD,
-                "ai_" + UUID.randomUUID().toString().replace("-", "").substring(0, 27)));
+                "ai_" + UUID.randomUUID().toString().replace("-", "").substring(0, 27), attachments.isEmpty() ? null : attachments));
         artifacts.writeRequirements(projectId, session.getId(), answered);
         return view(session);
     }
@@ -269,6 +276,21 @@ public class RequirementServiceImpl implements RequirementService {
         }
     }
 
+    /**
+     * Images are read by the build itself (a vision model takes too long for this request), so the
+     * questions only need to know they exist and leave what they show to them.
+     */
+    private static String attachmentNote(List<String> attachments) {
+        if (attachments.isEmpty()) return "";
+        return "\nThe user also attached " + attachments.size() + " image(s) (screenshots or mock-ups) that the build will "
+                + "follow for layout and visual style: do not ask about visual style or layout, ask about what images cannot show.";
+    }
+
+    private static boolean isAboutTheLook(QuestionDraft draft) {
+        String text = (draft.key() + " " + draft.prompt()).toLowerCase(java.util.Locale.ROOT).replaceAll("[_-]", " ");
+        return text.matches(".*\\b(visual|style|look|theme|colou?rs?|layout)\\b.*");
+    }
+
     private List<QuestionDraft> generate(ProjectBrief project) {
         try {
             AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
@@ -284,7 +306,7 @@ public class RequirementServiceImpl implements RequirementService {
                     database (Cloud), This device only), and visual style (Clean & minimal, Calm & warm,
                     Bold & structured, Dark & moody). Add Write your own... as the final option for each.
                     Do not ask questions already answered clearly by the user prompt. User prompt: %s
-                    """.formatted(project.initialPrompt());
+                    """.formatted(project.initialPrompt()) + attachmentNote(project.attachments());
             LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
                     List.of(LlmMessage.system("You are a product requirements analyst."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET));
             List<QuestionDraft> parsed = parseQuestions(result.content());
@@ -344,9 +366,10 @@ public class RequirementServiceImpl implements RequirementService {
     private record QuestionDraft(String key, String prompt, boolean required, String recommended, List<OptionDraft> options) {}
     private record Assessment(boolean clear, List<QuestionDraft> questions) {}
     /** What the model calls need from a project, read inside a transaction and used outside it. */
-    private record ProjectBrief(UUID id, String initialPrompt) {
-        static ProjectBrief of(Project project) {
-            return new ProjectBrief(project.getId(), Optional.ofNullable(project.getInitialPrompt()).orElse(""));
+    /** {@code attachments}: files attached to the opening prompt (screenshots, mock-ups). */
+    private record ProjectBrief(UUID id, String initialPrompt, List<String> attachments) {
+        static ProjectBrief of(Project project, List<String> attachments) {
+            return new ProjectBrief(project.getId(), Optional.ofNullable(project.getInitialPrompt()).orElse(""), attachments);
         }
     }
     /** Result of recording an answer: the session view when no review is due, else what the review needs. */

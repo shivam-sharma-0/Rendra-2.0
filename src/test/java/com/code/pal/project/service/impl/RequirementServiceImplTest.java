@@ -31,6 +31,7 @@ import java.util.function.Supplier;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -48,9 +49,11 @@ class RequirementServiceImplTest {
     private final AtomicInteger modelCalls = new AtomicInteger();
     private Supplier<String> modelReply = () -> "[]";
     private Runnable duringModelCall = () -> { };
+    private final List<String> prompts = new ArrayList<>();
+    private final MessageService messages = mock(MessageService.class);
 
     private final RequirementServiceImpl service = new RequirementServiceImpl(projects, sessions, questions, model(),
-            new AgentProperties(), new ObjectMapper(), mock(ProjectArtifactService.class), mock(MessageService.class),
+            new AgentProperties(), new ObjectMapper(), mock(ProjectArtifactService.class), messages,
             new FakeTransactions());
 
     RequirementServiceImplTest() {
@@ -78,6 +81,26 @@ class RequirementServiceImplTest {
         assertEquals(0, modelCallsInsideATransaction.get(), "the model was called while a DB connection was held");
         assertEquals(2, view.questions().size());
         assertEquals(RequirementStatus.IN_PROGRESS, view.status());
+    }
+
+    @Test
+    void imagesAttachedToTheOpeningPromptShapeTheQuestionsAndGoWithTheApprovedBuild() {
+        List<String> images = List.of("uploads/1-design.png");
+        when(messages.openingAttachments(projectId)).thenReturn(images);
+        modelReply = () -> "[" + question("audience") + "," + question("visual_style") + "]";
+
+        RequirementDtos.Session view = service.start(7L, projectId);
+        assertTrue(prompts.stream().anyMatch(prompt -> prompt.contains("attached 1 image(s)")), "the questions know about the images");
+        assertEquals(List.of("audience"), view.questions().stream().map(RequirementDtos.Question::key).toList(),
+                "the images decide the look, so it is not asked");
+
+        RequirementQuestion audience = stored.getFirst();
+        audience.setSelectedOption("a");
+        service.approve(7L, projectId);
+
+        var posted = org.mockito.ArgumentCaptor.forClass(com.code.pal.message.dto.CreateMessageRequest.class);
+        org.mockito.Mockito.verify(messages).post(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq(projectId), posted.capture());
+        assertEquals(images, posted.getValue().attachments(), "the build reads and can use the images");
     }
 
     @Test
@@ -153,6 +176,7 @@ class RequirementServiceImplTest {
     private LlmClient model() {
         return (request, onTextDelta) -> {
             modelCalls.incrementAndGet();
+            request.messages().forEach(message -> prompts.add(message.content()));
             if (TransactionSynchronizationManager.isActualTransactionActive()) modelCallsInsideATransaction.incrementAndGet();
             duringModelCall.run();
             return new LlmClient.LlmResult(modelReply.get(), null, List.of(), new LlmClient.Usage(1, 1), "stop");
