@@ -130,6 +130,49 @@ class RuntimeCheckDockerIT {
         assertTrue(runtime.check(context).isEmpty(), "offline calls to other origins are not site errors");
     }
 
+    @Test
+    void controlsAreExercisedAndAnErrorInAClickHandlerNamesTheControl() {
+        properties.getSandbox().setRequired(true);
+        properties.getSandbox().setDockerCommand("wsl.exe");
+        properties.getSandbox().setDockerCommandArgs("-e docker");
+        properties.setWorkspaceBasePath("//wsl.localhost/" + DISTRO + LINUX_BASE);
+        WorkspaceStorage storage = new WorkspaceStorage(properties);
+        sandbox = new DockerProjectEnvironment(properties, storage);
+        HostProjectFiles files = new HostProjectFiles(storage);
+        ObjectMapper mapper = new ObjectMapper();
+        StackPacks stacks = new StackPacks(mapper);
+        FileChangeRepository changes = mock(FileChangeRepository.class);
+        when(changes.save(any())).thenAnswer(call -> call.getArgument(0));
+        ChangeSetService changeSets = new ChangeSetService(changes, mock(AgentRunRepository.class), mapper, properties, files, sandbox);
+        RuntimeCheckService runtime = new RuntimeCheckService(changeSets, stacks, files, sandbox,
+                new DependencyService(stacks, files, sandbox, properties), properties, mapper,
+                com.code.pal.agent.preview.BuildVariables.NONE);
+
+        UUID runId = UUID.randomUUID();
+        String stage = changeSets.start(runId, projectId);
+        AgentPlanState plan = new AgentPlanState();
+        plan.revise(List.of("Write the site", "Validate"), "it");
+        AgentContext context = new AgentContext(projectId, 7L, ProjectType.BUILD, stage, null, new ProjectContextTrace(), runId, plan, files);
+        // Loads cleanly: only clicking Reset throws. Confirm dialogs and links must not stall or leave the page.
+        changeSets.create(context, "index.html", "<!doctype html><h1>Counter</h1><p id=\"count\">0</p>"
+                + "<button id=\"plus\">+</button><button id=\"reset\">Reset</button><button id=\"clear\">Clear all</button>"
+                + "<a href=\"https://example.com/away\">Docs</a><input id=\"name\" placeholder=\"Your name\"><p id=\"hello\"></p>"
+                + "<script src=\"app.js\"></script>");
+        changeSets.create(context, "app.js", "let count = 0; const show = () => document.getElementById('count').textContent = count;\n"
+                + "document.getElementById('plus').onclick = () => { count++; show(); };\n"
+                + "document.getElementById('reset').onclick = () => { count = settings.start; show(); };\n"
+                + "document.getElementById('clear').onclick = () => { if (confirm('Sure?')) { count = 0; show(); } };\n"
+                + "document.getElementById('name').oninput = (e) => document.getElementById('hello').textContent = 'Hi ' + e.target.value;\n");
+
+        List<ProjectDiagnostic> issues = runtime.check(context);
+
+        assertEquals(1, issues.size(), issues.toString());
+        ProjectDiagnostic problem = issues.getFirst();
+        assertEquals("RUNTIME_EXCEPTION", problem.code());
+        assertTrue(problem.message().contains("button \"Reset\""), "names the control: " + problem.message());
+        assertTrue(problem.message().contains("settings is not defined"), problem.message());
+    }
+
     private static void run(String... command) throws Exception {
         List<String> args = new ArrayList<>(List.of("wsl.exe", "-d", DISTRO, "-e"));
         args.addAll(List.of(command));

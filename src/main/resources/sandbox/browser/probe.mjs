@@ -1,5 +1,7 @@
 // Loads a built site in headless Chromium and reports what went wrong at runtime, as one JSON line.
 // Usage: node probe.mjs <site-dir> [settle-ms]. Runs with no network: the site is served on loopback.
+// After the page loads, visible controls are exercised once (clicks, typing, selections) so errors in
+// event handlers are found too; each such issue names the control that caused it.
 // Uses only Node built-ins (http, child_process, global WebSocket) and the Chrome DevTools Protocol.
 import http from "node:http";
 import fs from "node:fs";
@@ -16,6 +18,8 @@ const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/ja
 
 const issues = [];
 let siteUrl = "";
+/** The control being exercised, attached to the issues it causes (null while loading). */
+let action = null;
 // The probe has no network on purpose, so calls to other origins (an API, Supabase) fail here and
 // would fail for no fault of the site: those failures, and the errors they cause, are not reported.
 const OFFLINE = /Failed to fetch|NetworkError|Load failed|net::ERR_|ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ENOTFOUND|AuthRetryableFetchError/i;
@@ -25,7 +29,7 @@ const add = (kind, message, source) => {
   if (kind !== "asset" && OFFLINE.test(message)) return;
   message = message.replaceAll(siteUrl, "");
   if (issues.length < MAX_ISSUES && !issues.some((i) => i.kind === kind && i.message === message)) {
-    issues.push({ kind, message: message.slice(0, 600), source: source ?? null });
+    issues.push({ kind, message: message.slice(0, 600), source: source ?? null, action });
   }
 };
 const finish = (extra) => {
@@ -52,7 +56,7 @@ siteUrl = `http://127.0.0.1:${server.address().port}/`;
 const chrome = spawn(process.env.CHROMIUM ?? "chromium", ["--headless=new", "--no-sandbox", "--disable-gpu",
   "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0",
   "--user-data-dir=/tmp/probe-profile", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
-const timer = setTimeout(() => { chrome.kill("SIGKILL"); finish({ error: "probe timed out" }); }, 25_000);
+const timer = setTimeout(() => { chrome.kill("SIGKILL"); finish({ error: "probe timed out" }); }, 40_000);
 
 const endpoint = await new Promise((resolve, reject) => {
   let buffer = "";
@@ -121,9 +125,15 @@ listeners.push((message) => {
     case "Page.loadEventFired":
       loaded = true;
       break;
+    case "Page.javascriptDialogOpening":
+      send("Page.handleJavaScriptDialog", { accept: true }, sessionId);
+      break;
   }
 });
 for (const domain of ["Runtime.enable", "Log.enable", "Network.enable", "Page.enable"]) await send(domain, {}, sessionId);
+// Dialogs and new windows would block or escape the probe; a site using them is not broken for it.
+await send("Page.addScriptToEvaluateOnNewDocument", { source:
+  "window.alert = () => {}; window.confirm = () => true; window.prompt = () => ''; window.print = () => {}; window.open = () => null;" }, sessionId);
 await send("Page.navigate", { url: siteUrl }, sessionId);
 for (let waited = 0; !loaded && waited < 15_000; waited += 100) await new Promise((r) => setTimeout(r, 100));
 await new Promise((r) => setTimeout(r, settleMs));
@@ -137,9 +147,66 @@ const evaluation = await send("Runtime.evaluate", { returnByValue: true, express
 })()` }, sessionId);
 const page = evaluation.result?.result?.value ?? {};
 if (!loaded) add("load", "The page did not finish loading", null);
-if ((page.textLength ?? 0) === 0 && (page.media ?? 0) === 0) add("blank", "The page rendered nothing visible", null);
+const blank = (page.textLength ?? 0) === 0 && (page.media ?? 0) === 0;
+if (blank) add("blank", "The page rendered nothing visible", null);
+
+// Exercise each visible control once. Links are not followed (that would leave the page); a control
+// is found again by its position each time, since the page may re-render after every action.
+const CONTROLS = `[...document.querySelectorAll('button, [role=button], [role=tab], [role=switch], [role=checkbox], summary, select, textarea, '
+  + 'input:not([type]), input[type=text], input[type=email], input[type=number], input[type=search], input[type=tel], '
+  + 'input[type=url], input[type=password], input[type=checkbox], input[type=radio], input[type=range], input[type=date]')]
+  .filter((el) => !el.disabled && !el.closest('[aria-disabled=true]') && el.getClientRects().length > 0)`;
+// perform=false only names the control, so issues raised while it acts are attributed to it.
+const ACT = (index, perform) => `(() => {
+  const el = ${CONTROLS}[${index}];
+  if (!el) return null;
+  const tag = el.tagName.toLowerCase();
+  const kind = tag === 'input' ? (el.type || 'text') + ' input' : tag;
+  const label = (el.getAttribute('aria-label') || el.innerText || el.placeholder || el.name || el.value || '').trim().replace(/\\s+/g, ' ').slice(0, 40);
+  const setValue = (value) => {
+    const proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : tag === 'select' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const name = label ? kind + ' "' + label.replaceAll('"', "'") + '"' : kind;
+  if (!${perform}) return name;
+  el.scrollIntoView({ block: 'center' });
+  if (tag === 'select') { if (el.options.length > 1) setValue(el.options[el.options.length - 1].value); }
+  else if (tag === 'textarea' || (tag === 'input' && !['checkbox', 'radio', 'range', 'date'].includes(el.type))) {
+    el.focus();
+    setValue(el.type === 'number' ? '3' : el.type === 'email' ? 'test@example.com' : el.type === 'url' ? 'https://example.com' : 'Test');
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  }
+  else if (el.type === 'range') setValue(el.max || '1');
+  else if (el.type === 'date') setValue('2026-01-15');
+  else el.click();
+  return name;
+})()`;
+const visibleNow = async () => {
+  const check = await send("Runtime.evaluate", { returnByValue: true, expression:
+    "(document.body?.innerText ?? '').trim().length + document.querySelectorAll('img,canvas,svg,video,iframe,input,button').length" }, sessionId);
+  return (check.result?.result?.value ?? 1) > 0;
+};
+const interactions = [];
+if (!blank && loaded) {
+  const deadline = Date.now() + 6_000;
+  for (let index = 0; index < 20 && Date.now() < deadline; index++) {
+    const named = await send("Runtime.evaluate", { returnByValue: true, expression: ACT(index, false) }, sessionId);
+    const label = named.result?.result?.value;
+    if (!label) break;   // no more controls
+    action = label;
+    interactions.push(label);
+    const acted = await send("Runtime.evaluate", { returnByValue: true, expression: ACT(index, true) }, sessionId);
+    if (acted.result?.exceptionDetails) add("exception", acted.result.exceptionDetails.exception?.description ?? "Interaction failed", null);
+    await new Promise((r) => setTimeout(r, 250));
+    const stillVisible = await visibleNow();
+    if (!stillVisible) { add("exception", "The app crashed: the page went blank", null); action = null; break; }
+    action = null;
+  }
+}
 
 clearTimeout(timer);
 chrome.kill("SIGKILL");
 server.close();
-finish({ loaded, page });
+finish({ loaded, page, interactions });

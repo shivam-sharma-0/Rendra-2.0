@@ -51,13 +51,20 @@ public class RuntimeCheckService {
         Probe live = probe(context, false);
         Set<String> existing = live == null ? Set.of()
                 : live.issues().stream().map(RuntimeCheckService::fingerprint).collect(Collectors.toSet());
-        return staged.issues().stream().filter(issue -> !existing.contains(fingerprint(issue)))
+        List<ProjectDiagnostic> introduced = staged.issues().stream().filter(issue -> !existing.contains(fingerprint(issue)))
                 .map(RuntimeCheckService::diagnostic).toList();
+        introduced.forEach(issue -> log.info("runtime_check_issue runId={} code={} message={}", context.runId(), issue.code(),
+                issue.message().length() > 300 ? issue.message().substring(0, 300) + "..." : issue.message()));
+        return introduced;
     }
 
-    record Issue(String kind, String message, String source) {}
+    /** {@code action}: the control being exercised when it happened (e.g. button "Reset"), null while loading. */
+    record Issue(String kind, String message, String source, String action) {
+        Issue(String kind, String message, String source) { this(kind, message, source, null); }
+    }
 
-    private record Probe(List<Issue> issues) {}
+    /** {@code interactions}: how many controls the probe exercised after the page loaded. */
+    private record Probe(List<Issue> issues, int interactions) {}
 
     /** Builds (if the stack needs it) a copy of the staged or live project and loads it; null if skipped. */
     private Probe probe(AgentContext context, boolean staged) {
@@ -75,8 +82,9 @@ public class RuntimeCheckService {
                 return null;
             }
             Probe probe = parse(result.stdout());
-            log.info("runtime_check runId={} target={} issues={} elapsedMs={}", context.runId(), staged ? "staged" : "live",
-                    probe == null ? "unreadable" : probe.issues().size(), (System.nanoTime() - started) / 1_000_000);
+            log.info("runtime_check runId={} target={} issues={} interactions={} elapsedMs={}", context.runId(), staged ? "staged" : "live",
+                    probe == null ? "unreadable" : probe.issues().size(), probe == null ? 0 : probe.interactions(),
+                    (System.nanoTime() - started) / 1_000_000);
             return probe;
         } finally {
             try { sandbox.removeTree(projectId, copy); } catch (RuntimeException ignored) { }
@@ -108,9 +116,10 @@ public class RuntimeCheckService {
             List<Issue> issues = new ArrayList<>();
             for (JsonNode issue : report.path("issues")) {
                 issues.add(new Issue(issue.path("kind").asText("console"), issue.path("message").asText(""),
-                        issue.path("source").isNull() ? null : issue.path("source").asText(null)));
+                        issue.path("source").isNull() ? null : issue.path("source").asText(null),
+                        issue.path("action").isNull() ? null : issue.path("action").asText(null)));
             }
-            return new Probe(List.copyOf(issues));
+            return new Probe(List.copyOf(issues), report.path("interactions").size());
         } catch (RuntimeException unreadable) {
             return null;
         }
@@ -122,7 +131,7 @@ public class RuntimeCheckService {
                 .replaceAll("-[A-Za-z0-9_-]{8}\\.(js|css|mjs)", ".$1")
                 .replaceAll(":\\d+(:\\d+)?", "")
                 .trim();
-        return issue.kind() + "|" + message;
+        return issue.kind() + "|" + message + (issue.action() == null ? "" : "|" + issue.action());
     }
 
     private static ProjectDiagnostic diagnostic(Issue issue) {
@@ -138,6 +147,7 @@ public class RuntimeCheckService {
             case "asset" -> "A file the page references is missing: " + issue.message();
             default -> issue.message() + (issue.source() == null ? "" : " (at " + issue.source() + ")");
         };
+        if (issue.action() != null) message = "After the check clicked/typed into " + issue.action() + ": " + message;
         String bounded = message.length() <= MAX_MESSAGE ? message : message.substring(0, MAX_MESSAGE) + "...";
         return new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR, bounded, "runtime", code);
     }
