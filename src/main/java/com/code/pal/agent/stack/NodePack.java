@@ -257,6 +257,11 @@ public class NodePack implements StackPack {
         } catch (RuntimeException error) { return false; }
     }
 
+    /** Whether the package under {@code root} declares {@code name} as a dependency or dev dependency. */
+    boolean declares(ProjectFiles files, UUID projectId, String root, String name) {
+        return files.regularFile(projectId, root, MANIFEST) && declaredDependencies(files, projectId, root).contains(name);
+    }
+
     private boolean declaresDependencies(ProjectFiles files, UUID projectId, String root) {
         return !declaredDependencies(files, projectId, root).isEmpty();
     }

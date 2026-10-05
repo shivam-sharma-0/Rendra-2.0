@@ -17,7 +17,7 @@ public class StackPacks {
 
     @Autowired
     public StackPacks(ObjectMapper objectMapper) {
-        this(List.of(new NodePack(objectMapper), new StaticSitePack()));
+        this(List.of(new MernPack(objectMapper), new NodePack(objectMapper), new StaticSitePack()));
     }
 
     public StackPacks(List<StackPack> packs) {

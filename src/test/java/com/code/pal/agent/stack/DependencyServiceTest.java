@@ -57,6 +57,23 @@ class DependencyServiceTest {
     }
 
     @Test
+    void aMernProjectInstallsAndLinksTheClientAndTheServerSeparately() {
+        project.write("client/package.json", "{\"dependencies\":{\"react\":\"19.0.0\"}}")
+                .write("server/package.json", "{\"dependencies\":{\"express\":\"5.1.0\"}}");
+
+        DependencyService.Preparation result = service.prepare(project.projectId, ".");
+
+        assertTrue(result.installed());
+        assertEquals(2, installs.size(), "one set per package");
+        assertEquals(List.of("client/node_modules", "server/node_modules"),
+                links.stream().map(link -> link.substring(0, link.indexOf(" -> "))).toList());
+        installSucceeds = false;
+        project.write("server/package.json", "{\"dependencies\":{\"nope\":\"9\"}}");
+        DependencyService.Preparation broken = service.prepare(project.projectId, ".");
+        assertTrue(broken.failed() && broken.error().startsWith("server/"), "the failing package is named: " + broken.error());
+    }
+
+    @Test
     void installsOncePerManifestSetAndLinksEveryRootToIt() {
         project.write("package.json", DEPS).write("stage/package.json", DEPS);
 
@@ -112,16 +129,17 @@ class DependencyServiceTest {
 
     @Test
     void onlyTheMostRecentlyUsedSetsAreKept() {
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 8; i++) {
             project.write("package.json", "{\"dependencies\":{\"pkg" + i + "\":\"1.0.0\"}}");
             service.prepare(project.projectId, ".");
         }
 
+        // Five: a MERN project's live and candidate client and server sets fit at once.
         List<String> remaining = project.files.list(project.projectId, ".codepal/deps", 1).stream()
                 .filter(entry -> entry.directory()).map(entry -> entry.path()).toList();
-        assertEquals(3, remaining.size(), remaining.toString());
+        assertEquals(5, remaining.size(), remaining.toString());
         assertTrue(remaining.contains(installs.getLast().substring(".codepal/deps/".length())), "the set in use is kept");
-        verify(sandbox, times(5)).install(any(), anyString(), any());
+        verify(sandbox, times(8)).install(any(), anyString(), any());
     }
 
     @Test

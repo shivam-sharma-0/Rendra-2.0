@@ -34,7 +34,7 @@ public class DependencyService {
     static final String STORE = ProjectPaths.INTERNAL + "/deps";
     private static final String COMPLETE = ".complete";
     /** Installed sets kept per project (the most recently used ones). */
-    private static final int MAX_SETS = 3;
+    private static final int MAX_SETS = 5;
     private static final int ERROR_TAIL_CHARS = 1_500;
 
     private final java.util.Map<UUID, java.util.concurrent.locks.ReentrantLock> locks = new java.util.concurrent.ConcurrentHashMap<>();
@@ -68,6 +68,22 @@ public class DependencyService {
     }
 
     private Preparation prepareLocked(UUID projectId, String root) {
+        StackPack project = stacks.detect(files, projectId, root);
+        List<String> packages = project.packageRoots(files, projectId, root);
+        if (packages.equals(List.of("."))) return preparePackage(projectId, root);
+        // Several packages (a MERN client and server): each installs and links its own dependencies.
+        boolean needed = false;
+        boolean installed = false;
+        for (String pkg : packages) {
+            Preparation part = preparePackage(projectId, ProjectPaths.combine(root, pkg));
+            if (part.failed()) return new Preparation(true, false, pkg + "/: " + part.error());
+            needed |= part.needed();
+            installed |= part.installed();
+        }
+        return new Preparation(needed, installed, null);
+    }
+
+    private Preparation preparePackage(UUID projectId, String root) {
         StackPack stack = stacks.detect(files, projectId, root);
         List<String> command = stack.installCommand(files, projectId, root);
         if (command.isEmpty() || stack.dependencyDirectory() == null) return new Preparation(false, false, null);

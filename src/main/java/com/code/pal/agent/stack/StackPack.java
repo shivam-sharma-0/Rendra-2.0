@@ -105,6 +105,14 @@ public interface StackPack {
     }
 
     /** Whether the staged change altered the commands validation would run. */
+    /**
+     * The folders, relative to the project root, that are packages with dependencies of their own; each
+     * is installed and linked separately (by the pack detected there). One package at the root by default.
+     */
+    default List<String> packageRoots(ProjectFiles files, UUID projectId, String root) {
+        return List.of(".");
+    }
+
     default boolean trustedCommandsChanged(ProjectFiles files, UUID projectId, String liveRoot, String stagedRoot) {
         return false;
     }

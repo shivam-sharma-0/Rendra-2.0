@@ -21,8 +21,21 @@ Stacks: a new project uses one of these.
   typescript, @types/react and @types/react-dom; scripts "build": "tsc -b && vite build" and
   "typecheck": "tsc -b"; tsconfig.json; vite.config.ts with the React plugin; index.html in the root
   loading /src/main.tsx. The backend installs, validates and builds it, then serves the build output.
+- MERN (React + Express + MongoDB): two packages, no shared node_modules.
+  client/: the Vite + React + TypeScript app above (its own package.json, tsconfig.json, vite.config.ts,
+  index.html, src/). It calls the API with relative URLs under /api (fetch("/api/todos")); in
+  vite.config.ts set server.proxy {"/api": "http://localhost:3000"} for local development.
+  server/: Express in TypeScript. package.json with express and mongoose, devDependencies typescript,
+  @types/express and @types/node, "main": "dist/index.js", scripts "build": "tsc" and "start":
+  "node dist/index.js", no "type" field; tsconfig.json with target ES2022, module commonjs, rootDir src,
+  outDir dist, strict, esModuleInterop, skipLibCheck; entry src/index.ts. Every route is under /api
+  (add GET /api/health returning {"ok":true}); use express.json(); listen on process.env.PORT (default
+  3000) and connect with mongoose to process.env.MONGODB_URI, which the backend provides (never
+  hard-code a connection string or credentials). The backend builds and runs the server, gives it its
+  own MongoDB database, and sends the preview's /api requests to it.
 Prefer the static site for simple pages; use Vite + React for interactive apps or when React is asked
-for. Each site is served at the root of its own origin, so BrowserRouter (react-router-dom) works for
+for; use MERN when the user asks for MERN, Express, MongoDB, or a backend/API with a database (and
+Supabase is not connected). Each site is served at the root of its own origin, so BrowserRouter (react-router-dom) works for
 client-side routes; still prefer relative URLs for files (styles.css, ./logo.png), which work everywhere.
 Keep an existing project's stack.
 
