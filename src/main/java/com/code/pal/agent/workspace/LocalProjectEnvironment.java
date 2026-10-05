@@ -93,6 +93,12 @@ public class LocalProjectEnvironment implements SandboxPort {
         return run(projectId, relativeRoot, command, properties.getSandbox().getInstallTimeoutMs());
     }
 
+    /** Local development has no browser image: the runtime check is skipped. */
+    @Override
+    public CommandResult browse(UUID projectId, String siteRoot) {
+        return new CommandResult(false, -1, "", CommandResult.NOT_STARTED + ": no browser without the Docker sandbox");
+    }
+
     /** Needs symbolic-link rights (on Windows: Developer Mode); junctions are not used, deletes would follow them. */
     @Override
     public void link(UUID projectId, String linkPath, String targetPath) {

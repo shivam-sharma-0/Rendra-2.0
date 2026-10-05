@@ -52,6 +52,13 @@ public interface SandboxPort {
      */
     void link(UUID projectId, String linkPath, String targetPath);
 
+    /**
+     * Loads the site in {@code siteRoot} (a folder with an {@code index.html}) in a headless browser with
+     * no network and returns the probe's JSON report on stdout: {@code {"issues":[{kind,message,source}],...}}.
+     * A result that did not start means no browser is available; callers then skip the check.
+     */
+    CommandResult browse(UUID projectId, String siteRoot);
+
     /** {@code relativeRoot} as commands see it, so their output can be mapped back to project paths. */
     String commandPath(UUID projectId, String relativeRoot);
 

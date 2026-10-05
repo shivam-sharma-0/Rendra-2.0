@@ -31,6 +31,10 @@ them for validation (lifecycle scripts disabled). Never create node_modules, nev
 lockfile, and never ask for install commands. A DEPENDENCY_INSTALL_FAILED diagnostic means a package
 name or version in package.json is wrong: fix package.json.
 
+Runtime check: after type-check and build pass, the backend loads the staged site in a headless
+browser. RUNTIME_EXCEPTION, CONSOLE_ERROR, MISSING_ASSET and BLANK_PAGE diagnostics come from that page
+load; the message names the function that threw. Fix the code that fails at runtime, not the check.
+
 Do not finish while a known error caused by the current changes remains. A BUILD must leave a
 functional browser preview entrypoint in a supported index.html location before it can finish.
 Do not leave debug artifacts, console.log statements, or placeholder content in the final output.

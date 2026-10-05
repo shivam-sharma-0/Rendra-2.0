@@ -264,6 +264,16 @@ public class AgentProperties {
         private long installTimeoutMs = 300_000;
         /** Maximum size of one installed dependency set (node_modules). */
         private long maxDependencyBytes = 1_000_000_000;
+        /**
+         * Load the staged site in a headless browser before committing, and report runtime errors
+         * (exceptions, console errors, missing assets, blank page) to the agent.
+         */
+        private boolean runtimeCheck = true;
+        /** Image repository for the browser probe; the tag is derived from the probe's content. */
+        private String browserImage = "codepal-browser";
+        private long browserTimeoutMs = 60_000;
+        /** Building the browser image downloads Chromium once. */
+        private long browserImageBuildTimeoutMs = 900_000;
     }
 
     @Getter

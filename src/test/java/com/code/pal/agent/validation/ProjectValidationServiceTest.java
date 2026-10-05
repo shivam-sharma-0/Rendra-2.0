@@ -23,6 +23,37 @@ import static org.mockito.Mockito.*;
 class ProjectValidationServiceTest {
     /** Real (local) dependency handling unless a test replaces it. */
     private com.code.pal.agent.stack.DependencyService dependencies;
+    /** No browser unless a test supplies one. */
+    private RuntimeCheckService runtime;
+
+    @Test
+    void aRuntimeErrorTheChangeIntroducedFailsTheFinalGate() throws Exception {
+        runtime = mock(RuntimeCheckService.class);
+        when(runtime.check(any())).thenReturn(List.of(new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR,
+                "TypeError: Cannot read properties of undefined (reading 'map') (at assets/index.js:40:12 (App))", "runtime", "RUNTIME_EXCEPTION")));
+        Fixture fixture = fixture(3);
+        fixture.changeSets.create(fixture.context, "src/extra.ts", "export const x = 1;\n");
+
+        ValidationReport report = fixture.validation.validateAll(fixture.context);
+
+        assertFalse(report.changeValidationPassed());
+        assertEquals("RUNTIME_EXCEPTION", report.introducedDiagnostics().getFirst().code());
+        assertFalse(fixture.changeSets.validationProgress(fixture.context).repairLimitExhausted(), "the model repairs it");
+    }
+
+    @Test
+    void aCleanRuntimeCheckLetsTheChangePass() throws Exception {
+        runtime = mock(RuntimeCheckService.class);
+        when(runtime.check(any())).thenReturn(List.of());
+        Fixture fixture = fixture(3);
+        fixture.changeSets.create(fixture.context, "src/extra.ts", "export const x = 1;\n");
+
+        ValidationReport report = fixture.validation.validateAll(fixture.context);
+
+        assertTrue(report.changeValidationPassed());
+        assertTrue(report.summary().contains("RUNTIME"), report.summary());
+    }
+
 
     @Test
     void aDependencyInstallTheChangeBrokeIsReportedAsRepairable() throws Exception {
@@ -148,7 +179,7 @@ class ProjectValidationServiceTest {
         var stacks = new com.code.pal.agent.stack.StackPacks(mapper);
         ProjectValidationService validation = new ProjectValidationService(changeSets, stacks, properties, project.files,
                 project.sandbox, dependencies != null ? dependencies
-                        : new com.code.pal.agent.stack.DependencyService(stacks, project.files, project.sandbox, properties));
+                        : new com.code.pal.agent.stack.DependencyService(stacks, project.files, project.sandbox, properties), runtime);
         return new Fixture(project, context, changeSets, validation);
     }
 

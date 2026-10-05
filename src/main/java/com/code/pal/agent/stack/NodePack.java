@@ -103,6 +103,15 @@ public class NodePack implements StackPack {
         return null;
     }
 
+    @Override
+    public PreviewBuild diagnosticBuild(ProjectFiles files, UUID projectId, String root) {
+        PreviewBuild build = previewBuild(files, projectId, root);
+        if (build == null || !build.command().contains("node_modules/vite/bin/vite.js")) return build;
+        List<String> readable = new ArrayList<>(build.command());
+        readable.addAll(List.of("--minify", "false"));
+        return new PreviewBuild(List.copyOf(readable), build.outputDirectories());
+    }
+
     /**
      * Only the fields npm resolves from, key-sorted, plus the exact lockfile: scripts, formatting or a
      * renamed project do not trigger a new install (validation rewrites the candidate's scripts).

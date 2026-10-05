@@ -34,6 +34,8 @@ public class ProjectValidationService {
     private final ProjectFiles files;
     private final SandboxPort sandbox;
     private final DependencyService dependencies;
+    /** Browser check of the staged site; null where no browser is wired (focused tests). */
+    private final RuntimeCheckService runtime;
     private final Map<UUID, ValidationReport> lastReports = new ConcurrentHashMap<>();
 
     public Object diagnostics(AgentContext context) {
@@ -98,10 +100,19 @@ public class ProjectValidationService {
             comparisons.add(compare(context, plan));
             executed.add(operation.name());
         }
-        List<ProjectDiagnostic> introduced = comparisons.stream().flatMap(value -> value.introduced().stream()).toList();
+        List<ProjectDiagnostic> introduced = new ArrayList<>(comparisons.stream().flatMap(value -> value.introduced().stream()).toList());
         List<ProjectDiagnostic> existing = comparisons.stream().flatMap(value -> value.preExisting().stream()).toList();
         boolean passed = comparisons.stream().allMatch(Comparison::changePassed);
         boolean terminal = comparisons.stream().anyMatch(value -> !value.after().started() || value.after().timedOut());
+        // Only a change that type-checks and builds is worth loading in a browser.
+        if (passed && runtime != null) {
+            List<ProjectDiagnostic> runtimeIssues = runtime.check(context);
+            executed.add("RUNTIME");
+            if (!runtimeIssues.isEmpty()) {
+                introduced.addAll(runtimeIssues);
+                passed = false;
+            }
+        }
         if (terminal) changeSets.recordTerminalValidationFailure(context, introduced);
         else changeSets.recordProjectValidation(context, passed, introduced);
         String summary = passed

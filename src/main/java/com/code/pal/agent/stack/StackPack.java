@@ -72,6 +72,14 @@ public interface StackPack {
     }
 
     /**
+     * The build the runtime check loads: like {@link #previewBuild}, but readable when it fails (for
+     * Vite: not minified, so errors name the component that threw).
+     */
+    default PreviewBuild diagnosticBuild(ProjectFiles files, UUID projectId, String root) {
+        return previewBuild(files, projectId, root);
+    }
+
+    /**
      * A backend-chosen build command and the folders (relative to the build's root, in order of
      * preference) where it may leave a site with an {@code index.html}.
      */

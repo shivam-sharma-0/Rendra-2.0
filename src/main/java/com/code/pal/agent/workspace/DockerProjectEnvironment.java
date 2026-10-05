@@ -56,6 +56,8 @@ public class DockerProjectEnvironment implements SandboxPort {
     private static final String MAPPING_MARKER = ".codepal-mapping-check";
     /** Shared package-manager cache under the workspace base, mounted only into install containers. */
     static final String PACKAGE_CACHE = ".package-cache";
+    /** Build context for the browser probe image, written from the classpath. */
+    private static final String BROWSER_CONTEXT = ".browser-image";
 
     private final AgentProperties properties;
     private final WorkspaceStorage storage;
@@ -66,6 +68,7 @@ public class DockerProjectEnvironment implements SandboxPort {
     private final Set<UUID> ready = ConcurrentHashMap.newKeySet();
     private final Map<UUID, ReentrantReadWriteLock> projectLocks = new ConcurrentHashMap<>();
     private final Instant startedAt;
+    private volatile String browserImageTag;
 
     @Autowired
     public DockerProjectEnvironment(AgentProperties properties, WorkspaceStorage storage) {
@@ -409,6 +412,83 @@ public class DockerProjectEnvironment implements SandboxPort {
         String target = ProjectPaths.relativeTarget(link, ProjectPaths.normalize(targetPath, false));
         exec(projectId, ".", List.of("sh", "-c", "rm -rf -- \"$1\" && ln -s -- \"$2\" \"$1\"", "link", link, target))
                 .requireSuccess();
+    }
+
+    /**
+     * A throwaway browser container with no network, the site folder mounted read-only, same user,
+     * limits and dropped capabilities as the project container. Chromium runs without its own sandbox
+     * inside it (that needs privileges the container does not have): the container is the boundary.
+     */
+    @Override
+    public CommandResult browse(UUID projectId, String siteRoot) {
+        String image;
+        try {
+            image = browserImage();
+        } catch (RuntimeException error) {
+            return new CommandResult(false, -1, "", CommandResult.NOT_STARTED + " (browser image): " + error.getMessage());
+        }
+        String root = ProjectPaths.normalize(siteRoot, true);
+        String site = environment(projectId).hostPath() + (root.equals(".") ? "" : "/" + root);
+        String name = "codepal-probe-" + UUID.randomUUID();
+        List<String> args = List.of("run", "--rm", "--name", name, "--label", "com.codepal.probe=true",
+                "--network", "none", "--user", user(),
+                "--cpus", Double.toString(Math.max(0.5, properties.getSandbox().getCpus())),
+                "--memory", Math.max(512, Math.min(2_048, properties.getSandbox().getMemoryMb())) + "m",
+                "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                "--mount", "type=bind,source=" + site + ",target=/site,readonly", image, "/site");
+        CommandResult result = run(args, Duration.ofMillis(Math.max(10_000, properties.getSandbox().getBrowserTimeoutMs())),
+                null, outputLimit());
+        if (result.timedOut()) run(List.of("rm", "-f", name), Duration.ofSeconds(30), null);
+        return result;
+    }
+
+    /**
+     * The probe image, built once from the classpath (Dockerfile + probe.mjs) under a tag derived from
+     * their content, so a changed probe gets a new image. Building downloads Chromium.
+     */
+    private synchronized String browserImage() {
+        if (browserImageTag != null) return browserImageTag;
+        Map<String, byte[]> context = new java.util.LinkedHashMap<>();
+        for (String file : List.of("Dockerfile", "probe.mjs")) {
+            try (var input = getClass().getResourceAsStream("/sandbox/browser/" + file)) {
+                if (input == null) throw new IllegalStateException("Missing classpath resource sandbox/browser/" + file);
+                context.put(file, input.readAllBytes());
+            } catch (IOException error) {
+                throw new IllegalStateException("Cannot read the browser probe: " + error.getMessage(), error);
+            }
+        }
+        String tag = properties.getSandbox().getBrowserImage() + ":" + contentHash(context.values());
+        if (run(List.of("image", "inspect", "--format", "{{.Id}}", tag), Duration.ofSeconds(20), null).success()) {
+            return browserImageTag = tag;
+        }
+        Path directory = storage.base().resolve(BROWSER_CONTEXT);
+        try {
+            Files.createDirectories(directory);
+            for (Map.Entry<String, byte[]> file : context.entrySet()) Files.write(directory.resolve(file.getKey()), file.getValue());
+        } catch (IOException error) {
+            throw new IllegalStateException("Cannot write the browser image context: " + error.getMessage(), error);
+        }
+        log.info("browser_image_build_started tag={}", tag);
+        CommandResult built = run(List.of("build", "-q", "-t", tag, dockerBase() + "/" + BROWSER_CONTEXT),
+                Duration.ofMillis(Math.max(60_000, properties.getSandbox().getBrowserImageBuildTimeoutMs())), null);
+        if (!built.success()) throw new IllegalStateException("docker build failed: " + tail(built.stdout() + built.error()));
+        log.info("browser_image_build_done tag={}", tag);
+        return browserImageTag = tag;
+    }
+
+    private static String contentHash(java.util.Collection<byte[]> parts) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            parts.forEach(digest::update);
+            return java.util.HexFormat.of().formatHex(digest.digest(), 0, 6);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
+    private static String tail(String output) {
+        String trimmed = output.strip();
+        return trimmed.length() <= 800 ? trimmed : "..." + trimmed.substring(trimmed.length() - 800);
     }
 
     private String installNetwork() {
