@@ -14,7 +14,7 @@ import com.code.pal.agent.runtime.AgentRunResult;
 import com.code.pal.agent.tool.AgentToolExecutor;
 import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.tool.impl.*;
-import com.code.pal.agent.validation.ProjectCommandResolver;
+import com.code.pal.agent.stack.StackPacks;
 import com.code.pal.agent.validation.ProjectValidationService;
 import com.code.pal.agent.workspace.LocalProject;
 import com.code.pal.message.domain.Message;
@@ -69,7 +69,7 @@ class AgentSelfRepairTest {
         FileChangeRepository fileChanges = mock(FileChangeRepository.class);
         when(fileChanges.save(any())).thenAnswer(call -> call.getArgument(0));
         ChangeSetService changeSets = new ChangeSetService(fileChanges, runs, mapper, props, workspace.files, workspace.sandbox);
-        ProjectValidationService validation = new ProjectValidationService(changeSets, new ProjectCommandResolver(mapper), props,
+        ProjectValidationService validation = new ProjectValidationService(changeSets, new StackPacks(mapper), props,
                 workspace.files, workspace.sandbox);
 
         ToolRegistry registry = new ToolRegistry(List.of(new ReadFileTool(), new SetPlanTool(),

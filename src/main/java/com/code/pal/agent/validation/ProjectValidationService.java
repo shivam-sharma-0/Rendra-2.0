@@ -3,6 +3,9 @@ package com.code.pal.agent.validation;
 import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.tool.AgentContext;
+import com.code.pal.agent.stack.CommandPlan;
+import com.code.pal.agent.stack.StackPack;
+import com.code.pal.agent.stack.StackPacks;
 import com.code.pal.agent.tool.AgentToolException;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.SandboxPort;
@@ -28,15 +31,15 @@ public class ProjectValidationService {
     private static final Pattern ANSI = Pattern.compile("\\u001B\\[[;\\d]*m");
 
     private final ChangeSetService changeSets;
-    private final ProjectCommandResolver resolver;
+    private final StackPacks stacks;
     private final AgentProperties properties;
     private final ProjectFiles files;
     private final SandboxPort sandbox;
     private final Map<UUID, ValidationReport> lastReports = new ConcurrentHashMap<>();
 
     public Object diagnostics(AgentContext context) {
-        var capabilities = resolver.inspect(files, context.projectId(), ".");
-        var summary = new CapabilitySummary(capabilities.packageManager(), capabilities.declaredPackageManager(),
+        var capabilities = stack(context).inspect(files, context.projectId(), ".");
+        var summary = new CapabilitySummary(capabilities.stack(), capabilities.packageManager(), capabilities.declaredPackageManager(),
                 capabilities.scripts().keySet().stream().sorted().toList(), capabilities.availableOperations(), capabilities.error());
         return new DiagnosticsSnapshot(summary, lastReports.get(context.runId()),
                 changeSets.validationProgress(context));
@@ -44,7 +47,7 @@ public class ProjectValidationService {
 
     public ValidationReport run(AgentContext context, ValidationOperation operation, String scope) {
         validateScope(scope);
-        ProjectCommandResolver.CommandPlan plan = resolver.resolve(files, context.projectId(), ".", operation, scope);
+        CommandPlan plan = stack(context).resolve(files, context.projectId(), ".", operation, scope);
         if (!plan.available()) {
             ValidationReport report = reportUnavailable(context, plan);
             lastReports.put(context.runId(), report);
@@ -77,7 +80,8 @@ public class ProjectValidationService {
             return report;
         }
         var view = changeSets.view(context);
-        if (resolver.validationScriptsChanged(files, context.projectId(), view.liveRoot(), view.stagedRoot())) {
+        StackPack stack = stack(context);
+        if (stack.trustedCommandsChanged(files, context.projectId(), view.liveRoot(), view.stagedRoot())) {
             List<ProjectDiagnostic> diagnostics = List.of(new ProjectDiagnostic("package.json", null, null,
                     DiagnosticSeverity.ERROR, "Validation scripts changed during the run and cannot be executed as trusted commands",
                     "validation-security", "VALIDATION_SCRIPT_CHANGED"));
@@ -90,7 +94,7 @@ public class ProjectValidationService {
         List<Comparison> comparisons = new ArrayList<>();
         List<String> executed = new ArrayList<>();
         for (ValidationOperation operation : List.of(ValidationOperation.TYPE_CHECK, ValidationOperation.BUILD)) {
-            ProjectCommandResolver.CommandPlan plan = resolver.resolve(files, context.projectId(), view.liveRoot(), operation, null);
+            CommandPlan plan = stack.resolve(files, context.projectId(), view.liveRoot(), operation, null);
             if (!plan.available()) continue;
             comparisons.add(compare(context, plan));
             executed.add(operation.name());
@@ -110,16 +114,21 @@ public class ProjectValidationService {
         return report;
     }
 
+    /** The stack of the live project: commands come from its original, trusted manifests. */
+    private StackPack stack(AgentContext context) {
+        return stacks.detect(files, context.projectId(), ".");
+    }
+
     public ValidationReport lastReport(UUID runId) { return lastReports.get(runId); }
     public void clear(UUID runId) { lastReports.remove(runId); }
 
-    private Comparison compare(AgentContext context, ProjectCommandResolver.CommandPlan plan) {
+    private Comparison compare(AgentContext context, CommandPlan plan) {
         String name = plan.operation().name().toLowerCase(Locale.ROOT);
         String baseline = changeSets.createValidationBaseline(context, name);
         try {
             String candidate = changeSets.createValidationCandidate(context, name);
             try {
-                resolver.preserveOriginalScripts(files, context.projectId(), ".", candidate);
+                stack(context).preserveTrustedCommands(files, context.projectId(), ".", candidate);
                 CommandOutcome before = execute(context, plan, baseline);
                 CommandOutcome after = execute(context, plan, candidate);
                 List<String> touched = changeSets.view(context).touchedPaths();
@@ -147,7 +156,7 @@ public class ProjectValidationService {
         }
     }
 
-    private CommandOutcome execute(AgentContext context, ProjectCommandResolver.CommandPlan plan, String root) {
+    private CommandOutcome execute(AgentContext context, CommandPlan plan, String root) {
         var result = sandbox.exec(context.projectId(), root, plan.command());
         String output = result.stdout() + (result.error().isBlank() ? "" : "\n" + result.error());
         return new CommandOutcome(result.started(), result.timedOut(), result.exitCode(), output,
@@ -205,7 +214,7 @@ public class ProjectValidationService {
                 .limit(limit).toList();
     }
 
-    private ValidationReport toReport(AgentContext context, ProjectCommandResolver.CommandPlan plan, Comparison comparison) {
+    private ValidationReport toReport(AgentContext context, CommandPlan plan, Comparison comparison) {
         var progress = changeSets.validationProgress(context);
         return new ValidationReport(plan.operation(), true, comparison.after().exitCode() == 0,
                 comparison.changePassed(), comparison.after().timedOut(), comparison.after().exitCode(),
@@ -228,12 +237,12 @@ public class ProjectValidationService {
         List<ProjectDiagnostic> boundedIntroduced = bounded(introduced, view.touchedPaths());
         int remaining = Math.max(0, properties.getMaxValidationDiagnostics() - boundedIntroduced.size());
         return new ValidationReport(ValidationOperation.ALL, true, passed, passed, false, passed ? 0 : 1,
-                resolver.inspect(files, context.projectId(), view.liveRoot()).packageManager(), "project validation",
+                stack(context).inspect(files, context.projectId(), view.liveRoot()).packageManager(), "project validation",
                 boundedIntroduced, bounded(existing, view.touchedPaths(), remaining), progress.repairAttempts(),
                 progress.repairAttemptsRemaining(), progress.revision(), summary);
     }
 
-    private ValidationReport reportUnavailable(AgentContext context, ProjectCommandResolver.CommandPlan plan) {
+    private ValidationReport reportUnavailable(AgentContext context, CommandPlan plan) {
         var progress = changeSets.validationProgress(context);
         return new ValidationReport(plan.operation(), false, false, false, false, null, plan.packageManager(), null,
                 List.of(), List.of(), progress.repairAttempts(), progress.repairAttemptsRemaining(), progress.revision(),
@@ -283,10 +292,10 @@ public class ProjectValidationService {
 
     /** {@code root}: the directory the command ran in, as the command saw it (for mapping its paths back). */
     private record CommandOutcome(boolean started, boolean timedOut, int exitCode, String output, String root) {}
-    private record Comparison(ProjectCommandResolver.CommandPlan plan, CommandOutcome before, CommandOutcome after,
+    private record Comparison(CommandPlan plan, CommandOutcome before, CommandOutcome after,
                               List<ProjectDiagnostic> introduced, List<ProjectDiagnostic> preExisting,
                               boolean changePassed) {}
-    public record CapabilitySummary(String packageManager, String declaredPackageManager, List<String> scriptNames,
+    public record CapabilitySummary(String stack, String packageManager, String declaredPackageManager, List<String> scriptNames,
                                     List<String> availableOperations, String error) {}
     public record DiagnosticsSnapshot(CapabilitySummary capabilities, ValidationReport lastReport,
                                       ChangeSetService.ValidationProgress progress) {}

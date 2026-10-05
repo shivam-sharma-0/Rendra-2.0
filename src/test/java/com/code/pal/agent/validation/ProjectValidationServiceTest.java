@@ -110,7 +110,7 @@ class ProjectValidationServiceTest {
         AgentContext context = new AgentContext(project.projectId, 7L, ProjectType.BUILD, stage, null,
                 new ProjectContextTrace(), runId, plan, project.files);
         ProjectValidationService validation = new ProjectValidationService(changeSets,
-                new ProjectCommandResolver(mapper), properties, project.files, project.sandbox);
+                new com.code.pal.agent.stack.StackPacks(mapper), properties, project.files, project.sandbox);
         return new Fixture(project, context, changeSets, validation);
     }
 
