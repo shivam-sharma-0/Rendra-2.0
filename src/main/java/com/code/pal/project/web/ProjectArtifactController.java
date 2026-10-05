@@ -4,7 +4,9 @@ import com.code.pal.project.artifact.ProjectArtifactService;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.shared.security.AuthPrincipal;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -28,6 +30,10 @@ public class ProjectArtifactController {
     public String content(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId,
                           @RequestParam String path) {
         projects.requireAccessible(principal.userId(), projectId);
-        return artifacts.read(projectId, path);
+        try {
+            return artifacts.read(projectId, path);
+        } catch (IllegalArgumentException missingOrInvalid) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, missingOrInvalid.getMessage());
+        }
     }
 }
