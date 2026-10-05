@@ -1,0 +1,133 @@
+package com.code.pal.agent.stack;
+
+import com.code.pal.agent.workspace.LocalProject;
+import com.code.pal.agent.workspace.LocalProjectEnvironment;
+import com.code.pal.agent.workspace.ProjectPaths;
+import com.code.pal.agent.workspace.SandboxPort;
+import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+
+class DependencyServiceTest {
+    private static final String DEPS = "{\"dependencies\":{\"react\":\"19.0.0\"}}";
+
+    private final LocalProject project = LocalProject.create();
+    private final LocalProjectEnvironment sandbox = spy(project.sandbox);
+    private final List<String> installs = new ArrayList<>();
+    private final List<String> links = new ArrayList<>();
+    private boolean installSucceeds = true;
+    private final DependencyService service = new DependencyService(new StackPacks(new ObjectMapper()), project.files,
+            sandbox, project.properties);
+
+    DependencyServiceTest() {
+        // The install step stands in for npm: it records where it ran and fills node_modules there.
+        doAnswer(call -> {
+            String root = call.getArgument(1);
+            installs.add(root);
+            if (!installSucceeds) return new SandboxPort.CommandResult(false, 1, "npm ERR! 404 Not Found - nope@9", "");
+            project.write(root + "/node_modules/react/index.js", "module.exports = {};");
+            return new SandboxPort.CommandResult(true, 0, "", "");
+        }).when(sandbox).install(any(), anyString(), any());
+        // Windows test hosts may not allow symlinks; record the link instead.
+        doAnswer(call -> links.add(call.getArgument(1) + " -> " + call.getArgument(2))).when(sandbox).link(any(), anyString(), anyString());
+    }
+
+    @Test
+    void aProjectWithoutDependenciesInstallsNothing() {
+        project.write("package.json", "{\"scripts\":{\"build\":\"vite build\"}}");
+
+        DependencyService.Preparation result = service.prepare(project.projectId, ".");
+
+        assertFalse(result.needed());
+        assertTrue(installs.isEmpty() && links.isEmpty());
+    }
+
+    @Test
+    void installsOncePerManifestSetAndLinksEveryRootToIt() {
+        project.write("package.json", DEPS).write("stage/package.json", DEPS);
+
+        DependencyService.Preparation first = service.prepare(project.projectId, ".");
+        DependencyService.Preparation second = service.prepare(project.projectId, "stage");
+
+        assertTrue(first.installed());
+        assertFalse(second.installed(), "the same manifests reuse the installed set");
+        assertEquals(1, installs.size());
+        String set = installs.getFirst();
+        assertTrue(set.startsWith(".codepal/deps/"), set);
+        assertTrue(project.exists(set + "/package.json"), "the install runs on a copy of the manifests");
+        assertEquals(List.of("node_modules -> " + set + "/node_modules", "stage/node_modules -> " + set + "/node_modules"), links);
+    }
+
+    @Test
+    void changedManifestsGetTheirOwnSet() {
+        project.write("package.json", DEPS);
+        service.prepare(project.projectId, ".");
+        project.write("package.json", "{\"dependencies\":{\"react\":\"19.0.0\",\"zustand\":\"5.0.0\"}}");
+
+        service.prepare(project.projectId, ".");
+
+        assertEquals(2, installs.size());
+        assertNotEquals(installs.get(0), installs.get(1));
+    }
+
+    @Test
+    void scriptOrFormattingChangesReuseTheInstalledSet() {
+        project.write("package.json", "{\"scripts\":{\"build\":\"vite build\"},\"dependencies\":{\"react\":\"19.0.0\",\"a\":\"1\"}}");
+        service.prepare(project.projectId, ".");
+        // What validation's trusted-scripts rewrite (or an agent's reformat) produces: same dependencies.
+        project.write("package.json", "{\n  \"dependencies\": {\"a\": \"1\", \"react\": \"19.0.0\"},\n  \"scripts\": {\"build\": \"tsc -b\"}\n}");
+
+        service.prepare(project.projectId, ".");
+
+        assertEquals(1, installs.size(), "no reinstall when only scripts or formatting changed");
+    }
+
+    @Test
+    void aFailedInstallIsReportedAndLeavesNothingBehind() {
+        project.write("package.json", "{\"dependencies\":{\"nope\":\"9\"}}");
+        installSucceeds = false;
+
+        DependencyService.Preparation result = service.prepare(project.projectId, ".");
+
+        assertTrue(result.failed());
+        assertTrue(result.error().contains("nope@9"), result.error());
+        assertFalse(project.exists(installs.getFirst()), "a half-installed set is removed");
+        assertTrue(links.isEmpty());
+        verify(sandbox, never()).link(any(), anyString(), anyString());
+    }
+
+    @Test
+    void onlyTheMostRecentlyUsedSetsAreKept() {
+        for (int i = 0; i < 5; i++) {
+            project.write("package.json", "{\"dependencies\":{\"pkg" + i + "\":\"1.0.0\"}}");
+            service.prepare(project.projectId, ".");
+        }
+
+        List<String> remaining = project.files.list(project.projectId, ".codepal/deps", 1).stream()
+                .filter(entry -> entry.directory()).map(entry -> entry.path()).toList();
+        assertEquals(3, remaining.size(), remaining.toString());
+        assertTrue(remaining.contains(installs.getLast().substring(".codepal/deps/".length())), "the set in use is kept");
+        verify(sandbox, times(5)).install(any(), anyString(), any());
+    }
+
+    @Test
+    void linksAreRelativeSoTheyResolveInsideAndOutsideTheSandbox() {
+        assertEquals(".codepal/deps/x/node_modules", ProjectPaths.relativeTarget("node_modules", ".codepal/deps/x/node_modules"));
+        assertEquals("../../../deps/x/node_modules",
+                ProjectPaths.relativeTarget(".codepal/changesets/run/candidate-build/node_modules", ".codepal/deps/x/node_modules"));
+    }
+}

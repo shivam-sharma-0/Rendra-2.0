@@ -17,9 +17,45 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 class ProjectValidationServiceTest {
+    /** Real (local) dependency handling unless a test replaces it. */
+    private com.code.pal.agent.stack.DependencyService dependencies;
+
+    @Test
+    void aDependencyInstallTheChangeBrokeIsReportedAsRepairable() throws Exception {
+        dependencies = mock(com.code.pal.agent.stack.DependencyService.class);
+        when(dependencies.prepare(any(), anyString())).thenAnswer(call -> call.<String>getArgument(1).contains("/candidate-")
+                ? new com.code.pal.agent.stack.DependencyService.Preparation(true, false, "Dependencies could not be installed: npm ERR! 404 nope@9")
+                : new com.code.pal.agent.stack.DependencyService.Preparation(true, false, null));
+        Fixture fixture = fixture(3);
+        fixture.changeSets.create(fixture.context, "src/extra.ts", "export const x = 1;\n");
+
+        ValidationReport report = fixture.validation.run(fixture.context, ValidationOperation.TYPE_CHECK, null);
+
+        assertFalse(report.changeValidationPassed());
+        assertEquals("DEPENDENCY_INSTALL_FAILED", report.introducedDiagnostics().getFirst().code());
+        assertTrue(report.introducedDiagnostics().getFirst().message().contains("nope@9"));
+        assertFalse(fixture.changeSets.validationProgress(fixture.context).repairLimitExhausted(), "the model can fix package.json");
+    }
+
+    @Test
+    void whenNothingInstallsTheChangeIsNotBlamedAndRepairStops() throws Exception {
+        dependencies = mock(com.code.pal.agent.stack.DependencyService.class);
+        when(dependencies.prepare(any(), anyString())).thenReturn(
+                new com.code.pal.agent.stack.DependencyService.Preparation(true, false, "Dependencies could not be installed: ENOTFOUND registry"));
+        Fixture fixture = fixture(3);
+        fixture.changeSets.create(fixture.context, "src/extra.ts", "export const x = 1;\n");
+
+        ValidationReport report = fixture.validation.run(fixture.context, ValidationOperation.TYPE_CHECK, null);
+
+        assertFalse(report.changeValidationPassed());
+        assertTrue(fixture.changeSets.validationProgress(fixture.context).repairLimitExhausted(),
+                "an infrastructure failure must not send the model into repair loops");
+    }
+
     @Test
     void reportsIntroducedDiagnosticThenAcceptsBoundedRepair() throws Exception {
         Fixture fixture = fixture(3);
@@ -109,8 +145,10 @@ class ProjectValidationServiceTest {
         plan.revise(List.of("Modify App", "Type-check", "Repair if necessary"), "test");
         AgentContext context = new AgentContext(project.projectId, 7L, ProjectType.BUILD, stage, null,
                 new ProjectContextTrace(), runId, plan, project.files);
-        ProjectValidationService validation = new ProjectValidationService(changeSets,
-                new com.code.pal.agent.stack.StackPacks(mapper), properties, project.files, project.sandbox);
+        var stacks = new com.code.pal.agent.stack.StackPacks(mapper);
+        ProjectValidationService validation = new ProjectValidationService(changeSets, stacks, properties, project.files,
+                project.sandbox, dependencies != null ? dependencies
+                        : new com.code.pal.agent.stack.DependencyService(stacks, project.files, project.sandbox, properties));
         return new Fixture(project, context, changeSets, validation);
     }
 

@@ -54,6 +54,8 @@ public class DockerProjectEnvironment implements SandboxPort {
             "{{.HostConfig.NetworkMode}}|{{.Config.User}}|{{range .Mounts}}{{.Type}}={{.Source}};{{end}}";
     private static final Pattern WSL_SHARE = Pattern.compile("^//wsl(?:\\.localhost|\\$)/[^/]+(/.*)$", Pattern.CASE_INSENSITIVE);
     private static final String MAPPING_MARKER = ".codepal-mapping-check";
+    /** Shared package-manager cache under the workspace base, mounted only into install containers. */
+    static final String PACKAGE_CACHE = ".package-cache";
 
     private final AgentProperties properties;
     private final WorkspaceStorage storage;
@@ -367,6 +369,53 @@ public class DockerProjectEnvironment implements SandboxPort {
                 timeout(), null, outputLimit());
     }
 
+    /**
+     * A throwaway container on {@code install-network} with the project folder and a shared package
+     * cache mounted; the project container itself never gets a network. Same user, limits and dropped
+     * capabilities as the project container.
+     */
+    @Override
+    public CommandResult install(UUID projectId, String relativeRoot, List<String> command) {
+        if (command == null || command.isEmpty()) throw new IllegalArgumentException("Install command is empty");
+        Environment environment = environment(projectId);
+        storage.ensure(projectId);
+        try {
+            Files.createDirectories(storage.base().resolve(PACKAGE_CACHE));
+        } catch (IOException error) {
+            throw new IllegalStateException("Cannot create the package cache: " + error.getMessage(), error);
+        }
+        String name = "codepal-install-" + UUID.randomUUID();
+        List<String> args = new ArrayList<>(List.of("run", "--rm", "--name", name,
+                "--label", "com.codepal.install=true", "--label", "com.codepal.project=" + projectId,
+                "--network", installNetwork(), "--user", user(),
+                "--cpus", Double.toString(Math.max(0.25, properties.getSandbox().getCpus())),
+                "--memory", Math.max(256, properties.getSandbox().getMemoryMb()) + "m",
+                "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                "--mount", "type=bind,source=" + environment.hostPath() + ",target=" + properties.getSandbox().getWorkspacePath(),
+                "--mount", "type=bind,source=" + dockerBase() + "/" + PACKAGE_CACHE + ",target=/package-cache",
+                "-e", "HOME=/tmp", "-e", "npm_config_cache=/package-cache/npm", "-e", "npm_config_update_notifier=false",
+                "--workdir", rootPath(relativeRoot), properties.getSandbox().getImage()));
+        args.addAll(command);
+        CommandResult result = run(args, Duration.ofMillis(Math.max(10_000, properties.getSandbox().getInstallTimeoutMs())),
+                null, outputLimit());
+        // Killing the docker CLI on timeout leaves the container running.
+        if (result.timedOut()) run(List.of("rm", "-f", name), Duration.ofSeconds(30), null);
+        return result;
+    }
+
+    @Override
+    public void link(UUID projectId, String linkPath, String targetPath) {
+        String link = ProjectPaths.normalize(linkPath, false);
+        String target = ProjectPaths.relativeTarget(link, ProjectPaths.normalize(targetPath, false));
+        exec(projectId, ".", List.of("sh", "-c", "rm -rf -- \"$1\" && ln -s -- \"$2\" \"$1\"", "link", link, target))
+                .requireSuccess();
+    }
+
+    private String installNetwork() {
+        String network = properties.getSandbox().getInstallNetwork();
+        return network == null || network.isBlank() ? "bridge" : network.trim();
+    }
+
     @Override
     public String commandPath(UUID projectId, String relativeRoot) {
         return rootPath(relativeRoot);
@@ -379,7 +428,7 @@ public class DockerProjectEnvironment implements SandboxPort {
         String target = rootPath(targetRoot);
         String parent = parentPath(target);
         String script = "rm -rf " + shellQuote(target) + " && mkdir -p " + shellQuote(target)
-                + " && tar -C " + shellQuote(source) + " --exclude=.codepal --exclude=.git --exclude=.secrets"
+                + " && tar -C " + shellQuote(source) + " --exclude=.codepal --exclude=.git --exclude=.secrets --exclude=node_modules"
                 + " -cf - . | tar -C " + shellQuote(target) + " -xf -";
         exec(projectId, ".", List.of("sh", "-lc", "mkdir -p " + shellQuote(parent) + " && " + script)).requireSuccess();
         // Internal state (staging, validation copies, history) is outside the quota by design.

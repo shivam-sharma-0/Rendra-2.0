@@ -38,6 +38,20 @@ public interface SandboxPort {
         return exec(projectId, ".", command);
     }
 
+    /**
+     * Runs a backend-chosen dependency install in {@code relativeRoot} with access to package
+     * registries. Only for package-manager installs with lifecycle scripts disabled: this is the one
+     * command that gets a network, so it must not execute project or package code.
+     */
+    CommandResult install(UUID projectId, String relativeRoot, List<String> command);
+
+    /**
+     * Makes {@code linkPath} a symbolic link to the directory {@code targetPath}, replacing whatever is
+     * there (a previous link or a real directory). The link is relative, so it resolves the same way for
+     * the backend and inside the sandbox.
+     */
+    void link(UUID projectId, String linkPath, String targetPath);
+
     /** {@code relativeRoot} as commands see it, so their output can be mapped back to project paths. */
     String commandPath(UUID projectId, String relativeRoot);
 

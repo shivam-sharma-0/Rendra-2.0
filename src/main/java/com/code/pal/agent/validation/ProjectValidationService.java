@@ -4,37 +4,36 @@ import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.stack.CommandPlan;
+import com.code.pal.agent.stack.DependencyService;
 import com.code.pal.agent.stack.StackPack;
 import com.code.pal.agent.stack.StackPacks;
 import com.code.pal.agent.tool.AgentToolException;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.SandboxPort;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Executes only backend-selected package validation operations in the sandbox and returns bounded
  * diagnostics. Each operation runs twice, on a copy of the live project and on a copy of the staged
  * change set, so only diagnostics the change introduced are blamed on it.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProjectValidationService {
-    private static final Pattern TS_PAREN = Pattern.compile("^(.+?)\\((\\d+),(\\d+)\\):\\s*(error|warning)\\s*([A-Za-z]+\\d+)?:?\\s*(.*)$", Pattern.CASE_INSENSITIVE);
-    private static final Pattern COLON = Pattern.compile("^(.+?):(\\d+):(\\d+)\\s*(?:[-:]\\s*)?(error|warning)?\\s*([A-Za-z]+\\d+)?:?\\s*(.*)$", Pattern.CASE_INSENSITIVE);
-    private static final Pattern ANSI = Pattern.compile("\\u001B\\[[;\\d]*m");
 
     private final ChangeSetService changeSets;
     private final StackPacks stacks;
     private final AgentProperties properties;
     private final ProjectFiles files;
     private final SandboxPort sandbox;
+    private final DependencyService dependencies;
     private final Map<UUID, ValidationReport> lastReports = new ConcurrentHashMap<>();
 
     public Object diagnostics(AgentContext context) {
@@ -47,7 +46,7 @@ public class ProjectValidationService {
 
     public ValidationReport run(AgentContext context, ValidationOperation operation, String scope) {
         validateScope(scope);
-        CommandPlan plan = stack(context).resolve(files, context.projectId(), ".", operation, scope);
+        CommandPlan plan = plan(context, operation, scope);
         if (!plan.available()) {
             ValidationReport report = reportUnavailable(context, plan);
             lastReports.put(context.runId(), report);
@@ -94,7 +93,7 @@ public class ProjectValidationService {
         List<Comparison> comparisons = new ArrayList<>();
         List<String> executed = new ArrayList<>();
         for (ValidationOperation operation : List.of(ValidationOperation.TYPE_CHECK, ValidationOperation.BUILD)) {
-            CommandPlan plan = stack.resolve(files, context.projectId(), view.liveRoot(), operation, null);
+            CommandPlan plan = plan(context, operation, null);
             if (!plan.available()) continue;
             comparisons.add(compare(context, plan));
             executed.add(operation.name());
@@ -129,9 +128,23 @@ public class ProjectValidationService {
             String candidate = changeSets.createValidationCandidate(context, name);
             try {
                 stack(context).preserveTrustedCommands(files, context.projectId(), ".", candidate);
-                CommandOutcome before = execute(context, plan, baseline);
-                CommandOutcome after = execute(context, plan, candidate);
                 List<String> touched = changeSets.view(context).touchedPaths();
+                DependencyService.Preparation baselineDeps = dependencies.prepare(context.projectId(), baseline);
+                DependencyService.Preparation candidateDeps = dependencies.prepare(context.projectId(), candidate);
+                CommandOutcome before = baselineDeps.failed() ? notStarted(context, baseline, baselineDeps.error()) : execute(context, plan, baseline);
+                if (candidateDeps.failed()) {
+                    if (baselineDeps.failed()) {
+                        // The project's own dependencies do not install either (registry down, or already broken):
+                        // nothing the change can be blamed for, and nothing it can repair.
+                        CommandOutcome after = notStarted(context, candidate, candidateDeps.error());
+                        return new Comparison(plan, before, after, List.of(infrastructureDiagnostic(after, plan.operation())), List.of(), false);
+                    }
+                    CommandOutcome after = new CommandOutcome(true, false, 1, candidateDeps.error(), sandbox.commandPath(context.projectId(), candidate));
+                    return new Comparison(plan, before, after, List.of(new ProjectDiagnostic(
+                            "package.json", null, null, DiagnosticSeverity.ERROR, truncate(candidateDeps.error(), 1_500),
+                            "dependencies", "DEPENDENCY_INSTALL_FAILED")), List.of(), false);
+                }
+                CommandOutcome after = execute(context, plan, candidate);
                 List<ProjectDiagnostic> baselineDiagnostics = diagnostics(before, plan.operation(), touched);
                 List<ProjectDiagnostic> currentDiagnostics = diagnostics(after, plan.operation(), touched);
                 Set<String> baselineKeys = baselineDiagnostics.stream().map(ProjectValidationService::responsibilityFingerprint)
@@ -156,47 +169,43 @@ public class ProjectValidationService {
         }
     }
 
+    private CommandOutcome notStarted(AgentContext context, String root, String reason) {
+        return new CommandOutcome(false, false, -1, reason, sandbox.commandPath(context.projectId(), root));
+    }
+
+    /**
+     * The command for an operation, from the live project's trusted manifest. A project's first build has
+     * none, so the staged stack's fixed commands are used instead (never the staged scripts).
+     */
+    private CommandPlan plan(AgentContext context, ValidationOperation operation, String scope) {
+        StackPack live = stack(context);
+        CommandPlan plan = live.resolve(files, context.projectId(), ".", operation, scope);
+        if (plan.available()) return plan;
+        String staged = changeSets.view(context).stagedRoot();
+        StackPack next = stacks.detect(files, context.projectId(), staged);
+        if (next == live) return plan;
+        CommandPlan fixed = next.resolveFixed(files, context.projectId(), staged, operation);
+        return fixed.available() ? fixed : plan;
+    }
+
     private CommandOutcome execute(AgentContext context, CommandPlan plan, String root) {
+        long started = System.nanoTime();
         var result = sandbox.exec(context.projectId(), root, plan.command());
+        log.info("validation_command runId={} operation={} root={} command=\"{}\" exitCode={} elapsedMs={}", context.runId(),
+                plan.operation(), root.substring(root.lastIndexOf('/') + 1), String.join(" ", plan.command()), result.exitCode(),
+                (System.nanoTime() - started) / 1_000_000);
         String output = result.stdout() + (result.error().isBlank() ? "" : "\n" + result.error());
         return new CommandOutcome(result.started(), result.timedOut(), result.exitCode(), output,
                 sandbox.commandPath(context.projectId(), root));
     }
 
     private List<ProjectDiagnostic> diagnostics(CommandOutcome outcome, ValidationOperation operation, List<String> touched) {
-        String root = outcome.root();
-        List<ProjectDiagnostic> diagnostics = new ArrayList<>();
-        for (String raw : outcome.output().split("\\R")) {
-            String line = ANSI.matcher(raw).replaceAll("").trim();
-            if (line.isEmpty()) continue;
-            Matcher matcher = TS_PAREN.matcher(line);
-            if (matcher.matches()) {
-                diagnostics.add(parsed(root, matcher.group(1), matcher.group(2), matcher.group(3), matcher.group(4),
-                        matcher.group(6), operation, matcher.group(5)));
-                continue;
-            }
-            matcher = COLON.matcher(line);
-            if (matcher.matches()) {
-                diagnostics.add(parsed(root, matcher.group(1), matcher.group(2), matcher.group(3), matcher.group(4),
-                        matcher.group(6), operation, matcher.group(5)));
-            }
-        }
+        List<ProjectDiagnostic> diagnostics = new ArrayList<>(ValidationOutputParser.parse(outcome.output(), outcome.root(), operation));
         if (outcome.exitCode() != 0 && diagnostics.isEmpty() && !outcome.output().isBlank()) {
-            String useful = Arrays.stream(outcome.output().split("\\R")).map(String::trim)
-                    .filter(line -> line.toLowerCase(Locale.ROOT).contains("error") || line.toLowerCase(Locale.ROOT).contains("failed"))
-                    .findFirst().orElse("Validation command failed");
             diagnostics.add(new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR,
-                    truncate(normalizeMessage(root, useful), 400), operation.name().toLowerCase(Locale.ROOT), null));
+                    ValidationOutputParser.summary(outcome.output(), outcome.root()), operation.name().toLowerCase(Locale.ROOT), null));
         }
         return bounded(diagnostics, touched);
-    }
-
-    private ProjectDiagnostic parsed(String root, String file, String line, String column, String severity,
-                                     String message, ValidationOperation operation, String code) {
-        String normalized = normalizeFile(root, file);
-        DiagnosticSeverity level = "warning".equalsIgnoreCase(severity) ? DiagnosticSeverity.WARNING : DiagnosticSeverity.ERROR;
-        return new ProjectDiagnostic(normalized, Integer.valueOf(line), Integer.valueOf(column), level,
-                truncate(normalizeMessage(root, message.trim()), 400), operation.name().toLowerCase(Locale.ROOT), code);
     }
 
     private List<ProjectDiagnostic> bounded(List<ProjectDiagnostic> input, List<String> touched) {
@@ -269,21 +278,6 @@ public class ProjectValidationService {
         }
     }
 
-    /** A tool's file reference relative to the directory the command ran in ({@code root}, as the command saw it). */
-    static String normalizeFile(String root, String raw) {
-        String clean = raw.trim().replace('\\', '/');
-        String base = root.replace('\\', '/').replaceAll("/+$", "");
-        if (!base.isEmpty() && clean.regionMatches(true, 0, base + "/", 0, base.length() + 1)) {
-            clean = clean.substring(base.length() + 1);
-        }
-        while (clean.startsWith("./")) clean = clean.substring(2);
-        return clean;
-    }
-
-    private static String normalizeMessage(String root, String message) {
-        String forward = root.replace('\\', '/');
-        return message.replace(root, "<project>").replace(forward, "<project>");
-    }
     private static String responsibilityFingerprint(ProjectDiagnostic item) {
         return String.join("|", item.file() == null ? "" : item.file(), item.severity().name(),
                 item.message(), item.source(), item.code() == null ? "" : item.code());

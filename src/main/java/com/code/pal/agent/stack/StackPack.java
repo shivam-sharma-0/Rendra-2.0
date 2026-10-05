@@ -37,6 +37,32 @@ public interface StackPack {
         return List.of();
     }
 
+    /**
+     * What decides the installed dependencies under {@code root}, so two roots with the same fingerprint
+     * share one install. Defaults to the manifests' exact content.
+     */
+    default String dependencyFingerprint(ProjectFiles files, UUID projectId, String root) {
+        StringBuilder fingerprint = new StringBuilder();
+        for (String manifest : dependencyManifests()) {
+            fingerprint.append(manifest).append('=').append(files.version(projectId, root, manifest)).append('\n');
+        }
+        return fingerprint.toString();
+    }
+
+    /** Folder the install command fills, relative to the project root (e.g. {@code node_modules}); null if none. */
+    default String dependencyDirectory() {
+        return null;
+    }
+
+    /**
+     * Validation commands for a project that has no trusted manifest yet (its first build): fixed
+     * commands derived from the staged dependencies, never the staged scripts, so a change cannot
+     * define its own passing check.
+     */
+    default CommandPlan resolveFixed(ProjectFiles files, UUID projectId, String stagedRoot, ValidationOperation operation) {
+        return CommandPlan.unavailable(operation, inspect(files, projectId, stagedRoot), "No fixed " + operation.name().toLowerCase() + " command for " + id());
+    }
+
     /** The install command for the project under {@code root}, or empty when nothing needs installing. */
     default List<String> installCommand(ProjectFiles files, UUID projectId, String root) {
         return List.of();

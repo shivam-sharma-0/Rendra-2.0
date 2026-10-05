@@ -37,7 +37,7 @@ import java.util.concurrent.TimeUnit;
 @ConditionalOnProperty(prefix = "app.agent.sandbox", name = "required", havingValue = "false", matchIfMissing = true)
 public class LocalProjectEnvironment implements SandboxPort {
 
-    private static final Set<String> NOT_COPIED = Set.of(ProjectPaths.INTERNAL, ".git", ".secrets");
+    private static final Set<String> NOT_COPIED = Set.of(ProjectPaths.INTERNAL, ".git", ".secrets", "node_modules");
     /** Package-manager shims that Windows only starts through cmd.exe (npm.cmd and friends). */
     private static final Set<String> WINDOWS_SHIMS = Set.of("npm", "npx", "pnpm", "yarn");
 
@@ -84,6 +84,30 @@ public class LocalProjectEnvironment implements SandboxPort {
 
     @Override
     public CommandResult exec(UUID projectId, String relativeRoot, List<String> command) {
+        return run(projectId, relativeRoot, command, properties.getSandbox().getCommandTimeoutMs());
+    }
+
+    /** Same as {@link #exec}: without a sandbox the host's own network is used. */
+    @Override
+    public CommandResult install(UUID projectId, String relativeRoot, List<String> command) {
+        return run(projectId, relativeRoot, command, properties.getSandbox().getInstallTimeoutMs());
+    }
+
+    /** Needs symbolic-link rights (on Windows: Developer Mode); junctions are not used, deletes would follow them. */
+    @Override
+    public void link(UUID projectId, String linkPath, String targetPath) {
+        String link = ProjectPaths.normalize(linkPath, false);
+        Path linkFile = root(projectId, link);
+        deleteTree(linkFile);
+        try {
+            Files.createDirectories(linkFile.getParent());
+            Files.createSymbolicLink(linkFile, Path.of(ProjectPaths.relativeTarget(link, ProjectPaths.normalize(targetPath, false))));
+        } catch (IOException | UnsupportedOperationException error) {
+            throw new IllegalStateException("Could not link " + link + " (symbolic links not permitted?): " + error.getMessage(), error);
+        }
+    }
+
+    private CommandResult run(UUID projectId, String relativeRoot, List<String> command, long timeoutMs) {
         if (command == null || command.isEmpty()) throw new IllegalArgumentException("Sandbox command is empty");
         Path directory = root(projectId, relativeRoot);
         ProcessBuilder builder = new ProcessBuilder(platformCommand(command)).directory(directory.toFile())
@@ -99,7 +123,7 @@ public class LocalProjectEnvironment implements SandboxPort {
         int limit = Math.max(1_000, properties.getSandbox().getOutputMaxChars());
         Thread reader = Thread.ofVirtual().start(() -> drain(process.getInputStream(), captured, limit));
         try {
-            boolean finished = process.waitFor(Math.max(1_000, properties.getSandbox().getCommandTimeoutMs()), TimeUnit.MILLISECONDS);
+            boolean finished = process.waitFor(Math.max(1_000, timeoutMs), TimeUnit.MILLISECONDS);
             if (!finished) {
                 process.descendants().forEach(ProcessHandle::destroyForcibly);
                 process.destroyForcibly();

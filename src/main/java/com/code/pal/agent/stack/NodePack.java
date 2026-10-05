@@ -45,7 +45,8 @@ public class NodePack implements StackPack {
                 raw.forEach((key, value) -> { if (key != null && value != null) scripts.put(key.toString(), value.toString()); });
             }
             String declared = manifest.get("packageManager") == null ? null : manifest.get("packageManager").toString();
-            boolean localTypeScript = files.regularFile(projectId, root, "node_modules/typescript/bin/tsc");
+            // Declared rather than checked on disk: node_modules is a link the backend does not follow.
+            boolean localTypeScript = declaredDependencies(files, projectId, root).contains("typescript");
             return new StackCapabilities(id(), detectManager(files, projectId, root, declared), declared, Map.copyOf(scripts),
                     StackCapabilities.operations(firstPresent(scripts, TYPECHECK_SCRIPTS) != null || localTypeScript,
                             scripts.containsKey("build"), firstPresent(scripts, TEST_SCRIPTS) != null), null);
@@ -83,6 +84,58 @@ public class NodePack implements StackPack {
         return List.of(MANIFEST, LOCKFILE);
     }
 
+    /**
+     * Only the fields npm resolves from, key-sorted, plus the exact lockfile: scripts, formatting or a
+     * renamed project do not trigger a new install (validation rewrites the candidate's scripts).
+     */
+    @Override
+    public String dependencyFingerprint(ProjectFiles files, UUID projectId, String root) {
+        Map<String, Object> relevant = new TreeMap<>();
+        try {
+            Map<String, Object> manifest = manifest(files, projectId, root);
+            for (String field : List.of("dependencies", "devDependencies", "optionalDependencies", "peerDependencies",
+                    "overrides", "packageManager", "engines", "workspaces")) {
+                if (manifest.containsKey(field)) relevant.put(field, sorted(manifest.get(field)));
+            }
+        } catch (RuntimeException unreadable) {
+            return StackPack.super.dependencyFingerprint(files, projectId, root);
+        }
+        return objectMapper.writeValueAsString(relevant) + "\n" + LOCKFILE + "=" + files.version(projectId, root, LOCKFILE);
+    }
+
+    private static Object sorted(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> result = new TreeMap<>();
+            map.forEach((key, item) -> result.put(String.valueOf(key), sorted(item)));
+            return result;
+        }
+        return value;
+    }
+
+    @Override
+    public String dependencyDirectory() {
+        return "node_modules";
+    }
+
+    /** TypeScript check and Vite build straight from the installed packages, when the project declares them. */
+    @Override
+    public CommandPlan resolveFixed(ProjectFiles files, UUID projectId, String stagedRoot, ValidationOperation operation) {
+        StackCapabilities capabilities = inspect(files, projectId, stagedRoot);
+        if (capabilities.error() != null) return CommandPlan.unavailable(operation, capabilities, capabilities.error());
+        Set<String> declared = declaredDependencies(files, projectId, stagedRoot);
+        List<String> command = switch (operation) {
+            case TYPE_CHECK -> declared.contains("typescript") && hasTypeScriptConfig(files, projectId, stagedRoot)
+                    ? (usesProjectReferences(files, projectId, stagedRoot)
+                        ? List.of("node", "node_modules/typescript/bin/tsc", "-b", "--pretty", "false")
+                        : List.of("node", "node_modules/typescript/bin/tsc", "--noEmit", "--pretty", "false"))
+                    : null;
+            case BUILD -> declared.contains("vite") ? List.of("node", "node_modules/vite/bin/vite.js", "build") : null;
+            default -> null;
+        };
+        if (command == null) return CommandPlan.unavailable(operation, capabilities, "No fixed command for this project");
+        return new CommandPlan(operation, true, "npm", String.join(" ", command.subList(1, command.size())), command, null);
+    }
+
     /** npm only for now (the sandbox image ships it); other lockfiles are ignored. */
     @Override
     public List<String> installCommand(ProjectFiles files, UUID projectId, String root) {
@@ -114,10 +167,27 @@ public class NodePack implements StackPack {
     }
 
     private boolean declaresDependencies(ProjectFiles files, UUID projectId, String root) {
+        return !declaredDependencies(files, projectId, root).isEmpty();
+    }
+
+    private Set<String> declaredDependencies(ProjectFiles files, UUID projectId, String root) {
         try {
             Map<String, Object> manifest = manifest(files, projectId, root);
-            return (manifest.get("dependencies") instanceof Map<?, ?> deps && !deps.isEmpty())
-                    || (manifest.get("devDependencies") instanceof Map<?, ?> dev && !dev.isEmpty());
+            Set<String> names = new TreeSet<>();
+            for (String section : List.of("dependencies", "devDependencies")) {
+                if (manifest.get(section) instanceof Map<?, ?> deps) deps.keySet().forEach(name -> names.add(String.valueOf(name)));
+            }
+            return names;
+        } catch (RuntimeException unreadable) {
+            return Set.of();
+        }
+    }
+
+    /** Vite's TypeScript templates split configs with {@code references}; {@code tsc -b} checks all of them. */
+    private static boolean usesProjectReferences(ProjectFiles files, UUID projectId, String root) {
+        try {
+            return files.regularFile(projectId, root, "tsconfig.json")
+                    && files.readText(projectId, root, "tsconfig.json").contains("\"references\"");
         } catch (RuntimeException unreadable) {
             return false;
         }

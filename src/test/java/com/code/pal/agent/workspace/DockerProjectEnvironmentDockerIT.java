@@ -167,6 +167,36 @@ class DockerProjectEnvironmentDockerIT {
     }
 
     @Test
+    void dependenciesInstallFromTheRegistryWithoutScriptsAndWorkOfflineThroughALink() throws Exception {
+        DockerProjectEnvironment sandbox = new DockerProjectEnvironment(properties);
+        HostProjectFiles files = new HostProjectFiles(new WorkspaceStorage(properties));
+        var dependencies = new com.code.pal.agent.stack.DependencyService(
+                new com.code.pal.agent.stack.StackPacks(new tools.jackson.databind.ObjectMapper()), files, sandbox, properties);
+        UUID projectId = newProject();
+        sandbox.ensure(projectId);
+        // A lifecycle script that would prove package code ran during the install.
+        files.writeText(projectId, "package.json", """
+                {"name":"it","version":"1.0.0","dependencies":{"is-number":"7.0.0"},
+                 "scripts":{"postinstall":"node -e \\"require('fs').writeFileSync('/workspace/POSTINSTALL_RAN','x')\\""}}
+                """);
+
+        var first = dependencies.prepare(projectId, ".");
+        var second = dependencies.prepare(projectId, ".");
+
+        assertTrue(first.installed(), String.valueOf(first.error()));
+        assertTrue(!second.installed() && !second.failed(), "the same manifests reuse the installed set");
+        assertTrue(!files.exists(projectId, ".", "POSTINSTALL_RAN"), "install must not run lifecycle scripts");
+        // The project container has no network, yet the linked dependency resolves.
+        assertEquals("true", sandbox.exec(projectId, List.of("node", "-e", "console.log(require('is-number')(5))")).stdout().trim());
+        assertEquals("link", sandbox.exec(projectId, List.of("sh", "-c", "test -L node_modules && echo link")).stdout().trim());
+        assertEquals("1000:1000", sandbox.exec(projectId, List.of("sh", "-c", "stat -L -c %u:%g node_modules/is-number")).stdout().trim());
+        // Tree copies (staging, validation copies, history) leave dependencies out.
+        sandbox.copyTree(projectId, ".", ".codepal/changesets/it/workspace");
+        assertEquals("absent", sandbox.exec(projectId, List.of("sh", "-c",
+                "test -e .codepal/changesets/it/workspace/node_modules && echo present || echo absent")).stdout().trim());
+    }
+
+    @Test
     void restoringFromAMissingArchiveLeavesTheProjectUntouched() throws Exception {
         DockerProjectEnvironment sandbox = new DockerProjectEnvironment(properties);
         HostProjectFiles files = new HostProjectFiles(new WorkspaceStorage(properties));

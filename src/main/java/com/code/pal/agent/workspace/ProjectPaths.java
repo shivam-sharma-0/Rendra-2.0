@@ -45,6 +45,23 @@ public final class ProjectPaths {
         return root.equals(".") ? path : root + "/" + path;
     }
 
+    /**
+     * The relative path from the folder containing {@code linkPath} to {@code targetPath} (both
+     * normalized project paths), e.g. {@code stage/node_modules} → {@code deps/x/node_modules} gives
+     * {@code ../deps/x/node_modules}. A relative link resolves the same inside and outside the sandbox.
+     */
+    public static String relativeTarget(String linkPath, String targetPath) {
+        String[] from = linkPath.split("/");
+        String[] to = targetPath.split("/");
+        int parents = from.length - 1;
+        int common = 0;
+        while (common < parents && common < to.length && from[common].equals(to[common])) common++;
+        StringBuilder relative = new StringBuilder();
+        for (int i = common; i < parents; i++) relative.append("../");
+        for (int i = common; i < to.length; i++) relative.append(to[i]).append(i < to.length - 1 ? "/" : "");
+        return relative.toString();
+    }
+
     /** Folder for the backend's own state (change sets, history, manifests); never part of the user's project. */
     public static final String INTERNAL = ".codepal";
 

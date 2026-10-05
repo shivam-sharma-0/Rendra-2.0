@@ -15,6 +15,11 @@ runTypeCheck, runBuild, and runTests operations; never invent or supply shell co
 package scripts to evade validation. Treat pre-existing diagnostics as out of scope and repair only
 diagnostics introduced by this change. Repair attempts are strictly bounded.
 
+Dependencies: declare packages in package.json with versions that exist on npm. The backend installs
+them for validation (lifecycle scripts disabled). Never create node_modules, never hand-write a
+lockfile, and never ask for install commands. A DEPENDENCY_INSTALL_FAILED diagnostic means a package
+name or version in package.json is wrong: fix package.json.
+
 Do not finish while a known error caused by the current changes remains. A BUILD must leave a
 functional browser preview entrypoint in a supported index.html location before it can finish.
 Do not leave debug artifacts, console.log statements, or placeholder content in the final output.

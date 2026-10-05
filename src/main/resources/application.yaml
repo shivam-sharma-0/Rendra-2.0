@@ -189,9 +189,10 @@ app:
     # Per-project code lives here (one dir per project).
     workspace-base-path: ${AGENT_WORKSPACE_PATH:./workspaces}
     # Safety limits for a single run.
-    max-iterations: ${AGENT_MAX_ITERATIONS:25}
-    max-model-calls: ${AGENT_MAX_MODEL_CALLS:25}
-    max-tool-calls: ${AGENT_MAX_TOOL_CALLS:60}
+    # A fresh app (plan, ~10 files, type-check, build, one repair) needs ~30 turns with free models.
+    max-iterations: ${AGENT_MAX_ITERATIONS:40}
+    max-model-calls: ${AGENT_MAX_MODEL_CALLS:40}
+    max-tool-calls: ${AGENT_MAX_TOOL_CALLS:100}
     # Per-user guards so one account cannot exhaust the shared LLM quota (0 disables a check).
     limits:
       turns-per-minute: ${AGENT_LIMIT_TURNS_PER_MINUTE:10}
@@ -242,6 +243,11 @@ app:
       idle-remove-ms: ${AGENT_SANDBOX_IDLE_REMOVE_MS:86400000}
       cleanup-interval-ms: ${AGENT_SANDBOX_CLEANUP_INTERVAL_MS:60000}
       max-project-bytes: ${AGENT_SANDBOX_MAX_PROJECT_BYTES:500000000}
+      # Dependency installs run in a separate short-lived container: the only sandbox step with a
+      # network, and package lifecycle scripts are disabled (npm --ignore-scripts).
+      install-network: ${AGENT_SANDBOX_INSTALL_NETWORK:bridge}
+      install-timeout-ms: ${AGENT_SANDBOX_INSTALL_TIMEOUT_MS:300000}
+      max-dependency-bytes: ${AGENT_SANDBOX_MAX_DEPENDENCY_BYTES:1000000000}
 
 # Logging 
 # Rolling file config (datewise folder -> hourwise files) lives in logback-spring.xml.

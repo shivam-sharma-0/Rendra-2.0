@@ -44,10 +44,10 @@ public class AgentProperties {
 
     /** Root directory holding one sub-folder per project's code. */
     private String workspaceBasePath = "./workspaces";
-    private int maxIterations = 25;
+    private int maxIterations = 40;
     /** Hard caps independent of iterations because one response may request several tools. */
-    private int maxModelCalls = 25;
-    private int maxToolCalls = 60;
+    private int maxModelCalls = 40;
+    private int maxToolCalls = 100;
     /** Approximate character budget for prompt context plus accumulated tool results. */
     private int contextBudgetChars = 80_000;
     private int projectMapBudgetChars = 18_000;
@@ -256,6 +256,14 @@ public class AgentProperties {
         private long cleanupIntervalMs = 60_000;
         /** Maximum combined project volume size, excluding internal .codepal snapshots. */
         private long maxProjectBytes = 500_000_000;
+        /**
+         * Network for the short-lived dependency-install container, the only sandbox command that may
+         * reach package registries. Installs run with lifecycle scripts disabled.
+         */
+        private String installNetwork = "bridge";
+        private long installTimeoutMs = 300_000;
+        /** Maximum size of one installed dependency set (node_modules). */
+        private long maxDependencyBytes = 1_000_000_000;
     }
 
     @Getter

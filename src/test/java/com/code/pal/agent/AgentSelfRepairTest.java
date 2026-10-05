@@ -70,7 +70,8 @@ class AgentSelfRepairTest {
         when(fileChanges.save(any())).thenAnswer(call -> call.getArgument(0));
         ChangeSetService changeSets = new ChangeSetService(fileChanges, runs, mapper, props, workspace.files, workspace.sandbox);
         ProjectValidationService validation = new ProjectValidationService(changeSets, new StackPacks(mapper), props,
-                workspace.files, workspace.sandbox);
+                workspace.files, workspace.sandbox,
+                new com.code.pal.agent.stack.DependencyService(new StackPacks(mapper), workspace.files, workspace.sandbox, props));
 
         ToolRegistry registry = new ToolRegistry(List.of(new ReadFileTool(), new SetPlanTool(),
                 new PatchFileTool(changeSets), new RunTypeCheckTool(validation), new ValidateChangesTool(validation)));
