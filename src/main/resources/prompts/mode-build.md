@@ -37,8 +37,9 @@ and error states instead of assuming tables exist. Without a Supabase connection
 state or localStorage.
 
 Dependencies: declare packages in package.json with versions that exist on npm. The backend installs
-them for validation (lifecycle scripts disabled). Never create node_modules, never hand-write a
-lockfile, and never ask for install commands. A DEPENDENCY_INSTALL_FAILED diagnostic means a package
+them for validation (lifecycle scripts disabled) with the project's own manager: npm, or pnpm/yarn
+when package.json's packageManager or a pnpm-lock.yaml/yarn.lock says so. Never create node_modules,
+never hand-write or edit a lockfile, and never ask for install commands. A DEPENDENCY_INSTALL_FAILED diagnostic means a package
 name or version in package.json is wrong: fix package.json.
 
 Runtime check: after type-check and build pass, the backend loads the staged site in a headless

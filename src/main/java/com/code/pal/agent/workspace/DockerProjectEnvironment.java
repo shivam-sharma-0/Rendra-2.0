@@ -397,6 +397,13 @@ public class DockerProjectEnvironment implements SandboxPort {
                 "--mount", "type=bind,source=" + environment.hostPath() + ",target=" + properties.getSandbox().getWorkspacePath(),
                 "--mount", "type=bind,source=" + dockerBase() + "/" + PACKAGE_CACHE + ",target=/package-cache",
                 "-e", "HOME=/tmp", "-e", "npm_config_cache=/package-cache/npm", "-e", "npm_config_update_notifier=false",
+                // pnpm and yarn come through corepack; their caches share the package cache, and yarn 2+ is
+                // told to use node_modules, skip build scripts and accept a changed lockfile.
+                "-e", "COREPACK_HOME=/package-cache/corepack", "-e", "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
+                "-e", "COREPACK_ENABLE_STRICT=0", "-e", "npm_config_store_dir=/package-cache/pnpm",
+                "-e", "YARN_CACHE_FOLDER=/package-cache/yarn", "-e", "YARN_NODE_LINKER=node-modules",
+                "-e", "YARN_ENABLE_SCRIPTS=false", "-e", "YARN_ENABLE_IMMUTABLE_INSTALLS=false",
+                "-e", "YARN_ENABLE_TELEMETRY=0", "-e", "YARN_ENABLE_GLOBAL_CACHE=false",
                 "--workdir", rootPath(relativeRoot), properties.getSandbox().getImage()));
         args.addAll(command);
         CommandResult result = run(args, Duration.ofMillis(Math.max(10_000, properties.getSandbox().getInstallTimeoutMs())),

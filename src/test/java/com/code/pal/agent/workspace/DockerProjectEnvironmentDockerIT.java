@@ -196,6 +196,29 @@ class DockerProjectEnvironmentDockerIT {
                 "test -e .codepal/changesets/it/workspace/node_modules && echo present || echo absent")).stdout().trim());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"pnpm@9.12.0", "yarn@1.22.22", "yarn@4.5.0"})
+    void pnpmAndYarnProjectsInstallWithTheirOwnManagerFlatAndWithoutScripts(String manager) throws Exception {
+        DockerProjectEnvironment sandbox = new DockerProjectEnvironment(properties);
+        HostProjectFiles files = new HostProjectFiles(new WorkspaceStorage(properties));
+        var dependencies = new com.code.pal.agent.stack.DependencyService(
+                new com.code.pal.agent.stack.StackPacks(new tools.jackson.databind.ObjectMapper()), files, sandbox, properties);
+        UUID projectId = newProject();
+        sandbox.ensure(projectId);
+        files.writeText(projectId, "package.json", """
+                {"name":"it","version":"1.0.0","packageManager":"%s","dependencies":{"is-number":"7.0.0"},
+                 "scripts":{"postinstall":"node -e \\"require('fs').writeFileSync('/workspace/POSTINSTALL_RAN','x')\\""}}
+                """.formatted(manager));
+
+        var installed = dependencies.prepare(projectId, ".");
+
+        assertTrue(installed.installed(), manager + ": " + installed.error());
+        assertTrue(!files.exists(projectId, ".", "POSTINSTALL_RAN"), "install must not run lifecycle scripts");
+        // Offline, through the link, from a real (not symlinked-store) folder: like npm's layout.
+        assertEquals("true", sandbox.exec(projectId, List.of("node", "-e", "console.log(require('is-number')(5))")).stdout().trim());
+        assertEquals("dir", sandbox.exec(projectId, List.of("sh", "-c", "test -d node_modules/is-number && ! test -L node_modules/is-number && echo dir")).stdout().trim());
+    }
+
     @Test
     void restoringFromAMissingArchiveLeavesTheProjectUntouched() throws Exception {
         DockerProjectEnvironment sandbox = new DockerProjectEnvironment(properties);

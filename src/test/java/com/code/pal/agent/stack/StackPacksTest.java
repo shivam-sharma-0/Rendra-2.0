@@ -37,6 +37,24 @@ class StackPacksTest {
     }
 
     @Test
+    void eachProjectInstallsWithItsOwnManagerButScriptsRunThroughNpm() {
+        project.write("package.json", "{\"packageManager\":\"pnpm@9.12.0+sha512.abc\",\"dependencies\":{\"a\":\"1\"},\"scripts\":{\"build\":\"vite build\"}}");
+        List<String> pnpm = install();
+        assertEquals(List.of("corepack", "pnpm@9.12.0", "install"), pnpm.subList(0, 3), "the pinned version, without its hash");
+        assertTrue(pnpm.contains("--ignore-scripts") && pnpm.contains("--config.node-linker=hoisted"), pnpm.toString());
+        assertEquals(List.of("npm", "run", "build"),
+                detect().resolve(project.files, project.projectId, ".", ValidationOperation.BUILD, null).command(), "validation is offline");
+
+        project.write("package.json", "{\"dependencies\":{\"a\":\"1\"}}").write("yarn.lock", "# yarn lockfile v1\n");
+        assertEquals(List.of("corepack", "yarn", "install", "--ignore-scripts", "--non-interactive", "--no-progress"), install());
+
+        project.write("yarn.lock", "__metadata:\n  version: 8\n");
+        List<String> berry = install();
+        assertEquals("sh", berry.getFirst());
+        assertTrue(berry.get(2).contains("install --mode=skip-build") && berry.getLast().equals("yarn@stable"), berry.toString());
+    }
+
+    @Test
     void dependenciesInstallWithoutLifecycleScripts() {
         project.write("package.json", "{\"scripts\":{}}");
         assertEquals(List.of(), install(), "nothing to install without declared dependencies");

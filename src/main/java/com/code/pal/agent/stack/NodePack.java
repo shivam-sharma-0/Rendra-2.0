@@ -18,6 +18,8 @@ public class NodePack implements StackPack {
     private static final int MAX_MANIFEST_BYTES = 1_000_000;
     static final String MANIFEST = "package.json";
     static final String LOCKFILE = "package-lock.json";
+    static final String PNPM_LOCKFILE = "pnpm-lock.yaml";
+    static final String YARN_LOCKFILE = "yarn.lock";
 
     private final ObjectMapper objectMapper;
 
@@ -67,7 +69,9 @@ public class NodePack implements StackPack {
         };
         List<String> command;
         if (script != null) {
-            command = new ArrayList<>(List.of(capabilities.packageManager(), "run", script));
+            // npm runs any package.json script; pnpm/yarn would need corepack to fetch them, and
+            // validation has no network (they are only used to install).
+            command = new ArrayList<>(List.of("npm", "run", script));
             if (scope != null && !scope.isBlank()) { command.add("--"); command.add(scope); }
         } else if (operation == ValidationOperation.TYPE_CHECK && capabilities.availableOperations().contains("runTypeCheck")
                 && hasTypeScriptConfig(files, projectId, root)) {
@@ -81,7 +85,7 @@ public class NodePack implements StackPack {
 
     @Override
     public List<String> dependencyManifests() {
-        return List.of(MANIFEST, LOCKFILE);
+        return List.of(MANIFEST, LOCKFILE, PNPM_LOCKFILE, YARN_LOCKFILE, ".yarnrc.yml", ".npmrc", "pnpm-workspace.yaml");
     }
 
     /**
@@ -98,7 +102,7 @@ public class NodePack implements StackPack {
         }
         StackCapabilities capabilities = inspect(files, projectId, root);
         if (capabilities.scripts().containsKey("build")) {
-            return new PreviewBuild(List.of(capabilities.packageManager(), "run", "build"), List.of("dist", "build", "out"));
+            return new PreviewBuild(List.of("npm", "run", "build"), List.of("dist", "build", "out"));
         }
         return null;
     }
@@ -141,7 +145,11 @@ public class NodePack implements StackPack {
         } catch (RuntimeException unreadable) {
             return StackPack.super.dependencyFingerprint(files, projectId, root);
         }
-        return objectMapper.writeValueAsString(relevant) + "\n" + LOCKFILE + "=" + files.version(projectId, root, LOCKFILE);
+        StringBuilder fingerprint = new StringBuilder(objectMapper.writeValueAsString(relevant));
+        for (String lockfile : List.of(LOCKFILE, PNPM_LOCKFILE, YARN_LOCKFILE, ".yarnrc.yml", ".npmrc")) {
+            fingerprint.append('\n').append(lockfile).append('=').append(files.version(projectId, root, lockfile));
+        }
+        return fingerprint.toString();
     }
 
     private static Object sorted(Object value) {
@@ -177,12 +185,54 @@ public class NodePack implements StackPack {
         return new CommandPlan(operation, true, "npm", String.join(" ", command.subList(1, command.size())), command, null);
     }
 
-    /** npm only for now (the sandbox image ships it); other lockfiles are ignored. */
+    /**
+     * The project's own package manager, so its lockfile is honoured: npm directly, pnpm and yarn through
+     * corepack (shipped with Node; the install container has the network to fetch them). Every manager
+     * skips lifecycle scripts and lays packages out flat in node_modules, as npm does, so the fixed
+     * tsc/vite commands and the dependency link work the same. Bun is not in the image: npm installs.
+     */
     @Override
     public List<String> installCommand(ProjectFiles files, UUID projectId, String root) {
         if (!files.regularFile(projectId, root, MANIFEST) || !declaresDependencies(files, projectId, root)) return List.of();
-        String mode = files.regularFile(projectId, root, LOCKFILE) ? "ci" : "install";
-        return List.of("npm", mode, "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error");
+        String declared;
+        try {
+            Object value = manifest(files, projectId, root).get("packageManager");
+            declared = value == null ? null : value.toString();
+        } catch (RuntimeException unreadable) {
+            declared = null;
+        }
+        return switch (detectManager(files, projectId, root, declared)) {
+            // Uses the lockfile where it still matches package.json, else resolves (the agent never edits lockfiles).
+            case "pnpm" -> List.of("corepack", corepackTool("pnpm", declared), "install", "--prefer-frozen-lockfile", "--ignore-scripts",
+                    "--config.node-linker=hoisted", "--config.package-import-method=copy", "--reporter=append-only");
+            // Berry: node_modules linker, scripts off and a mutable lockfile come from YARN_* variables.
+            case "yarn" -> berry(files, projectId, root, declared)
+                    // A yarn.lock marks the dependency folder as its own project root; without one berry walks up
+                    // to the project's package.json and refuses to install there.
+                    ? List.of("sh", "-c", "test -f yarn.lock || : > yarn.lock; exec corepack \"$0\" install --mode=skip-build",
+                            declared == null ? "yarn@stable" : corepackTool("yarn", declared))
+                    : List.of("corepack", corepackTool("yarn", declared), "install", "--ignore-scripts", "--non-interactive", "--no-progress");
+            default -> List.of("npm", files.regularFile(projectId, root, LOCKFILE) ? "ci" : "install",
+                    "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error");
+        };
+    }
+
+    /** {@code pnpm@9.12.0} when package.json pins that manager (corepack then uses exactly it), else the name. */
+    private static String corepackTool(String name, String declared) {
+        if (declared == null) return name;
+        String pinned = declared.split("\\+", 2)[0].trim();   // drop a "+sha512..." integrity suffix
+        return pinned.toLowerCase(Locale.ROOT).startsWith(name + "@") && pinned.matches("[a-z]+@[0-9A-Za-z.-]+") ? pinned : name;
+    }
+
+    /** Yarn 2+ (berry): pinned so, or its lockfile format. Classic yarn is 1.x. */
+    private static boolean berry(ProjectFiles files, UUID projectId, String root, String declared) {
+        if (declared != null && declared.toLowerCase(Locale.ROOT).startsWith("yarn@")) return !declared.substring(5).startsWith("1.");
+        try {
+            return files.regularFile(projectId, root, YARN_LOCKFILE)
+                    && new String(files.readHead(projectId, root, YARN_LOCKFILE, 4_096), StandardCharsets.UTF_8).contains("__metadata:");
+        } catch (RuntimeException unreadable) {
+            return false;
+        }
     }
 
     @Override
