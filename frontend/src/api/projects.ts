@@ -23,7 +23,7 @@ export type MessageFeedback = 'UP' | 'DOWN'
 export type Message = {
   id: string; projectId: string; role: MessageRole; content: string; status: MessageStatus
   mode: ProjectType | null; replyToId: string | null; feedback: MessageFeedback | null
-  seq: number; createdAt: string; updatedAt: string
+  seq: number; createdAt: string; updatedAt: string; attachments?: string[] | null
 }
 export type AgentRun = {
   id: string; projectId: string; messageId: string; mode: ProjectType; status: AgentRunStatus
@@ -123,12 +123,14 @@ export const databaseApi = {
   get: (projectId: string, opts?: ReadOpts) => apiGet<DatabaseSnapshot>(`/api/projects/${projectId}/database`, opts),
 }
 
-export type CreateMessageBody = { id: string; message: string; mode?: ProjectType; aiMessageId?: string }
+export type CreateMessageBody = { id: string; message: string; mode?: ProjectType; aiMessageId?: string; attachments?: string[] }
 export const messageApi = {
   list: (projectId: string, page = 0, size = 50, opts?: ReadOpts) =>
     apiGet<Page<Message>>(`/api/projects/${projectId}/messages?page=${page}&size=${size}`, opts),
-  post: (projectId: string, message: string, mode?: ProjectType) => apiSend<Message[]>('POST', `/api/projects/${projectId}/messages`, {
+  // attachments: paths returned by uploadAttachments, so the agent reads them with this turn
+  post: (projectId: string, message: string, mode?: ProjectType, attachments?: string[]) => apiSend<Message[]>('POST', `/api/projects/${projectId}/messages`, {
     id: newUserMessageId(), message, mode, aiMessageId: newAiMessageId(),
+    ...(attachments?.length ? { attachments } : {}),
   } satisfies CreateMessageBody),
   feedback: (projectId: string, messageId: string, feedback: MessageFeedback | null) =>
     apiSend<Message>('PUT', `/api/projects/${projectId}/messages/${messageId}/feedback`, { feedback }),
@@ -188,7 +190,7 @@ export async function startProject(
   prompt: string | null,
   mode: ProjectType = 'BUILD',
   workspaceId?: string,
-  opts?: { idempotencyKey?: string },
+  opts?: { idempotencyKey?: string; files?: File[] },
 ): Promise<Project> {
   let targetId = workspaceId
   if (!targetId) {
@@ -196,6 +198,15 @@ export async function startProject(
     targetId = (workspaces.find((item) => item.personal) ?? workspaces[0])?.id
   }
   if (!targetId) throw new Error('No workspace available')
+  const files = opts?.files ?? []
+  if (prompt && files.length) {
+    // Attachments need a project to upload into, and the agent must see them with the first turn:
+    // create the project, upload, then send the prompt with the uploaded paths.
+    const project = await projectApi.create(targetId, { type: mode, name: prompt.slice(0, 60) }, opts)
+    const uploaded = await projectApi.uploadAttachments(project.id, files)
+    await messageApi.post(project.id, prompt, mode, uploaded.map((file) => file.path))
+    return project
+  }
   return projectApi.create(targetId, {
     type: mode,
     ...(prompt ? { initialMessage: { id: newUserMessageId(), message: prompt, mode, aiMessageId: newAiMessageId() } } : {}),

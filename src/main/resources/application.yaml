@@ -197,6 +197,8 @@ app:
       free-build: "mistral:codestral-latest,mistral:mistral-medium-latest,groq:openai/gpt-oss-120b,nvidia:nvidia/nemotron-3-super-120b-a12b"
       free-chat: "mistral:mistral-small-latest,groq:openai/gpt-oss-20b,groq:qwen/qwen3.8-27b,nvidia:deepseek-ai/deepseek-v4.1-flash"
       free-plan: "mistral:magistral-medium-latest,mistral:mistral-medium-latest,groq:openai/gpt-oss-120b,nvidia:deepseek-ai/deepseek-v4.1-flash"
+      # Reads attached images (screenshots, designs) into a text brief for the coding model; in order.
+      vision: "${AGENT_MODEL_VISION:nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia:meta/llama-3.2-11b-vision-instruct}"
     # Per-project code lives here (one dir per project).
     workspace-base-path: ${AGENT_WORKSPACE_PATH:./workspaces}
     # Safety limits for a single run.

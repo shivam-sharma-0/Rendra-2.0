@@ -37,6 +37,7 @@ import com.code.pal.agent.tool.ToolExecutionResult;
 import com.code.pal.agent.usage.AgentUsagePolicy;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.preview.SiteBuildService;
+import com.code.pal.agent.vision.VisionService;
 import com.code.pal.agent.validation.ProjectValidationService;
 import com.code.pal.agent.validation.ValidationReport;
 import com.code.pal.message.domain.Message;
@@ -107,6 +108,8 @@ public class AgentRunner implements AgentRuntime {
     private final GeneratedDatabaseService databases;
     /** Builds the served site after a commit; null in focused tests. */
     private final SiteBuildService sites;
+    /** Reads attached images; null in focused tests. */
+    private final VisionService vision;
     /** Per-user daily token quota; null in focused tests, where no quota applies. */
     private final AgentUsagePolicy usage;
 
@@ -119,8 +122,9 @@ public class AgentRunner implements AgentRuntime {
             ObjectMapper objectMapper, ChangeSetService changeSets,
             ProjectValidationService validation, NotificationService notifications,
             ProjectArtifactService artifacts, GeneratedDatabaseService databases,
-            SiteBuildService sites, AgentUsagePolicy usage) {
+            SiteBuildService sites, VisionService vision, AgentUsagePolicy usage) {
         this.sites = sites;
+        this.vision = vision;
         this.usage = usage;
         this.llm = llm;
         this.intentClassifier = intentClassifier;
@@ -157,7 +161,7 @@ public class AgentRunner implements AgentRuntime {
             ProjectValidationService validation, NotificationService notifications) {
         this(llm, intentClassifier, tools, toolExecutor, events, props, projectContexts, runRepository, projects,
                 messageRepository, realtime, files, heartbeat, queue, objectMapper, changeSets, validation,
-                notifications, null, null, null, null);
+                notifications, null, null, null, null, null);
     }
 
     /**
@@ -187,7 +191,9 @@ public class AgentRunner implements AgentRuntime {
 
             List<Message> history = loadHistory(run);
             String userRequest = currentUserRequest(history);
-            if (intentClassifier.classify(userRequest) == AgentIntent.CONVERSATIONAL) {
+            List<String> attachments = currentAttachments(history);
+            // A request with attachments needs them read, even when its text alone sounds like small talk.
+            if (attachments.isEmpty() && intentClassifier.classify(userRequest) == AgentIntent.CONVERSATIONAL) {
                 return runConversational(run, stream, history, userRequest, deadlineNanos, tokensBeforeRun);
             }
 
@@ -212,6 +218,10 @@ public class AgentRunner implements AgentRuntime {
                 convo.add(LlmMessage.user(projectContext.projectContextMessage()));
             }
             projectContext.conversation().stream().map(AgentRunner::toLlmMessage).forEach(convo::add);
+            if (!attachments.isEmpty() && vision != null) {
+                events.emit(run, AgentStepType.STATUS, "Reading attachments", Map.of("files", attachments));
+                convo.add(LlmMessage.user(VisionService.asContext(vision.describe(run.getProjectId(), attachments, userRequest))));
+            }
             int initialContextChars = convo.stream()
                     .mapToInt(message -> message.content() == null ? 0 : message.content().length()).sum()
                     + specs.toString().length();
@@ -762,6 +772,15 @@ public class AgentRunner implements AgentRuntime {
         if (requested < 0 || runtime.toolCallCount() + requested > Math.max(1, props.getMaxToolCalls())) {
             throw new AgentLimitExceededException("Agent tool-call limit reached");
         }
+    }
+
+    /** Files attached to the latest user message (the request this run answers). */
+    private static List<String> currentAttachments(List<Message> messages) {
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            Message message = messages.get(index);
+            if (message.getRole() == com.code.pal.message.domain.MessageRole.USER) return message.attachmentPaths();
+        }
+        return List.of();
     }
 
     private static String currentUserRequest(List<Message> messages) {

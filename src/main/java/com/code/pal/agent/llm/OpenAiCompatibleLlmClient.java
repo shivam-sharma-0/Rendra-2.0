@@ -347,7 +347,15 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private Map<String, Object> messageToMap(LlmMessage m) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("role", m.role());
-        if (m.content() != null) map.put("content", m.content());
+        if (m.images() != null && !m.images().isEmpty()) {
+            // OpenAI-compatible multimodal content: the text part, then one image part per image.
+            List<Map<String, Object>> parts = new ArrayList<>();
+            parts.add(Map.of("type", "text", "text", m.content() == null ? "" : m.content()));
+            for (String image : m.images()) parts.add(Map.of("type", "image_url", "image_url", Map.of("url", image)));
+            map.put("content", parts);
+        } else if (m.content() != null) {
+            map.put("content", m.content());
+        }
         if (m.toolCallId() != null) map.put("tool_call_id", m.toolCallId());
         if (m.toolCalls() != null && !m.toolCalls().isEmpty()) {
             List<Map<String, Object>> calls = new ArrayList<>();

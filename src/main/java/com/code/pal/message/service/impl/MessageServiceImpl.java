@@ -43,6 +43,7 @@ public class MessageServiceImpl implements MessageService {
     private final ApplicationEventPublisher events;
     private final MessageSequence sequence;
     private final AgentTurnAdmission admission;
+    private final com.code.pal.agent.workspace.ProjectFiles files;
 
     @Override
     @Transactional
@@ -71,6 +72,7 @@ public class MessageServiceImpl implements MessageService {
 
         List<Message> created = new ArrayList<>(2);
         Message userMessage = Message.user(projectId, request.id(), request.message(), mode, userId);
+        userMessage.setAttachments(attachments(projectId, request.attachments()));
         userMessage.setSeq(sequence.next());
         created.add(messageRepository.save(userMessage));
         if (startsAgentTurn) {
@@ -92,6 +94,28 @@ public class MessageServiceImpl implements MessageService {
         List<MessageResponse> responses = created.stream().map(MessageResponse::from).toList();
         broadcastAfterCommit(projectId, responses);
         return responses;
+    }
+
+    /**
+     * Attachments are files the user uploaded to this project ({@code uploads/<file>}); anything else,
+     * or a file that does not exist, is rejected rather than silently dropped.
+     */
+    private String attachments(UUID projectId, java.util.List<String> paths) {
+        if (paths == null || paths.isEmpty()) return null;
+        java.util.List<String> valid = new java.util.ArrayList<>();
+        for (String path : paths) {
+            String normalized;
+            try {
+                normalized = com.code.pal.agent.workspace.ProjectPaths.normalize(path, false);
+            } catch (IllegalArgumentException invalid) {
+                throw new com.code.pal.message.exception.InvalidAttachmentException("Invalid attachment: " + path);
+            }
+            if (!normalized.matches("uploads/[^/]+") || !files.regularFile(projectId, ".", normalized)) {
+                throw new com.code.pal.message.exception.InvalidAttachmentException("Not an uploaded file of this project: " + path);
+            }
+            if (!valid.contains(normalized)) valid.add(normalized);
+        }
+        return String.join("\n", valid);
     }
 
     @Override

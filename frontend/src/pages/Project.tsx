@@ -344,8 +344,8 @@ export default function ProjectPage() {
   const send = useCallback(async (prompt: string, mode: ProjectType, files: File[] = []) => {
     setSendError(undefined)
     try {
-      if (files.length) await projectApi.uploadAttachments(id, files)
-      const created = await messageApi.post(id, prompt, mode)
+      const uploaded = files.length ? await projectApi.uploadAttachments(id, files) : []
+      const created = await messageApi.post(id, prompt, mode, uploaded.map((file) => file.path))
       // The agent can finish (and its realtime updates can land) before this response does, since
       // ids are client-generated and shared between this response and the realtime stream. Skip any
       // id already in state instead of blindly appending, or a fresher realtime row gets a stale,

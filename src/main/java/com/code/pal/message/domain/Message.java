@@ -89,6 +89,14 @@ public class Message implements Persistable<String> {
      * (a fresh counter still sorts after every pre-restart row, since createdAt is compared first). */
     @Column(name = "seq", nullable = false) @ColumnDefault("0") @Builder.Default long seq = 0;
 
+    /** Project paths (uploads/...) attached to a user message, one per line; null when there are none. */
+    @Column(columnDefinition = "text")
+    String attachments;
+
+    public java.util.List<String> attachmentPaths() {
+        return attachments == null || attachments.isBlank() ? java.util.List.of() : java.util.List.of(attachments.split("\n"));
+    }
+
     /** New until persisted (id is assigned, so Hibernate can't infer this itself). */
     @Override
     public boolean isNew() {

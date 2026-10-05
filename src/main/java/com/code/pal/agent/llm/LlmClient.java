@@ -33,7 +33,14 @@ public interface LlmClient {
         }
     }
 
-    record LlmMessage(String role, String content, List<ToolCall> toolCalls, String toolCallId) {
+    /** {@code images}: data URLs ({@code data:image/png;base64,...}) sent with a user message to a vision model. */
+    record LlmMessage(String role, String content, List<ToolCall> toolCalls, String toolCallId, List<String> images) {
+        public LlmMessage(String role, String content, List<ToolCall> toolCalls, String toolCallId) {
+            this(role, content, toolCalls, toolCallId, null);
+        }
+        public static LlmMessage userWithImages(String content, List<String> images) {
+            return new LlmMessage("user", content, null, null, List.copyOf(images));
+        }
         public static LlmMessage system(String content) { return new LlmMessage("system", content, null, null); }
         public static LlmMessage user(String content) { return new LlmMessage("user", content, null, null); }
         public static LlmMessage assistant(String content) { return new LlmMessage("assistant", content, null, null); }

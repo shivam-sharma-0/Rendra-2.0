@@ -145,6 +145,7 @@ public class AgentProperties {
         models.setBuild(filterUsable(models.getBuild()));
         models.setChat(filterUsable(models.getChat()));
         models.setPlan(filterUsable(models.getPlan()));
+        models.setVision(filterUsable(models.getVision()));
     }
 
     private List<String> filterUsable(List<String> modelList) {
@@ -287,6 +288,8 @@ public class AgentProperties {
         private List<String> freeBuild = new ArrayList<>();
         private List<String> freeChat = new ArrayList<>();
         private List<String> freePlan = new ArrayList<>();
+        /** Image understanding, tried in order (the first that answers wins): not round-robin. */
+        private List<String> vision = new ArrayList<>();
 
         private final AtomicInteger buildIndex = new AtomicInteger();
         private final AtomicInteger chatIndex = new AtomicInteger();
@@ -347,12 +350,24 @@ public class AgentProperties {
         return selection.provider() + ":" + selection.model();
     }
 
+    /** The vision models in preference order, skipping ones that failed recently (all of them if every one did). */
+    public List<ModelSelection> visionModels() {
+        List<ModelSelection> all = models.getVision() == null ? List.of()
+                : models.getVision().stream().filter(entry -> entry != null && !entry.isBlank()).map(this::selection).toList();
+        List<ModelSelection> available = all.stream().filter(selection -> !coolingDown(selection)).toList();
+        return available.isEmpty() ? all : available;
+    }
+
     private ModelSelection nextModelFor(ProjectType mode) {
         String configured = switch (mode) {
             case CHAT -> billingMode == BillingMode.FREE ? models.nextFreeChat() : models.nextChat();
             case PLAN -> billingMode == BillingMode.FREE ? models.nextFreePlan() : models.nextPlan();
             case BUILD -> billingMode == BillingMode.FREE ? models.nextFreeBuild() : models.nextBuild();
         };
+        return selection(configured);
+    }
+
+    private ModelSelection selection(String configured) {
         if (configured == null || configured.isBlank()) return new ModelSelection(defaultProvider(), configured);
 
         // Provider-qualified entries look like "nvidia:deepseek-ai/deepseek-v4.1-flash". Preserve

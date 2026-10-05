@@ -21,12 +21,14 @@ public record MessageResponse(
         MessageFeedback feedback,
         long seq,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        java.util.List<String> attachments
 ) {
 
     public static MessageResponse from(Message m) {
         return new MessageResponse(
                 m.getId(), m.getProjectId(), m.getRole(), m.getContent(), m.getStatus(),
-                m.getMode(), m.getReplyToId(), m.getFeedback(), m.getSeq(), m.getCreatedAt(), m.getUpdatedAt());
+                m.getMode(), m.getReplyToId(), m.getFeedback(), m.getSeq(), m.getCreatedAt(), m.getUpdatedAt(),
+                m.attachmentPaths());
     }
 }

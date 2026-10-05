@@ -160,8 +160,8 @@ export function useMessages(projectId: string | null | undefined) {
 export function useStartProject() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (vars: { prompt: string | null; mode?: ProjectType; workspaceId?: string }) =>
-      startProject(vars.prompt, vars.mode ?? 'BUILD', vars.workspaceId, { idempotencyKey: newRequestId() }),
+    mutationFn: (vars: { prompt: string | null; mode?: ProjectType; workspaceId?: string; files?: File[] }) =>
+      startProject(vars.prompt, vars.mode ?? 'BUILD', vars.workspaceId, { idempotencyKey: newRequestId(), files: vars.files }),
     onSuccess: (project) => {
       client.invalidateQueries({ queryKey: ['workspaces', project.workspaceId, 'projects'] })
     },
