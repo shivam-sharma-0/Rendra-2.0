@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import {
   agentApi, messageApi, projectApi, requirementsApi,
   type AgentRun, type AgentStep, type FileNode, type Message, type MessageFeedback, type MessageRole, type StagedFile,
-  type Project, type ProjectType, type ProjectRole, type RequirementSession,
+  type Project, type ProjectType, type ProjectRole, type RequirementSession, type PreviewStatus,
 } from '../api/projects'
 import {
   qk, useProjectMembers, useShareProject, useUpdateProjectMemberRole, useRemoveProjectMember,
@@ -80,6 +80,11 @@ export default function ProjectPage() {
   const { id = '' } = useParams()
   const [project, setProject] = useState<Project | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  // Latest preview build state pushed by the backend (PREVIEW_STATUS); the preview reloads on a new version.
+  const [previewUpdate, setPreviewUpdate] = useState<PreviewStatus | null>(null)
+  useEffect(() => { setPreviewUpdate(null) }, [id])
+  // The header's reload button: bumped here, followed by the preview panel.
+  const [previewReloadRequest, setPreviewReloadRequest] = useState(0)
   const [runs, setRuns] = useState<AgentRun[]>([])
   const [stepsByRun, setStepsByRun] = useState<Record<string, AgentStep[]>>({})
   const [loading, setLoading] = useState(true)
@@ -276,6 +281,11 @@ export default function ProjectPage() {
     if (message.type === 'CONNECTED') {
       void loadLatestMessages().then(setMessages).catch(() => undefined)
       void refreshTimeline().catch(() => undefined)
+      return
+    }
+    if (message.type === 'PREVIEW_STATUS') {
+      const update = message.payload as (PreviewStatus & { projectId?: string }) | undefined
+      if (update?.projectId === id) setPreviewUpdate({ state: update.state, version: update.version, error: update.error })
       return
     }
     if (TIMELINE_EVENT_TYPES.has(message.type)) {
@@ -673,7 +683,7 @@ export default function ProjectPage() {
                   <div className="pw-urlbar">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
                     <span>/preview</span>
-                    <button type="button" aria-label="Reload" title="Reload">
+                    <button type="button" aria-label="Reload preview" title="Reload preview" onClick={() => setPreviewReloadRequest((n) => n + 1)}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8M21 3v5h-5" /></svg>
                     </button>
                   </div>
@@ -732,7 +742,7 @@ export default function ProjectPage() {
                   : tab === 'analytics' ? <AnalyticsPanel projectId={id} active={tab === 'analytics'} />
                     : tab === 'security' ? <SecurityPanel projectId={id} active={tab === 'security'} />
                       : tab === 'database' ? <DatabasePanel projectId={id} />
-                        : <PreviewPanel project={project} />}
+                        : <PreviewPanel project={project} update={previewUpdate} reloadRequest={previewReloadRequest} />}
           </div>
         </section>
       </div>
@@ -1647,33 +1657,79 @@ function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest }: {
 }
 
 /* ── Preview ──────────────────────────────────────────────────────────────── */
-function PreviewPanel({ project }: { project: Project | null }) {
+function PreviewPanel({ project, update, reloadRequest }: { project: Project | null; update: PreviewStatus | null; reloadRequest: number }) {
   // The backend returns the full URL: previews live on a separate sites origin (never the API
   // origin), so the generated app cannot reach the API with the viewer's cookies.
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [preview, setPreview] = useState<{ url: string; available: boolean } | null>(null)
+  const [status, setStatus] = useState<PreviewStatus | null>(null)
   const [previewError, setPreviewError] = useState(false)
+  const [showPublished, setShowPublished] = useState(false)
+  // Bumped to fetch a fresh URL (new token) and reload the frame: on a new build, or by hand.
+  const [reloads, setReloads] = useState(0)
+  const shownVersion = useRef<string | null>(null)
+  const projectId = project?.id
   const live = project?.deploymentStatus === 'LIVE'
 
+  useEffect(() => { setShowPublished(false) }, [projectId])
+  useEffect(() => { if (reloadRequest > 0) setReloads((n) => n + 1) }, [reloadRequest])
+
   useEffect(() => {
-    setPreviewUrl(null)
     setPreviewError(false)
-    if (!project || live || project.lifecycleStage !== 'REVIEW') return
+    if (!projectId) return
     let cancelled = false
-    void projectApi.previewToken(project.id)
-      .then((response) => { if (!cancelled) setPreviewUrl(response.url) })
+    void projectApi.previewToken(projectId)
+      .then((response) => {
+        if (cancelled) return
+        setPreview({ url: response.url, available: response.available })
+        setStatus(response.status)
+        shownVersion.current = response.status.version
+      })
       .catch(() => { if (!cancelled) setPreviewError(true) })
     return () => { cancelled = true }
-  }, [project?.id, project?.lifecycleStage, live])
+  }, [projectId, reloads])
 
-  const url = live ? project?.publishedUrl : previewUrl
-  if (url) return <iframe title="App preview" src={url} className="pw-frame" sandbox="allow-scripts allow-same-origin allow-forms" />
+  // A finished build with new content reloads the frame; building/failed only change the status line,
+  // so the last good version stays visible meanwhile.
+  useEffect(() => {
+    if (!update) return
+    setStatus(update)
+    if (update.state === 'READY' && update.version !== shownVersion.current) setReloads((n) => n + 1)
+  }, [update])
+
+  const publishedView = live && showPublished
+  const url = publishedView ? project?.publishedUrl : preview?.available ? preview.url : null
+  const building = status?.state === 'BUILDING'
+  const failed = status?.state === 'FAILED'
+
   return (
-    <div className="pw-empty pw-dots">
-      <div>
-        <span className="pw-empty-icon">◐</span>
-        <h3>{previewError ? 'Preview unavailable' : project?.lifecycleStage === 'REVIEW' ? 'Preparing preview' : 'No preview yet'}</h3>
-        <p>Your app’s live preview will appear here once it can run. For now, open the <b>Code</b> tab to see the files Rendra has written.</p>
+    <div className="pw-preview">
+      <div className="pw-preview-bar">
+        {live && (
+          <div className="pw-preview-switch" role="tablist" aria-label="Preview source">
+            <button type="button" role="tab" aria-selected={!showPublished} className={!showPublished ? 'on' : ''} onClick={() => setShowPublished(false)}>Latest</button>
+            <button type="button" role="tab" aria-selected={showPublished} className={showPublished ? 'on' : ''} onClick={() => setShowPublished(true)}>Published</button>
+          </div>
+        )}
+        <span className={'pw-preview-state' + (failed && !publishedView ? ' failed' : '')} title={failed && !publishedView ? status?.error ?? undefined : undefined} aria-live="polite">
+          {publishedView ? 'Published version'
+            : building ? 'Updating preview…'
+              : failed ? (preview?.available ? 'Build failed — showing the last working version' : 'Build failed')
+                : preview?.available ? 'Up to date' : ''}
+        </span>
       </div>
+      {url
+        ? <iframe key={`${url}#${reloads}`} title="App preview" src={url} className="pw-frame" sandbox="allow-scripts allow-same-origin allow-forms" />
+        : (
+          <div className="pw-empty pw-dots">
+            <div>
+              <span className="pw-empty-icon">◐</span>
+              <h3>{previewError ? 'Preview unavailable' : building ? 'Building preview' : failed ? 'Preview build failed' : 'No preview yet'}</h3>
+              {failed && status?.error
+                ? <pre className="pw-preview-error">{status.error}</pre>
+                : <p>Your app’s live preview will appear here once it can run. For now, open the <b>Code</b> tab to see the files Rendra has written.</p>}
+            </div>
+          </div>
+        )}
     </div>
   )
 }

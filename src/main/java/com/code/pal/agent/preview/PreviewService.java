@@ -45,6 +45,12 @@ public class PreviewService {
         return read(projectId, site != null ? siteFile(projectId, site, path) : projectFile(projectId, path));
     }
 
+    /** Whether the preview has anything to show: a built site, or the files of a project that needs no build. */
+    public boolean available(UUID projectId) {
+        if (sites.currentSite(projectId) != null) return true;
+        return !sites.needsBuild(projectId) && firstFile(projectId, indexCandidates()) != null;
+    }
+
     private PreviewFile read(UUID projectId, String target) {
         if (target == null) throw notFound();
         try {

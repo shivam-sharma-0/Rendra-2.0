@@ -80,6 +80,29 @@ class SiteBuildServiceTest {
     }
 
     @Test
+    void openPreviewsAreToldWhenToReloadAndWhenABuildFailed() {
+        List<SiteBuildService.PreviewStatus> told = new ArrayList<>();
+        SiteBuildService watched = new SiteBuildService(new StackPacks(new ObjectMapper()), project.files, sandbox, dependencies,
+                BuildVariables.NONE, (projectId, status) -> told.add(status));
+        PreviewService watchedPreview = new PreviewService(project.files, watched, new PublishedSiteService(watched, project.files, sandbox));
+        project.write("package.json", VITE).write("index.html", "<script src=/src/main.tsx></script>");
+        assertFalse(watchedPreview.available(project.projectId), "an unbuilt Vite app has nothing to show");
+
+        watched.build(project.projectId);
+        String first = watched.status(project.projectId).version();
+        nextBuildOutput = null;
+        watched.build(project.projectId);
+
+        assertEquals(List.of(SiteBuildService.PreviewStatus.State.BUILDING, SiteBuildService.PreviewStatus.State.READY,
+                SiteBuildService.PreviewStatus.State.BUILDING, SiteBuildService.PreviewStatus.State.FAILED),
+                told.stream().map(SiteBuildService.PreviewStatus::state).toList());
+        assertEquals(watched.currentSite(project.projectId), ".codepal/site/" + first, "READY names the site now served");
+        assertEquals(first, told.getLast().version(), "a failed build keeps the version: no reload");
+        assertTrue(told.getLast().error().contains("TS2304"), told.getLast().error());
+        assertTrue(watchedPreview.available(project.projectId));
+    }
+
+    @Test
     void theNewSiteReplacesTheOldOneAndOnlyThePreviousIsKept() {
         project.write("package.json", VITE);
         for (String version : List.of("v1", "v2", "v3")) {

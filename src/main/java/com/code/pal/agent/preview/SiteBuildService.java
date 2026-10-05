@@ -40,17 +40,27 @@ public class SiteBuildService {
     private final SandboxPort sandbox;
     private final DependencyService dependencies;
     private final BuildVariables variables;
+    private final PreviewListener listener;
+    /** The latest build state per project, for viewers who open the preview between events. */
+    private final Map<UUID, PreviewStatus> statuses = new ConcurrentHashMap<>();
     private final Map<UUID, ReentrantLock> locks = new ConcurrentHashMap<>();
     private final ExecutorService background = Executors.newVirtualThreadPerTaskExecutor();
 
     @org.springframework.beans.factory.annotation.Autowired
     public SiteBuildService(StackPacks stacks, ProjectFiles files, SandboxPort sandbox, DependencyService dependencies,
-                            BuildVariables variables) {
+                            BuildVariables variables, PreviewListener listener) {
         this.stacks = stacks;
         this.files = files;
         this.sandbox = sandbox;
         this.dependencies = dependencies;
         this.variables = variables;
+        this.listener = listener;
+    }
+
+    /** For tests: no listener. */
+    public SiteBuildService(StackPacks stacks, ProjectFiles files, SandboxPort sandbox, DependencyService dependencies,
+                            BuildVariables variables) {
+        this(stacks, files, sandbox, dependencies, variables, PreviewListener.NONE);
     }
 
     /** For tests: no build variables. */
@@ -70,14 +80,70 @@ public class SiteBuildService {
         static Result failed(String error) { return new Result(false, error); }
     }
 
+    /**
+     * What the preview shows. {@code version} changes whenever the served content does, so a viewer
+     * reloads exactly then; {@code error} says why the latest build failed (the previous site stays).
+     */
+    public record PreviewStatus(State state, String version, String error) {
+        public enum State { BUILDING, READY, FAILED }
+    }
+
+    /** Told about every build, so open previews can follow it (realtime in the app, nothing in tests). */
+    public interface PreviewListener {
+        PreviewListener NONE = (projectId, status) -> { };
+        void changed(UUID projectId, PreviewStatus status);
+    }
+
     /** Builds the project's current files into the served site. One build per project at a time. */
     public Result build(UUID projectId) {
         ReentrantLock lock = locks.computeIfAbsent(projectId, ignored -> new ReentrantLock());
         lock.lock();
         try {
-            return buildLocked(projectId);
+            String served = version(projectId);
+            publish(projectId, new PreviewStatus(PreviewStatus.State.BUILDING, served, null));
+            Result result;
+            try {
+                result = buildLocked(projectId);
+            } catch (RuntimeException crash) {
+                publish(projectId, new PreviewStatus(PreviewStatus.State.FAILED, served, "Build failed: " + crash.getMessage()));
+                throw crash;
+            }
+            publish(projectId, result.error() != null
+                    ? new PreviewStatus(PreviewStatus.State.FAILED, served, result.error())
+                    // A static project has no site id: its files changed, so its content is new anyway.
+                    : new PreviewStatus(PreviewStatus.State.READY, result.built() ? version(projectId) : UUID.randomUUID().toString(), null));
+            return result;
         } finally {
             lock.unlock();
+        }
+    }
+
+    /** The latest state, or (after a restart) READY with what is served now. */
+    public PreviewStatus status(UUID projectId) {
+        PreviewStatus known = statuses.get(projectId);
+        return known != null ? known : new PreviewStatus(PreviewStatus.State.READY, version(projectId), null);
+    }
+
+    /** Whether the project's files need a build before they can be shown (a Vite app does, a static site not). */
+    public boolean needsBuild(UUID projectId) {
+        try {
+            return stacks.detect(files, projectId, ".").previewBuild(files, projectId, ".") != null;
+        } catch (RuntimeException unreadable) {
+            return false;
+        }
+    }
+
+    private String version(UUID projectId) {
+        String site = currentSite(projectId);
+        return site != null ? site.substring(SITE.length() + 1) : "files";
+    }
+
+    private void publish(UUID projectId, PreviewStatus status) {
+        statuses.put(projectId, status);
+        try {
+            listener.changed(projectId, status);
+        } catch (RuntimeException error) {
+            log.warn("preview_status_not_sent projectId={} reason={}", projectId, error.getMessage());
         }
     }
 
