@@ -3,6 +3,7 @@ package com.code.pal.agent.workspace;
 import com.code.pal.agent.config.AgentProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -16,7 +17,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -30,8 +30,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Persistent per-project Docker environment. The project volume is the source of truth; this
- * adapter deliberately has no host-directory fallback. File paths are relative to /workspace.
+ * Per-project Docker container with the project folder ({@code <workspace-base>/<projectId>}, in WSL
+ * ext4) bind-mounted at /workspace. It runs commands and bulk tree operations; the backend reads and
+ * writes single files directly through {@link HostProjectFiles}, which sees the same folder.
  *
  * <p>Each project has a read/write lock. Commands inside the container hold the read lock, so they
  * run in parallel; provisioning (volume + container + start) and idle stop/remove hold the write
@@ -42,6 +43,7 @@ import java.util.regex.Pattern;
  */
 @Slf4j
 @Service
+@ConditionalOnProperty(prefix = "app.agent.sandbox", name = "required", havingValue = "true")
 public class DockerProjectEnvironment implements SandboxPort {
     private static final String WORKSPACE_LABEL = "com.codepal.workspace=true";
     /** Bounds re-checks when the container is stopped between ensure() and taking the read lock. */
@@ -366,104 +368,11 @@ public class DockerProjectEnvironment implements SandboxPort {
     }
 
     @Override
-    public String readText(UUID projectId, String relativeRoot, String relativePath) {
-        String path = safePath(relativeRoot, relativePath);
-        return exec(projectId, relativeRoot, List.of("cat", "--", path)).requireSuccess().stdout();
+    public String commandPath(UUID projectId, String relativeRoot) {
+        return rootPath(relativeRoot);
     }
 
-    /** Read binary-safe content from the volume for preview/download endpoints. */
-    @Override
-    public byte[] readBytes(UUID projectId, String relativeRoot, String relativePath, int maxBytes) {
-        String path = safePath(relativeRoot, relativePath);
-        int limit = Math.max(1, maxBytes);
-        String script = "size=$(wc -c < " + shellQuote(path) + ") && test $size -le " + limit
-                + " && base64 -w 0 -- " + shellQuote(path);
-        CommandResult result = execInContainer(projectId, List.of("--workdir", rootPath(relativeRoot)),
-                List.of("sh", "-lc", script), timeout(), null, Math.max(1_000, limit * 2 + 100));
-        result.requireSuccess();
-        try { return Base64.getDecoder().decode(result.stdout().trim()); }
-        catch (IllegalArgumentException error) { throw new IllegalStateException("Could not decode sandbox file", error); }
-    }
-
-    @Override
-    public void writeText(UUID projectId, String relativeRoot, String relativePath, String content) {
-        String path = safePath(relativeRoot, relativePath);
-        String parent = path.substring(0, Math.max(path.lastIndexOf('/'), properties.getSandbox().getWorkspacePath().length()));
-        String script = "mkdir -p " + shellQuote(parent) + " && cat > " + shellQuote(path);
-        execInContainer(projectId, List.of("-i", "--workdir", rootPath(relativeRoot)), List.of("sh", "-lc", script),
-                timeout(), content.getBytes(StandardCharsets.UTF_8), outputLimit()).requireSuccess();
-        enforceQuota(projectId);
-    }
-
-    @Override
-    public void writeBytes(UUID projectId, String relativePath, byte[] content) {
-        if (content == null || content.length > 10_000_000) throw new IllegalArgumentException("Attachment is too large");
-        String path = safePath(".", relativePath);
-        String parent = parentPath(path);
-        String script = "mkdir -p " + shellQuote(parent) + " && base64 -d > " + shellQuote(path);
-        String encoded = Base64.getEncoder().encodeToString(content);
-        execInContainer(projectId, List.of("-i", "--workdir", rootPath(".")), List.of("sh", "-lc", script),
-                timeout(), encoded.getBytes(StandardCharsets.US_ASCII), outputLimit()).requireSuccess();
-        enforceQuota(projectId);
-    }
-
-    @Override
-    public List<Entry> list(UUID projectId, String relativeRoot, int maxDepth) {
-        String root = rootPath(relativeRoot);
-        CommandResult result = execInContainer(projectId, List.of(), List.of(
-                        "find", root, "-mindepth", "1", "-maxdepth", Integer.toString(Math.max(1, maxDepth)),
-                        "-printf", "%y\\t%p\\t%s\\n"), timeout(), null, outputLimit()).requireSuccess();
-        List<Entry> entries = new ArrayList<>();
-        for (String line : result.stdout().split("\\R")) {
-            if (line.isBlank()) continue;
-            String[] parts = line.split("\\t", 3);
-            if (parts.length != 3) continue;
-            String path = parts[1].substring(root.length()).replace('\\', '/');
-            if (path.startsWith("/")) path = path.substring(1);
-            entries.add(new Entry(path, "d".equals(parts[0]), parseSize(parts[2])));
-        }
-        return List.copyOf(entries);
-    }
-
-    @Override
-    public void delete(UUID projectId, String relativeRoot, String relativePath) {
-        exec(projectId, relativeRoot, List.of("rm", "-rf", "--", safePath(relativeRoot, relativePath))).requireSuccess();
-    }
-
-    @Override
-    public void move(UUID projectId, String relativeRoot, String source, String target) {
-        exec(projectId, relativeRoot, List.of("mkdir", "-p", "--", parentPath(safePath(relativeRoot, target)))).requireSuccess();
-        exec(projectId, relativeRoot, List.of("mv", "--", safePath(relativeRoot, source), safePath(relativeRoot, target))).requireSuccess();
-    }
-
-    @Override
-    public boolean exists(UUID projectId, String relativeRoot, String relativePath) {
-        return exec(projectId, relativeRoot, List.of("test", "-e", safePath(relativeRoot, relativePath))).success();
-    }
-
-    @Override
-    public boolean regularFile(UUID projectId, String relativeRoot, String relativePath) {
-        return exec(projectId, relativeRoot, List.of("test", "-f", safePath(relativeRoot, relativePath))).success();
-    }
-
-    @Override
-    public long size(UUID projectId, String relativeRoot, String relativePath) {
-        CommandResult result = exec(projectId, relativeRoot,
-                List.of("stat", "-c", "%s", safePath(relativeRoot, relativePath)));
-        if (!result.success()) return 0;
-        return parseSize(result.stdout().trim());
-    }
-
-    /** Stable content fingerprint used for optimistic concurrency in the agent tools. */
-    @Override
-    public String version(UUID projectId, String relativeRoot, String relativePath) {
-        if (!exists(projectId, relativeRoot, relativePath)) return "absent";
-        if (!regularFile(projectId, relativeRoot, relativePath)) return "non-file";
-        return "sha256:" + exec(projectId, relativeRoot,
-                List.of("sha256sum", safePath(relativeRoot, relativePath))).requireSuccess().stdout().trim().split("\\s+", 2)[0];
-    }
-
-    /** Copy a directory inside the persistent project volume without exposing it to the host. */
+    /** Copies a subtree in one tar pipe next to the files (internal and secret folders excluded). */
     @Override
     public void copyTree(UUID projectId, String sourceRoot, String targetRoot) {
         String source = rootPath(sourceRoot);
@@ -473,17 +382,8 @@ public class DockerProjectEnvironment implements SandboxPort {
                 + " && tar -C " + shellQuote(source) + " --exclude=.codepal --exclude=.git --exclude=.secrets"
                 + " -cf - . | tar -C " + shellQuote(target) + " -xf -";
         exec(projectId, ".", List.of("sh", "-lc", "mkdir -p " + shellQuote(parent) + " && " + script)).requireSuccess();
-        enforceQuota(projectId);
-    }
-
-    @Override
-    public void copyFile(UUID projectId, String sourceRoot, String source, String targetRoot, String target) {
-        String sourcePath = safePath(sourceRoot, source);
-        String targetPath = safePath(targetRoot, target);
-        String script = "mkdir -p " + shellQuote(parentPath(targetPath)) + " && cp -f "
-                + shellQuote(sourcePath) + " " + shellQuote(targetPath);
-        exec(projectId, ".", List.of("sh", "-lc", script)).requireSuccess();
-        enforceQuota(projectId);
+        // Internal state (staging, validation copies, history) is outside the quota by design.
+        if (!ProjectPaths.isInternal(targetRoot)) enforceQuota(projectId);
     }
 
     @Override
@@ -500,15 +400,13 @@ public class DockerProjectEnvironment implements SandboxPort {
     public void restoreTree(UUID projectId, String snapshotRoot) {
         String source = rootPath(snapshotRoot);
         String workspace = properties.getSandbox().getWorkspacePath();
-        String script = "find " + shellQuote(workspace) + " -mindepth 1 -maxdepth 1 ! -name .codepal -exec rm -rf -- {} +"
+        // Nothing is removed unless the snapshot exists: a missing archive must not empty the project.
+        String script = "test -d " + shellQuote(source)
+                + " && find " + shellQuote(workspace) + " -mindepth 1 -maxdepth 1 ! -name .codepal -exec rm -rf -- {} +"
                 + " && tar -C " + shellQuote(source) + " --exclude=.codepal -cf - . | tar -C "
                 + shellQuote(workspace) + " -xf -";
         exec(projectId, ".", List.of("sh", "-lc", script)).requireSuccess();
         enforceQuota(projectId);
-    }
-
-    private String safePath(String relativeRoot, String relativePath) {
-        return properties.getSandbox().getWorkspacePath() + "/" + ProjectPaths.combine(relativeRoot, relativePath);
     }
 
     private String rootPath(String relativeRoot) {
@@ -556,12 +454,12 @@ public class DockerProjectEnvironment implements SandboxPort {
             if (!finished) {
                 process.destroyForcibly();
                 reader.join(1_000);
-                return new CommandResult(false, -1, captured.toString(StandardCharsets.UTF_8), "Sandbox command timed out");
+                return new CommandResult(false, -1, captured.toString(StandardCharsets.UTF_8), CommandResult.TIMED_OUT);
             }
             reader.join(1_000);
             return new CommandResult(process.exitValue() == 0, process.exitValue(), captured.toString(StandardCharsets.UTF_8), "");
         } catch (IOException e) {
-            return new CommandResult(false, -1, "", "Docker command could not be started: " + e.getMessage());
+            return new CommandResult(false, -1, "", CommandResult.NOT_STARTED + " (docker): " + e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return new CommandResult(false, -1, "", "Sandbox command interrupted");

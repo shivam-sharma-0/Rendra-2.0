@@ -7,8 +7,6 @@ import com.code.pal.agent.domain.AgentStepType;
 import com.code.pal.agent.domain.RunStatus;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
-import com.code.pal.agent.snapshot.WorkspaceSnapshotService;
-import com.code.pal.agent.workspace.WorkspaceStorage;
 import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.message.domain.MessageStatus;
 import com.code.pal.message.dto.MessageResponse;
@@ -33,8 +31,6 @@ public class AgentRunRecovery {
     private final AgentEvents events;
     private final MessageRepository messages;
     private final RealtimeService realtime;
-    private final WorkspaceStorage workspace;
-    private final WorkspaceSnapshotService snapshots;
     private final SandboxPort sandbox;
     private final ChangeSetService changeSets;
 
@@ -76,21 +72,18 @@ public class AgentRunRecovery {
 
     private void failAbandoned(AgentRun run) {
         boolean restored = false;
+        String archive = ChangeSetService.archiveFor(run.getSnapshotRef());
         if (props.isRollbackOnFailure() && run.getSnapshotRef() != null) {
             try {
-                if (run.getSnapshotRef().startsWith("docker:")) {
-                    sandbox.restoreTree(run.getProjectId(), ".codepal/history/" + run.getId() + "/original");
-                } else {
-                    snapshots.restore(workspace.ensure(run.getProjectId()), run.getSnapshotRef());
-                }
+                if (archive == null) throw new IllegalStateException("unsupported snapshot reference " + run.getSnapshotRef());
+                sandbox.restoreTree(run.getProjectId(), archive);
                 restored = true;
             } catch (Exception e) {
                 log.error("Could not restore abandoned run {}: {}", run.getId(), e.getMessage());
             }
         }
         // The dead process took the in-memory change set with it; remove its staging area too.
-        changeSets.cleanupAbandoned(run.getProjectId(), run.getId(),
-                props.getSandbox().isRequired() ? null : workspace.projectDir(run.getProjectId()));
+        changeSets.cleanupAbandoned(run.getProjectId(), run.getId());
         run.setStatus(RunStatus.FAILED);
         run.setError("Agent worker stopped before the run completed");
         runs.save(run);

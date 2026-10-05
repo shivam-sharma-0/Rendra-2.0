@@ -1,29 +1,30 @@
 package com.code.pal.project.artifact;
 
 import com.code.pal.agent.domain.AgentRun;
-import com.code.pal.agent.workspace.WorkspaceStorage;
-import com.code.pal.agent.workspace.SandboxPort;
-import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.workspace.ProjectFiles;
+import com.code.pal.agent.workspace.ProjectPaths;
 import com.code.pal.project.domain.RequirementQuestion;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
 import java.time.Instant;
 import java.util.*;
 
-/** Writes durable workflow manifests beside the generated project, outside the agent staging tree. */
+/**
+ * Writes durable workflow manifests ({@code requirements.json}, {@code builds/<runId>.json}) under the
+ * project's internal folder, outside the agent staging tree. Change-set staging and build history live
+ * in the same folder but are not artifacts.
+ */
 @Service
 @RequiredArgsConstructor
 public class ProjectArtifactService {
     private static final int MAX_READ_BYTES = 512_000;
-    private final WorkspaceStorage workspaces;
+    private static final String ROOT = ProjectPaths.INTERNAL;
+    private static final Set<String> NOT_ARTIFACTS = Set.of("changesets", "history");
+
+    private final ProjectFiles files;
     private final ObjectMapper objectMapper;
-    private final SandboxPort sandbox;
-    private final AgentProperties properties;
 
     public void writeRequirements(UUID projectId, UUID sessionId, List<RequirementQuestion> questions) {
         List<Map<String, Object>> answers = questions.stream().map(question -> {
@@ -53,56 +54,26 @@ public class ProjectArtifactService {
     }
 
     public List<Artifact> list(UUID projectId) {
-        if (properties.getSandbox().isRequired()) {
-            return sandbox.list(projectId, ".codepal", 8).stream().filter(entry -> !entry.directory())
-                    .map(entry -> new Artifact(entry.path(), entry.size(), Instant.now())).sorted(Comparator.comparing(Artifact::path)).toList();
-        }
-        Path root = workspaces.projectDir(projectId).resolve(".codepal").normalize();
-        if (!root.startsWith(workspaces.projectDir(projectId)) || !Files.isDirectory(root)) return List.of();
-        try (var paths = Files.walk(root)) {
-            return paths.filter(Files::isRegularFile).map(path -> {
-                String relative = root.relativize(path).toString().replace('\\', '/');
-                try { return new Artifact(relative, Files.size(path), Files.getLastModifiedTime(path).toInstant()); }
-                catch (IOException e) { return new Artifact(relative, 0, Instant.EPOCH); }
-            }).sorted(Comparator.comparing(Artifact::path)).toList();
-        } catch (IOException e) { return List.of(); }
+        return files.list(projectId, ROOT, 8, NOT_ARTIFACTS).stream().filter(entry -> !entry.directory())
+                .map(entry -> new Artifact(entry.path(), entry.size(), Instant.now()))
+                .sorted(Comparator.comparing(Artifact::path)).toList();
     }
 
     public String read(UUID projectId, String relativePath) {
-        if (relativePath == null || relativePath.isBlank() || relativePath.contains("..") || relativePath.startsWith("/")) {
+        String path;
+        try {
+            path = ProjectPaths.normalize(relativePath, false);
+        } catch (IllegalArgumentException invalid) {
             throw new IllegalArgumentException("Invalid artifact path");
         }
-        if (properties.getSandbox().isRequired()) {
-            if (!sandbox.regularFile(projectId, ".codepal", relativePath)) throw new IllegalArgumentException("Artifact not found");
-            if (sandbox.size(projectId, ".codepal", relativePath) > MAX_READ_BYTES) throw new IllegalArgumentException("Artifact is too large");
-            return sandbox.readText(projectId, ".codepal", relativePath);
-        }
-        Path root = workspaces.projectDir(projectId).resolve(".codepal").normalize();
-        Path target = root.resolve(relativePath).normalize();
-        if (!target.startsWith(root) || !Files.isRegularFile(target)) throw new IllegalArgumentException("Artifact not found");
-        try {
-            if (Files.size(target) > MAX_READ_BYTES) throw new IllegalArgumentException("Artifact is too large");
-            return Files.readString(target, StandardCharsets.UTF_8);
-        } catch (IOException e) { throw new IllegalStateException("Could not read artifact", e); }
+        if (NOT_ARTIFACTS.contains(path.split("/", 2)[0])) throw new IllegalArgumentException("Artifact not found");
+        if (!files.regularFile(projectId, ROOT, path)) throw new IllegalArgumentException("Artifact not found");
+        if (files.size(projectId, ROOT, path) > MAX_READ_BYTES) throw new IllegalArgumentException("Artifact is too large");
+        return files.readText(projectId, ROOT, path);
     }
 
     private void writeJson(UUID projectId, String relativePath, Object value) {
-        if (properties.getSandbox().isRequired()) {
-            sandbox.writeText(projectId, ".codepal", relativePath,
-                    objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value));
-            return;
-        }
-        Path root = workspaces.ensure(projectId).resolve(".codepal").normalize();
-        Path target = root.resolve(relativePath).normalize();
-        if (!target.startsWith(root)) throw new IllegalArgumentException("Invalid artifact path");
-        try {
-            Files.createDirectories(target.getParent());
-            Path temp = Files.createTempFile(target.getParent(), ".artifact-", ".tmp");
-            Files.writeString(temp, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value), StandardCharsets.UTF_8,
-                    StandardOpenOption.TRUNCATE_EXISTING);
-            try { Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-            catch (AtomicMoveNotSupportedException ignored) { Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING); }
-        } catch (IOException e) { throw new IllegalStateException("Could not persist project artifact", e); }
+        files.writeText(projectId, ROOT, relativePath, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value));
     }
 
     public record Artifact(String path, long size, Instant updatedAt) {}

@@ -19,6 +19,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -52,6 +53,16 @@ public class HostProjectFiles implements ProjectFiles {
     }
 
     @Override
+    public byte[] readHead(UUID projectId, String relativeRoot, String relativePath, int maxBytes) {
+        Path file = requireRegularFile(projectId, relativeRoot, relativePath);
+        try (InputStream input = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS)) {
+            return input.readNBytes(Math.max(0, maxBytes));
+        } catch (IOException error) {
+            throw new IllegalStateException("Could not read project file", error);
+        }
+    }
+
+    @Override
     public void writeText(UUID projectId, String relativeRoot, String relativePath, String content) {
         write(projectId, relativeRoot, relativePath, content.getBytes(StandardCharsets.UTF_8));
     }
@@ -63,17 +74,17 @@ public class HostProjectFiles implements ProjectFiles {
     }
 
     @Override
-    public List<SandboxPort.Entry> list(UUID projectId, String relativeRoot, int maxDepth) {
+    public List<Entry> list(UUID projectId, String relativeRoot, int maxDepth, Set<String> skipDirectories) {
         Path dir = root(projectId, relativeRoot);
         if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return List.of();
-        List<SandboxPort.Entry> entries = new ArrayList<>();
+        List<Entry> entries = new ArrayList<>();
         try {
             Files.walkFileTree(dir, EnumSet.noneOf(FileVisitOption.class), Math.max(1, maxDepth), new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult preVisitDirectory(Path path, BasicFileAttributes attributes) {
                     if (path.equals(dir)) return FileVisitResult.CONTINUE;
-                    if (attributes.isSymbolicLink() || !attributes.isDirectory()) return FileVisitResult.SKIP_SUBTREE;
-                    entries.add(new SandboxPort.Entry(relative(dir, path), true, 0));
+                    if (attributes.isSymbolicLink() || !attributes.isDirectory() || skipped(path)) return FileVisitResult.SKIP_SUBTREE;
+                    entries.add(new Entry(relative(dir, path), true, 0));
                     return FileVisitResult.CONTINUE;
                 }
 
@@ -81,14 +92,18 @@ public class HostProjectFiles implements ProjectFiles {
                 public FileVisitResult visitFile(Path path, BasicFileAttributes attributes) {
                     if (attributes.isSymbolicLink()) return FileVisitResult.CONTINUE;
                     // At the depth limit directories arrive here instead of preVisitDirectory.
-                    if (attributes.isRegularFile()) entries.add(new SandboxPort.Entry(relative(dir, path), false, attributes.size()));
-                    else if (attributes.isDirectory()) entries.add(new SandboxPort.Entry(relative(dir, path), true, 0));
+                    if (attributes.isRegularFile()) entries.add(new Entry(relative(dir, path), false, attributes.size()));
+                    else if (attributes.isDirectory() && !skipped(path)) entries.add(new Entry(relative(dir, path), true, 0));
                     return FileVisitResult.CONTINUE;
                 }
 
                 @Override
                 public FileVisitResult visitFileFailed(Path path, IOException error) {
                     return FileVisitResult.CONTINUE;   // e.g. a Linux link seen through the WSL share
+                }
+
+                private boolean skipped(Path directory) {
+                    return skipDirectories.contains(directory.getFileName().toString());
                 }
             });
         } catch (IOException error) {

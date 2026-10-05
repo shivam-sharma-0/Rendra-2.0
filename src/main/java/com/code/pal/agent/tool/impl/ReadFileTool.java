@@ -2,14 +2,10 @@ package com.code.pal.agent.tool.impl;
 
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.tool.AgentTool;
-import com.code.pal.agent.change.FileVersions;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.LinkOption;
-import java.nio.file.Path;
-import java.io.InputStream;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,68 +35,37 @@ public class ReadFileTool implements AgentTool {
     }
 
     @Override
-    public Object execute(Map<String, Object> args, AgentContext context) throws Exception {
-        String path = str(args.get("path"));
-        if (context.sandboxed()) return readSandbox(path, context);
-        Path file = context.resolveSafe(path);
-        if (isSecretFile(file.getFileName().toString())) {
+    public Object execute(Map<String, Object> args, AgentContext context) {
+        String requested = str(args.get("path"));
+        String path = context.resolvePath(requested);
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        if (isSecretFile(name)) {
             throw new IllegalArgumentException("Credential-like files are not available to agent tools");
         }
-        if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)
-                || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IllegalArgumentException("File not found: " + path);
-        }
-        long size = Files.size(file);
-        String version = FileVersions.of(file);
-        String normalizedPath = context.workspace().toAbsolutePath().normalize()
-                .relativize(file.toAbsolutePath().normalize()).toString().replace('\\', '/');
-        if (context.contextTrace().wasReadUnchanged(normalizedPath, size, version)) {
-            return Map.of("path", normalizedPath, "version", version, "unchanged", true,
-                    "message", "Unchanged file already present in this run's conversation");
-        }
-
-        // Read at most one byte over the cap. Files.readAllBytes() would allocate the full file
-        // before truncating, letting a large repository file exhaust the agent worker's heap.
-        byte[] bytes;
-        try (InputStream in = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS)) {
-            bytes = in.readNBytes(MAX_BYTES + 1);
-        }
-        if (isBinary(bytes)) throw new IllegalArgumentException("Binary files cannot be read as text");
-
-        boolean truncated = bytes.length > MAX_BYTES;
-        String content = new String(truncated ? java.util.Arrays.copyOf(bytes, MAX_BYTES) : bytes, StandardCharsets.UTF_8);
-        context.contextTrace().recordRead(normalizedPath, size, version, content.length());
-        return Map.of("path", normalizedPath, "version", version, "content", content,
-                "truncated", truncated, "sizeBytes", size);
-    }
-
-    private Object readSandbox(String requested, AgentContext context) {
-        String path = context.resolveSandboxPath(requested);
-        if (isSecretFile(Path.of(path).getFileName().toString())) {
-            throw new IllegalArgumentException("Credential-like files are not available to agent tools");
-        }
-        var sandbox = context.sandbox();
-        if (!sandbox.regularFile(context.projectId(), context.sandboxRoot(), path)) {
+        var files = context.files();
+        if (!files.regularFile(context.projectId(), context.root(), path)) {
             throw new IllegalArgumentException("File not found: " + requested);
         }
-        long size = sandbox.size(context.projectId(), context.sandboxRoot(), path);
-        String version = sandbox.version(context.projectId(), context.sandboxRoot(), path);
+        long size = files.size(context.projectId(), context.root(), path);
+        String version = files.version(context.projectId(), context.root(), path);
         if (context.contextTrace().wasReadUnchanged(path, size, version)) {
             return Map.of("path", path, "version", version, "unchanged", true,
                     "message", "Unchanged file already present in this run's conversation");
         }
-        String raw = sandbox.readText(context.projectId(), context.sandboxRoot(), path);
-        byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+
+        // Read at most one byte over the cap, so a large repository file never lands in the heap whole.
+        byte[] bytes = files.readHead(context.projectId(), context.root(), path, MAX_BYTES + 1);
         if (isBinary(bytes)) throw new IllegalArgumentException("Binary files cannot be read as text");
+
         boolean truncated = bytes.length > MAX_BYTES;
-        String content = truncated ? new String(bytes, 0, MAX_BYTES, StandardCharsets.UTF_8) : raw;
+        String content = new String(truncated ? Arrays.copyOf(bytes, MAX_BYTES) : bytes, StandardCharsets.UTF_8);
         context.contextTrace().recordRead(path, size, version, content.length());
         return Map.of("path", path, "version", version, "content", content,
                 "truncated", truncated, "sizeBytes", size);
     }
 
     /**
-     * Secret/credential files whose contents must never reach the model. Blocks reads only â€” the
+     * Secret/credential files whose contents must never reach the model. Blocks reads only: the
      * agent can still reference config by name or scaffold a {@code .env.example}.
      */
     private static boolean isSecretFile(String fileName) {

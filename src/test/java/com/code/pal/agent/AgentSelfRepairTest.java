@@ -11,13 +11,12 @@ import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.runtime.AgentRunResult;
-import com.code.pal.agent.snapshot.WorkspaceSnapshotService;
 import com.code.pal.agent.tool.AgentToolExecutor;
 import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.tool.impl.*;
 import com.code.pal.agent.validation.ProjectCommandResolver;
 import com.code.pal.agent.validation.ProjectValidationService;
-import com.code.pal.agent.workspace.WorkspaceStorage;
+import com.code.pal.agent.workspace.LocalProject;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.repository.MessageRepository;
 import com.code.pal.project.domain.DeploymentStatus;
@@ -45,34 +44,33 @@ import static org.mockito.Mockito.*;
 class AgentSelfRepairTest {
     @Test
     void repairsAnIntroducedTypeErrorAndCommitsOnlyTheValidatedRevision() throws Exception {
-        UUID projectId = UUID.randomUUID(); UUID workspaceId = UUID.randomUUID(); UUID runId = UUID.randomUUID();
-        Path base = Files.createTempDirectory(Path.of("target"), "self-repair-");
-        Path live = base.resolve(projectId.toString());
-        Files.createDirectories(live.resolve("src"));
-        Files.writeString(live.resolve("src/App.tsx"), "export const theme = 'OK';\n");
-        Files.writeString(live.resolve("package.json"), "{\"packageManager\":\"npm@10.9.0\",\"scripts\":{\"typecheck\":\"node validate.cjs\"}}");
-        Files.writeString(live.resolve("package-lock.json"), "{\"lockfileVersion\":3}");
-        Files.writeString(live.resolve("validate.cjs"), """
+        AgentProperties props = new AgentProperties();
+        LocalProject workspace = LocalProject.create(props);
+        UUID projectId = workspace.projectId; UUID workspaceId = UUID.randomUUID(); UUID runId = UUID.randomUUID();
+        Path live = workspace.dir();
+        workspace.write("index.html", "<div id=\"root\"></div>");
+        workspace.write("src/App.tsx", "export const theme = 'OK';\n");
+        workspace.write("package.json", "{\"packageManager\":\"npm@10.9.0\",\"scripts\":{\"typecheck\":\"node validate.cjs\"}}");
+        workspace.write("package-lock.json", "{\"lockfileVersion\":3}");
+        workspace.write("validate.cjs", """
                 const fs=require('fs');const value=fs.readFileSync('src/App.tsx','utf8');
                 if(value.includes('BROKEN')){console.error('src/App.tsx(1,22): error TS2307: Cannot find module theme');process.exit(1);}
                 """);
         String initialVersion = FileVersions.of(live.resolve("src/App.tsx"));
-        Path bad = base.resolve("bad.tsx"); Files.writeString(bad, "export const theme = 'BROKEN';\n");
+        Path bad = Files.createTempFile(Path.of("target"), "bad-", ".tsx"); Files.writeString(bad, "export const theme = 'BROKEN';\n");
         String badVersion = FileVersions.of(bad);
 
-        AgentProperties props = new AgentProperties();
         props.setMaxIterations(12); props.setMaxModelCalls(12); props.setMaxToolCalls(20);
-        props.setRunTimeoutMs(90_000); props.setValidationTimeoutMs(15_000); props.setMaxRepairAttempts(3);
+        props.setRunTimeoutMs(90_000); props.getSandbox().setCommandTimeoutMs(15_000); props.setMaxRepairAttempts(3);
         props.getModels().setBuild(List.of("test-model"));
         ObjectMapper mapper = new ObjectMapper();
         AgentRunRepository runs = mock(AgentRunRepository.class);
         when(runs.save(any())).thenAnswer(call -> call.getArgument(0));
         FileChangeRepository fileChanges = mock(FileChangeRepository.class);
         when(fileChanges.save(any())).thenAnswer(call -> call.getArgument(0));
-        WorkspaceSnapshotService snapshots = mock(WorkspaceSnapshotService.class);
-        when(snapshots.createSnapshot(any(), eq(runId))).thenReturn("refs/rendra/snapshots/test");
-        ChangeSetService changeSets = new ChangeSetService(fileChanges, snapshots, runs, mapper, props);
-        ProjectValidationService validation = new ProjectValidationService(changeSets, new ProjectCommandResolver(mapper), props);
+        ChangeSetService changeSets = new ChangeSetService(fileChanges, runs, mapper, props, workspace.files, workspace.sandbox);
+        ProjectValidationService validation = new ProjectValidationService(changeSets, new ProjectCommandResolver(mapper), props,
+                workspace.files, workspace.sandbox);
 
         ToolRegistry registry = new ToolRegistry(List.of(new ReadFileTool(), new SetPlanTool(),
                 new PatchFileTool(changeSets), new RunTypeCheckTool(validation), new ValidateChangesTool(validation)));
@@ -90,7 +88,6 @@ class AgentSelfRepairTest {
         Message request = Message.user(projectId, "user-repair", "Update the theme constant safely.", ProjectType.BUILD, 7L);
         when(messages.findByProjectId(eq(projectId), any())).thenReturn(new PageImpl<>(List.of(request)));
         when(messages.findById("assistant-repair")).thenReturn(Optional.empty());
-        WorkspaceStorage storage = mock(WorkspaceStorage.class); when(storage.ensure(projectId)).thenReturn(live);
         AgentHeartbeat heartbeat = mock(AgentHeartbeat.class); when(heartbeat.start(runId, projectId)).thenReturn(() -> {});
         AgentJobQueue queue = mock(AgentJobQueue.class);
         IntentClassifier intentClassifier = mock(IntentClassifier.class);
@@ -98,7 +95,7 @@ class AgentSelfRepairTest {
 
         AgentRunner runner = new AgentRunner(new RepairingModel(initialVersion, badVersion), intentClassifier, registry, executor,
                 mock(AgentEvents.class), props, new ProjectContextService(props, mapper), runs, projects, messages,
-                mock(RealtimeService.class), storage, heartbeat, queue, mapper, changeSets, validation,
+                mock(RealtimeService.class), workspace.files, heartbeat, queue, mapper, changeSets, validation,
                 mock(NotificationService.class));
 
         AgentRunResult result = runner.run(run);

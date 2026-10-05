@@ -18,7 +18,7 @@ import com.code.pal.agent.tool.impl.GetProjectMetadataTool;
 import com.code.pal.agent.tool.impl.ListFilesTool;
 import com.code.pal.agent.tool.impl.ReadFileTool;
 import com.code.pal.agent.tool.impl.SearchCodeTool;
-import com.code.pal.agent.workspace.WorkspaceStorage;
+import com.code.pal.agent.workspace.LocalProject;
 import com.code.pal.agent.validation.ProjectValidationService;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.repository.MessageRepository;
@@ -54,10 +54,10 @@ import static org.mockito.Mockito.when;
 class AgentRunnerTest {
     @Test
     void iteratesFromSearchToReadToGroundedFinalAnswer() throws Exception {
-        UUID projectId = UUID.randomUUID();
+        LocalProject workspace = LocalProject.create();
+        UUID projectId = workspace.projectId;
         UUID workspaceId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
-        Path workspacePath = Files.createTempDirectory(Path.of("target"), "runner-");
 
         Project project = Project.builder().id(projectId).workspaceId(workspaceId).ownerId(7L)
                 .name("Security service").type(ProjectType.CHAT).isPublic(false)
@@ -88,8 +88,6 @@ class AgentRunnerTest {
         MessageRepository messages = mock(MessageRepository.class);
         when(messages.findByProjectId(eq(projectId), any())).thenReturn(new PageImpl<>(List.of(userMessage)));
         when(messages.findById("assistant-1")).thenReturn(Optional.empty());
-        WorkspaceStorage storage = mock(WorkspaceStorage.class);
-        when(storage.ensure(projectId)).thenReturn(workspacePath);
         AgentHeartbeat heartbeat = mock(AgentHeartbeat.class);
         when(heartbeat.start(runId, projectId)).thenReturn(() -> { });
         AgentJobQueue queue = mock(AgentJobQueue.class);
@@ -100,7 +98,7 @@ class AgentRunnerTest {
         AgentRunner runner = new AgentRunner(new SearchReadAnswerModel(), intentClassifier, registry, executor,
                 mock(AgentEvents.class), properties, new ProjectContextService(properties, new ObjectMapper()),
                 runs, projects, messages, mock(RealtimeService.class),
-                storage, heartbeat, queue, new ObjectMapper(), mock(ChangeSetService.class),
+                workspace.files, heartbeat, queue, new ObjectMapper(), mock(ChangeSetService.class),
                 mock(ProjectValidationService.class), mock(NotificationService.class));
 
         AgentRunResult result = runner.run(run);

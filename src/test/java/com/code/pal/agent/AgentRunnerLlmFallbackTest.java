@@ -15,11 +15,10 @@ import com.code.pal.agent.runtime.AgentRunResult;
 import com.code.pal.agent.tool.AgentToolExecutor;
 import com.code.pal.agent.tool.ToolExecutionResult;
 import com.code.pal.agent.usage.AgentUsagePolicy;
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
 import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.tool.impl.ListFilesTool;
 import com.code.pal.agent.validation.ProjectValidationService;
-import com.code.pal.agent.workspace.WorkspaceStorage;
+import com.code.pal.agent.workspace.LocalProject;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.repository.MessageRepository;
 import com.code.pal.notification.service.NotificationService;
@@ -208,9 +207,9 @@ class AgentRunnerLlmFallbackTest {
 
         Fixture(LlmClient model, AgentIntent intent, String prompt, List<String> chatModels,
                 AgentUsagePolicy usage) throws Exception {
-            UUID projectId = UUID.randomUUID();
+            LocalProject workspace = LocalProject.create();
+            UUID projectId = workspace.projectId;
             UUID runId = UUID.randomUUID();
-            Path workspace = Files.createTempDirectory(Path.of("target"), "fallback-");
             Project project = Project.builder().id(projectId).workspaceId(UUID.randomUUID()).ownerId(7L)
                     .name("Fallback").type(ProjectType.CHAT).isPublic(false)
                     .deploymentStatus(DeploymentStatus.NONE).lastActivityAt(Instant.now()).build();
@@ -232,8 +231,6 @@ class AgentRunnerLlmFallbackTest {
             when(messages.findByProjectId(eq(projectId), any())).thenReturn(new PageImpl<>(List.of(
                     Message.user(projectId, "user-1", prompt, ProjectType.CHAT, 7L))));
             when(messages.findById("assistant-1")).thenReturn(Optional.empty());
-            WorkspaceStorage storage = mock(WorkspaceStorage.class);
-            when(storage.ensure(projectId)).thenReturn(workspace);
             AgentHeartbeat heartbeat = mock(AgentHeartbeat.class);
             when(heartbeat.start(runId, projectId)).thenReturn(() -> { });
             IntentClassifier classifier = mock(IntentClassifier.class);
@@ -245,9 +242,9 @@ class AgentRunnerLlmFallbackTest {
             runner = new AgentRunner(model, classifier, new ToolRegistry(List.of(new ListFilesTool())),
                     tools, mock(AgentEvents.class), properties,
                     new ProjectContextService(properties, new ObjectMapper()), runs, projects, messages,
-                    mock(RealtimeService.class), storage, heartbeat, mock(AgentJobQueue.class), new ObjectMapper(),
+                    mock(RealtimeService.class), workspace.files, heartbeat, mock(AgentJobQueue.class), new ObjectMapper(),
                     mock(ChangeSetService.class), mock(ProjectValidationService.class), mock(NotificationService.class),
-                    null, null, new DockerProjectEnvironment(properties), usage);
+                    null, null, usage);
         }
     }
 }

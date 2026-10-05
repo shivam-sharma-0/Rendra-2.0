@@ -35,9 +35,7 @@ import com.code.pal.agent.tool.AgentToolExecutor;
 import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.tool.ToolExecutionResult;
 import com.code.pal.agent.usage.AgentUsagePolicy;
-import com.code.pal.agent.workspace.WorkspaceStorage;
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
-import com.code.pal.agent.workspace.SandboxPort;
+import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.validation.ProjectValidationService;
 import com.code.pal.agent.validation.ValidationReport;
 import com.code.pal.message.domain.Message;
@@ -61,7 +59,6 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 
-import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -98,8 +95,7 @@ public class AgentRunner implements AgentRuntime {
     private final ProjectService projects;
     private final MessageRepository messageRepository;
     private final RealtimeService realtime;
-    private final WorkspaceStorage workspace;
-    private final SandboxPort sandbox;
+    private final ProjectFiles files;
     private final AgentHeartbeat heartbeat;
     private final AgentJobQueue queue;
     private final ObjectMapper objectMapper;
@@ -116,11 +112,11 @@ public class AgentRunner implements AgentRuntime {
             AgentToolExecutor toolExecutor, AgentEvents events, AgentProperties props,
             ProjectContextService projectContexts, AgentRunRepository runRepository,
             ProjectService projects, MessageRepository messageRepository, RealtimeService realtime,
-            WorkspaceStorage workspace, AgentHeartbeat heartbeat, AgentJobQueue queue,
+            ProjectFiles files, AgentHeartbeat heartbeat, AgentJobQueue queue,
             ObjectMapper objectMapper, ChangeSetService changeSets,
             ProjectValidationService validation, NotificationService notifications,
             ProjectArtifactService artifacts, GeneratedDatabaseService databases,
-            SandboxPort sandbox, AgentUsagePolicy usage) {
+            AgentUsagePolicy usage) {
         this.usage = usage;
         this.llm = llm;
         this.intentClassifier = intentClassifier;
@@ -133,8 +129,7 @@ public class AgentRunner implements AgentRuntime {
         this.projects = projects;
         this.messageRepository = messageRepository;
         this.realtime = realtime;
-        this.workspace = workspace;
-        this.sandbox = sandbox;
+        this.files = files;
         this.heartbeat = heartbeat;
         this.queue = queue;
         this.objectMapper = objectMapper;
@@ -153,12 +148,12 @@ public class AgentRunner implements AgentRuntime {
             AgentToolExecutor toolExecutor, AgentEvents events, AgentProperties props,
             ProjectContextService projectContexts, AgentRunRepository runRepository,
             ProjectService projects, MessageRepository messageRepository, RealtimeService realtime,
-            WorkspaceStorage workspace, AgentHeartbeat heartbeat, AgentJobQueue queue,
+            ProjectFiles files, AgentHeartbeat heartbeat, AgentJobQueue queue,
             ObjectMapper objectMapper, ChangeSetService changeSets,
             ProjectValidationService validation, NotificationService notifications) {
         this(llm, intentClassifier, tools, toolExecutor, events, props, projectContexts, runRepository, projects,
-                messageRepository, realtime, workspace, heartbeat, queue, objectMapper, changeSets, validation,
-                notifications, null, null, new DockerProjectEnvironment(props), null);
+                messageRepository, realtime, files, heartbeat, queue, objectMapper, changeSets, validation,
+                notifications, null, null, null);
     }
 
     /**
@@ -197,22 +192,12 @@ public class AgentRunner implements AgentRuntime {
                     : projects.requireAccessible(run.getUserId(), run.getProjectId());
             if (run.getMode() == ProjectType.BUILD)
                 moveProject(run, ProjectStage.BUILDING);
-            boolean dockerWorkspace = run.getMode() == ProjectType.BUILD && props.getSandbox().isRequired();
-            Path liveWorkspace = dockerWorkspace ? Path.of("/workspace") : workspace.ensure(run.getProjectId());
-            Path ws = run.getMode() == ProjectType.BUILD
-                    ? (dockerWorkspace ? changeSets.start(run.getId(), run.getProjectId())
-                            : changeSets.start(run.getId(), run.getProjectId(), liveWorkspace))
-                    : liveWorkspace;
-            projectContext = dockerWorkspace
-                    ? projectContexts.buildSandbox(sandbox, run.getProjectId(),
-                            ".codepal/changesets/" + run.getId() + "/workspace",
-                            userRequest, history, List.of())
-                    : projectContexts.build(ws, userRequest, history, List.of());
+            // BUILD runs work on a staged copy committed at the end; other runs read the project itself.
+            String root = run.getMode() == ProjectType.BUILD ? changeSets.start(run.getId(), run.getProjectId()) : ".";
+            projectContext = projectContexts.build(files, run.getProjectId(), root, userRequest, history, List.of());
             AgentPlanState plan = new AgentPlanState();
-            ctx = new AgentContext(run.getProjectId(), run.getUserId(), run.getMode(), ws,
-                    AgentProjectMetadata.from(project), projectContext.trace(), run.getId(), plan,
-                    dockerWorkspace ? sandbox : null,
-                    dockerWorkspace ? ".codepal/changesets/" + run.getId() + "/workspace" : null);
+            ctx = new AgentContext(run.getProjectId(), run.getUserId(), run.getMode(), root,
+                    AgentProjectMetadata.from(project), projectContext.trace(), run.getId(), plan, files);
             List<AgentTool> available = toolsForRun(run.getMode());
             List<ToolSpec> specs = available.stream()
                     .map(t -> new ToolSpec(t.name(), t.description(), t.parametersSchema())).toList();
@@ -676,13 +661,11 @@ public class AgentRunner implements AgentRuntime {
     }
 
     private static boolean hasPreviewEntrypoint(AgentContext context) {
-        if (!context.sandboxed())
-            return true;
         return java.util.stream.Stream.of(
                 "index.html", "client/index.html", "client/public/index.html", "frontend/index.html",
                 "dist/index.html", "build/index.html", "client/dist/index.html", "client/build/index.html",
                 "frontend/dist/index.html", "frontend/build/index.html")
-                .anyMatch(path -> context.sandbox().regularFile(context.projectId(), context.sandboxRoot(), path));
+                .anyMatch(path -> context.files().regularFile(context.projectId(), context.root(), path));
     }
 
     private record PreparedToolCall(ToolCall call, Map<String, Object> args, AgentTool tool) {

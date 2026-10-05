@@ -74,16 +74,12 @@ public class AgentProperties {
     private long queuedRecoveryMs = 60_000;
     /** A live worker renews its run's heartbeat + project lock at this interval. */
     private long heartbeatIntervalMs = 15_000;
-    /** Restore the pre-run Git snapshot when a BUILD run fails. */
+    /** Restore the pre-commit archive when a worker dies while committing a BUILD run. */
     private boolean rollbackOnFailure = true;
     /** Maximum fix/validate cycles after the first failed validation. */
     private int maxRepairAttempts = 3;
-    /** Per controlled package validation process. */
-    private long validationTimeoutMs = 120_000;
     /** Bound structured diagnostics returned to the model. */
     private int maxValidationDiagnostics = 40;
-    /** Bound captured process output before parsing, independent of model context limits. */
-    private int validationOutputMaxChars = 80_000;
 
     /**
      * How long a project lock / run heartbeat stays valid without renewal. A running worker renews

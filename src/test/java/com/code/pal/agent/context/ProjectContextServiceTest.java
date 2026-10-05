@@ -1,6 +1,7 @@
 package com.code.pal.agent.context;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.workspace.LocalProject;
 import com.code.pal.message.domain.Message;
 import com.code.pal.project.domain.ProjectType;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,13 +20,13 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProjectContextServiceTest {
+    LocalProject project;
     Path workspace;
 
     @BeforeEach
-    void createWorkspace() throws Exception {
-        Path base = Path.of("target", "test-workspaces");
-        Files.createDirectories(base);
-        workspace = Files.createTempDirectory(base, "project-context-");
+    void createWorkspace() {
+        project = LocalProject.create();
+        workspace = project.dir();
     }
 
     @Test
@@ -58,6 +59,7 @@ class ProjectContextServiceTest {
                     "export function Widget" + index + "() { return <div />; }");
         }
         Files.writeString(workspace.resolve("node_modules/vendor/index.js"), "ignored dependency source");
+        project.write(".codepal/history/run/original/src/Old.tsx", "export function Old() {}");
         Files.writeString(workspace.resolve("dist/assets/app.js"), "ignored generated output");
         Files.write(workspace.resolve("src/logo.png"), new byte[]{0, 1, 2, 3});
 
@@ -69,13 +71,15 @@ class ProjectContextServiceTest {
 
         List<Message> history = history(18);
         history.add(message("current", "Add forgot password to src/features/auth/Login.tsx", 100));
-        ProjectContext context = service.build(workspace,
+        ProjectContext context = service.build(project.files, project.projectId, ".",
                 "Add forgot password to src/features/auth/Login.tsx", history, List.of());
 
         assertTrue(context.projectMap().frameworks().containsAll(List.of("React", "Vite", "React Router", "TypeScript")));
         assertTrue(context.projectMap().routes().stream().anyMatch(route -> route.startsWith("/login")));
         assertTrue(context.projectMap().featureModules().contains("src/features/auth"));
         assertFalse(context.projectMap().importantFiles().stream().anyMatch(file -> file.path().contains("node_modules")));
+        assertFalse(context.projectMap().importantFiles().stream().anyMatch(file -> file.path().contains(".codepal")),
+                "the backend's own state (history, staging) is not part of the project map");
         assertFalse(context.projectContextMessage().contains("FULL_LOGIN_IMPLEMENTATION_SHOULD_NOT_BE_IN_THE_MAP"));
         assertTrue(context.projectContextMessage().contains("trust=\"untrusted-project-data\""));
         assertTrue(context.projectContextMessage().contains("AGENTS.md"));
@@ -102,7 +106,7 @@ class ProjectContextServiceTest {
                 """);
         ProjectContextService service = new ProjectContextService(new AgentProperties(), new ObjectMapper());
 
-        ProjectFileSummary summary = service.summarizeFile(workspace, file);
+        ProjectFileSummary summary = service.summarizeFile(project.files, project.projectId, ".", "src/features/auth/Login.tsx");
 
         assertEquals("src/features/auth/Login.tsx", summary.path());
         assertTrue(summary.imports().contains("../../api/client"));

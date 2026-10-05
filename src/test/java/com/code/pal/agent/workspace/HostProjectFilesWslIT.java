@@ -46,7 +46,7 @@ class HostProjectFilesWslIT {
         HostProjectFiles files = new HostProjectFiles(new WorkspaceStorage(properties));
 
         assertEquals("export const ok = 1;\n", files.readText(projectId, "src/ok.ts"));
-        List<String> listed = files.list(projectId, 5).stream().map(SandboxPort.Entry::path).toList();
+        List<String> listed = files.list(projectId, ".", 5).stream().map(ProjectFiles.Entry::path).toList();
         assertTrue(listed.contains("src/ok.ts"), listed.toString());
         assertTrue(listed.stream().noneMatch(path -> path.contains("evil")), listed.toString());
 

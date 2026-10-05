@@ -126,28 +126,27 @@ class DockerProjectEnvironmentDockerIT {
     }
 
     @Test
-    void onlyTheLatestBuildArchiveIsKept() throws Exception {
+    void buildsAreStagedArchivedAndCommittedAcrossBackendAndContainer() throws Exception {
         properties.getSandbox().setRequired(true);
         DockerProjectEnvironment sandbox = new DockerProjectEnvironment(properties);
+        HostProjectFiles files = new HostProjectFiles(new WorkspaceStorage(properties));
         var changes = org.mockito.Mockito.mock(com.code.pal.agent.change.FileChangeRepository.class);
         org.mockito.Mockito.when(changes.save(org.mockito.ArgumentMatchers.any())).thenAnswer(call -> call.getArgument(0));
         var service = new com.code.pal.agent.change.ChangeSetService(changes,
-                org.mockito.Mockito.mock(com.code.pal.agent.snapshot.WorkspaceSnapshotService.class),
                 org.mockito.Mockito.mock(com.code.pal.agent.repository.AgentRunRepository.class),
-                new tools.jackson.databind.ObjectMapper(), properties, sandbox);
+                new tools.jackson.databind.ObjectMapper(), properties, files, sandbox);
         UUID projectId = newProject();
 
         List<UUID> builds = List.of(UUID.randomUUID(), UUID.randomUUID());
         for (int i = 0; i < builds.size(); i++) {
             UUID runId = builds.get(i);
-            Path stage = service.start(runId, projectId);
+            String stage = service.start(runId, projectId);           // tar copy in the container
             var plan = new com.code.pal.agent.plan.AgentPlanState();
             plan.revise(List.of("Write page", "Validate"), "Initial");
             var context = new com.code.pal.agent.tool.AgentContext(projectId, 7L,
                     com.code.pal.project.domain.ProjectType.BUILD, stage, null,
-                    new com.code.pal.agent.context.ProjectContextTrace(), runId, plan, sandbox,
-                    ".codepal/changesets/" + runId + "/workspace");
-            service.create(context, "page-" + i + ".html", "<h1>" + i + "</h1>");
+                    new com.code.pal.agent.context.ProjectContextTrace(), runId, plan, files);
+            service.create(context, "page-" + i + ".html", "<h1>" + i + "</h1>");   // written through the share
             service.recordProjectValidation(context, true, List.of());
             service.commit(context, com.code.pal.agent.domain.AgentRun.builder().id(runId).projectId(projectId)
                     .userId(7L).mode(com.code.pal.project.domain.ProjectType.BUILD).build());
@@ -155,10 +154,30 @@ class DockerProjectEnvironmentDockerIT {
 
         String history = sandbox.exec(projectId, List.of("ls", "/workspace/.codepal/history")).stdout().trim();
         assertEquals(builds.get(1).toString(), history, "older build archives must be pruned");
-        assertEquals("<h1>0</h1>", sandbox.readText(projectId, "page-0.html"));
-        assertEquals("<h1>1</h1>", sandbox.readText(projectId, "page-1.html"));
+        assertEquals("<h1>0</h1>", sandbox.exec(projectId, List.of("cat", "page-0.html")).stdout());
+        assertEquals("<h1>1</h1>", files.readText(projectId, "page-1.html"));
         String staging = sandbox.exec(projectId, List.of("sh", "-c", "ls /workspace/.codepal/changesets 2>/dev/null | wc -l")).stdout().trim();
         assertEquals("0", staging, "committed runs leave no staging behind");
+        assertEquals("1000:1000", sandbox.exec(projectId, List.of("stat", "-c", "%u:%g", "page-1.html")).stdout().trim());
+
+        // Rollback of the latest build restores the project as it was before that build.
+        sandbox.restoreTree(projectId, com.code.pal.agent.change.ChangeSetService.archiveFor("archive:" + builds.get(1)));
+        assertTrue(files.regularFile(projectId, ".", "page-0.html"));
+        assertTrue(!files.exists(projectId, ".", "page-1.html"));
+    }
+
+    @Test
+    void restoringFromAMissingArchiveLeavesTheProjectUntouched() throws Exception {
+        DockerProjectEnvironment sandbox = new DockerProjectEnvironment(properties);
+        HostProjectFiles files = new HostProjectFiles(new WorkspaceStorage(properties));
+        UUID projectId = newProject();
+        sandbox.ensure(projectId);
+        files.writeText(projectId, "keep.txt", "precious");
+
+        assertThrows(IllegalStateException.class,
+                () -> sandbox.restoreTree(projectId, ".codepal/history/" + UUID.randomUUID() + "/original"));
+
+        assertEquals("precious", files.readText(projectId, "keep.txt"));
     }
 
     private UUID newProject() {

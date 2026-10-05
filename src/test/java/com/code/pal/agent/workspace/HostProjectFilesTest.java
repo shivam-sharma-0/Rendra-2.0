@@ -78,14 +78,36 @@ class HostProjectFilesTest {
         files.writeText(projectId, "src/main.ts", "main");
         files.writeText(projectId, "src/deep/nested/x.ts", "x");
 
-        List<SandboxPort.Entry> shallow = files.list(projectId, 2);
+        List<ProjectFiles.Entry> shallow = files.list(projectId, ".", 2);
 
-        assertTrue(shallow.contains(new SandboxPort.Entry("index.html", false, 6)));
-        assertTrue(shallow.contains(new SandboxPort.Entry("src", true, 0)));
-        assertTrue(shallow.contains(new SandboxPort.Entry("src/main.ts", false, 4)));
-        assertTrue(shallow.contains(new SandboxPort.Entry("src/deep", true, 0)));
+        assertTrue(shallow.contains(new ProjectFiles.Entry("index.html", false, 6)));
+        assertTrue(shallow.contains(new ProjectFiles.Entry("src", true, 0)));
+        assertTrue(shallow.contains(new ProjectFiles.Entry("src/main.ts", false, 4)));
+        assertTrue(shallow.contains(new ProjectFiles.Entry("src/deep", true, 0)));
         assertTrue(shallow.stream().noneMatch(entry -> entry.path().startsWith("src/deep/nested")), shallow.toString());
         assertEquals(List.of(), files.list(projectId, "does-not-exist", 3));
+    }
+
+    @Test
+    void skippedFoldersAreNeitherListedNorEntered() {
+        files.writeText(projectId, "src/main.ts", "main");
+        files.writeText(projectId, "node_modules/pkg/index.js", "dep");
+        files.writeText(projectId, "src/node_modules/inner.js", "dep");
+
+        List<String> listed = files.list(projectId, ".", 5, java.util.Set.of("node_modules")).stream()
+                .map(ProjectFiles.Entry::path).toList();
+
+        assertTrue(listed.contains("src/main.ts"), listed.toString());
+        assertTrue(listed.stream().noneMatch(path -> path.contains("node_modules")), listed.toString());
+    }
+
+    @Test
+    void readHeadReturnsAtMostTheRequestedBytes() {
+        files.writeText(projectId, "big.txt", "abcdef");
+
+        assertEquals("abc", new String(files.readHead(projectId, ".", "big.txt", 3)));
+        assertEquals("abcdef", new String(files.readHead(projectId, ".", "big.txt", 100)));
+        assertThrows(IllegalStateException.class, () -> files.readBytes(projectId, ".", "big.txt", 3));
     }
 
     @Test
@@ -133,7 +155,7 @@ class HostProjectFilesTest {
         assertEquals("non-file", files.version(projectId, ".", "evil-link"));
         assertThrows(IllegalStateException.class, () -> files.writeText(projectId, "evil-dir/planted.txt", "x"));
         assertThrows(IllegalStateException.class, () -> files.readText(projectId, "evil-dir/anything"));
-        assertTrue(files.list(projectId, 3).stream().noneMatch(entry -> entry.path().startsWith("evil")));
+        assertTrue(files.list(projectId, ".", 3).stream().noneMatch(entry -> entry.path().startsWith("evil")));
         try (var outsideFiles = Files.list(outsideDir)) {
             assertEquals(0, outsideFiles.count(), "nothing may be written through the linked folder");
         }

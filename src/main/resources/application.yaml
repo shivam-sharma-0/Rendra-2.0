@@ -216,9 +216,7 @@ app:
     heartbeat-interval-ms: ${AGENT_HEARTBEAT_INTERVAL_MS:15000}
     rollback-on-failure: ${AGENT_ROLLBACK_ON_FAILURE:true}
     max-repair-attempts: ${AGENT_MAX_REPAIR_ATTEMPTS:3}
-    validation-timeout-ms: ${AGENT_VALIDATION_TIMEOUT_MS:120000}
     max-validation-diagnostics: ${AGENT_MAX_VALIDATION_DIAGNOSTICS:40}
-    validation-output-max-chars: ${AGENT_VALIDATION_OUTPUT_MAX_CHARS:80000}
     sandbox:
       required: ${AGENT_SANDBOX_REQUIRED:true}
       # Without the sandbox, generated code runs on this host. Startup fails unless this is true

@@ -4,27 +4,24 @@ import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.tool.AgentToolException;
-import com.code.pal.agent.workspace.DockerProjectEnvironment;
+import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.SandboxPort;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Executes only backend-selected package validation operations and returns bounded diagnostics. */
+/**
+ * Executes only backend-selected package validation operations in the sandbox and returns bounded
+ * diagnostics. Each operation runs twice, on a copy of the live project and on a copy of the staged
+ * change set, so only diagnostics the change introduced are blamed on it.
+ */
 @Service
-@RequiredArgsConstructor(onConstructor_ = @Autowired)
+@RequiredArgsConstructor
 public class ProjectValidationService {
     private static final Pattern TS_PAREN = Pattern.compile("^(.+?)\\((\\d+),(\\d+)\\):\\s*(error|warning)\\s*([A-Za-z]+\\d+)?:?\\s*(.*)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern COLON = Pattern.compile("^(.+?):(\\d+):(\\d+)\\s*(?:[-:]\\s*)?(error|warning)?\\s*([A-Za-z]+\\d+)?:?\\s*(.*)$", Pattern.CASE_INSENSITIVE);
@@ -33,20 +30,12 @@ public class ProjectValidationService {
     private final ChangeSetService changeSets;
     private final ProjectCommandResolver resolver;
     private final AgentProperties properties;
+    private final ProjectFiles files;
     private final SandboxPort sandbox;
     private final Map<UUID, ValidationReport> lastReports = new ConcurrentHashMap<>();
 
-    /** Compatibility constructor for path-backed tests; production injection includes Docker. */
-    public ProjectValidationService(ChangeSetService changeSets, ProjectCommandResolver resolver,
-                                    AgentProperties properties) {
-        this(changeSets, resolver, properties, new DockerProjectEnvironment(properties));
-    }
-
     public Object diagnostics(AgentContext context) {
-        var view = changeSets.view(context);
-        var capabilities = context.sandboxed()
-                ? resolver.inspectSandbox(sandbox, context.projectId(), ".")
-                : resolver.inspect(view.liveRoot());
+        var capabilities = resolver.inspect(files, context.projectId(), ".");
         var summary = new CapabilitySummary(capabilities.packageManager(), capabilities.declaredPackageManager(),
                 capabilities.scripts().keySet().stream().sorted().toList(), capabilities.availableOperations(), capabilities.error());
         return new DiagnosticsSnapshot(summary, lastReports.get(context.runId()),
@@ -55,15 +44,13 @@ public class ProjectValidationService {
 
     public ValidationReport run(AgentContext context, ValidationOperation operation, String scope) {
         validateScope(scope);
-        if (context.sandboxed()) return runSandbox(context, operation, scope);
-        var view = changeSets.view(context);
-        ProjectCommandResolver.CommandPlan plan = resolver.resolve(view.liveRoot(), operation, scope);
+        ProjectCommandResolver.CommandPlan plan = resolver.resolve(files, context.projectId(), ".", operation, scope);
         if (!plan.available()) {
             ValidationReport report = reportUnavailable(context, plan);
             lastReports.put(context.runId(), report);
             return report;
         }
-        Comparison comparison = compare(context, plan, scope);
+        Comparison comparison = compare(context, plan);
         ValidationReport report = toReport(context, plan, comparison);
         if (!comparison.after().started() || comparison.after().timedOut()) {
             changeSets.recordTerminalValidationFailure(context, report.introducedDiagnostics());
@@ -78,7 +65,6 @@ public class ProjectValidationService {
 
     /** Required final gate: structural checks plus every applicable type-check/build operation. */
     public ValidationReport validateAll(AgentContext context) {
-        if (context.sandboxed()) return validateAllSandbox(context);
         ChangeSetService.ValidationResult structure = changeSets.validate(context);
         if (!structure.valid()) {
             List<ProjectDiagnostic> diagnostics = structure.issues().stream().map(issue ->
@@ -90,9 +76,8 @@ public class ProjectValidationService {
             lastReports.put(context.runId(), report);
             return report;
         }
-
         var view = changeSets.view(context);
-        if (resolver.validationScriptsChanged(view.liveRoot(), view.stagedRoot())) {
+        if (resolver.validationScriptsChanged(files, context.projectId(), view.liveRoot(), view.stagedRoot())) {
             List<ProjectDiagnostic> diagnostics = List.of(new ProjectDiagnostic("package.json", null, null,
                     DiagnosticSeverity.ERROR, "Validation scripts changed during the run and cannot be executed as trusted commands",
                     "validation-security", "VALIDATION_SCRIPT_CHANGED"));
@@ -105,9 +90,9 @@ public class ProjectValidationService {
         List<Comparison> comparisons = new ArrayList<>();
         List<String> executed = new ArrayList<>();
         for (ValidationOperation operation : List.of(ValidationOperation.TYPE_CHECK, ValidationOperation.BUILD)) {
-            ProjectCommandResolver.CommandPlan plan = resolver.resolve(view.liveRoot(), operation, null);
+            ProjectCommandResolver.CommandPlan plan = resolver.resolve(files, context.projectId(), view.liveRoot(), operation, null);
             if (!plan.available()) continue;
-            comparisons.add(compare(context, plan, null));
+            comparisons.add(compare(context, plan));
             executed.add(operation.name());
         }
         List<ProjectDiagnostic> introduced = comparisons.stream().flatMap(value -> value.introduced().stream()).toList();
@@ -128,220 +113,49 @@ public class ProjectValidationService {
     public ValidationReport lastReport(UUID runId) { return lastReports.get(runId); }
     public void clear(UUID runId) { lastReports.remove(runId); }
 
-    private ValidationReport runSandbox(AgentContext context, ValidationOperation operation, String scope) {
-        ProjectCommandResolver.CommandPlan plan = resolver.resolveSandbox(sandbox, context.projectId(), ".", operation, scope);
-        if (!plan.available()) {
-            ValidationReport report = reportUnavailable(context, plan);
-            lastReports.put(context.runId(), report);
-            return report;
-        }
-        Comparison comparison = compareSandbox(context, plan, scope);
-        ValidationReport report = toReport(context, plan, comparison);
-        if (!comparison.after().started() || comparison.after().timedOut()) {
-            changeSets.recordTerminalValidationFailure(context, report.introducedDiagnostics());
-        } else {
-            changeSets.recordProjectValidation(context, report.changeValidationPassed(),
-                    report.introducedDiagnostics(), false);
-        }
-        report = withProgress(report, changeSets.validationProgress(context));
-        lastReports.put(context.runId(), report);
-        return report;
-    }
-
-    private ValidationReport validateAllSandbox(AgentContext context) {
-        ChangeSetService.ValidationResult structure = changeSets.validate(context);
-        if (!structure.valid()) {
-            List<ProjectDiagnostic> diagnostics = structure.issues().stream().map(issue ->
-                    new ProjectDiagnostic(issue.path(), null, null, DiagnosticSeverity.ERROR,
-                            issue.message(), "structure", issue.code())).toList();
-            changeSets.recordProjectValidation(context, false, diagnostics);
-            ValidationReport report = aggregateSandboxReport(context, false, diagnostics, List.of(),
-                    "Deterministic file validation failed");
-            lastReports.put(context.runId(), report);
-            return report;
-        }
-        if (resolver.validationScriptsChanged(sandbox, context.projectId(), ".", context.sandboxRoot())) {
-            List<ProjectDiagnostic> diagnostics = List.of(new ProjectDiagnostic("package.json", null, null,
-                    DiagnosticSeverity.ERROR, "Validation scripts changed during the run and cannot be executed as trusted commands",
-                    "validation-security", "VALIDATION_SCRIPT_CHANGED"));
-            changeSets.recordProjectValidation(context, false, diagnostics);
-            ValidationReport report = aggregateSandboxReport(context, false, diagnostics, List.of(),
-                    "Restore the original package scripts before validation");
-            lastReports.put(context.runId(), report);
-            return report;
-        }
-        List<Comparison> comparisons = new ArrayList<>();
-        List<String> executed = new ArrayList<>();
-        for (ValidationOperation operation : List.of(ValidationOperation.TYPE_CHECK, ValidationOperation.BUILD)) {
-            ProjectCommandResolver.CommandPlan plan = resolver.resolveSandbox(sandbox, context.projectId(), ".", operation, null);
-            if (!plan.available()) continue;
-            comparisons.add(compareSandbox(context, plan, null));
-            executed.add(operation.name());
-        }
-        List<ProjectDiagnostic> introduced = comparisons.stream().flatMap(value -> value.introduced().stream()).toList();
-        List<ProjectDiagnostic> existing = comparisons.stream().flatMap(value -> value.preExisting().stream()).toList();
-        boolean passed = comparisons.stream().allMatch(Comparison::changePassed);
-        boolean terminal = comparisons.stream().anyMatch(value -> !value.after().started() || value.after().timedOut());
-        if (terminal) changeSets.recordTerminalValidationFailure(context, introduced);
-        else changeSets.recordProjectValidation(context, passed, introduced);
-        String summary = passed
-                ? (executed.isEmpty() ? "Structural validation passed; no type-check/build script is configured"
-                                      : "Validation passed: " + String.join(", ", executed))
-                : "Validation found errors introduced by the staged changes";
-        ValidationReport report = aggregateSandboxReport(context, passed, introduced, existing, summary);
-        lastReports.put(context.runId(), report);
-        return report;
-    }
-
-    private Comparison compareSandbox(AgentContext context, ProjectCommandResolver.CommandPlan plan, String scope) {
-        Path baselinePath = changeSets.createValidationBaseline(context, plan.operation().name().toLowerCase(Locale.ROOT));
-        Path candidatePath = changeSets.createValidationCandidate(context, plan.operation().name().toLowerCase(Locale.ROOT));
-        String baseline = sandboxRoot(baselinePath);
-        String candidate = sandboxRoot(candidatePath);
+    private Comparison compare(AgentContext context, ProjectCommandResolver.CommandPlan plan) {
+        String name = plan.operation().name().toLowerCase(Locale.ROOT);
+        String baseline = changeSets.createValidationBaseline(context, name);
         try {
-            resolver.preserveOriginalScripts(sandbox, context.projectId(), ".", candidate);
-            CommandOutcome before = executeSandbox(context, plan, baseline);
-            CommandOutcome after = executeSandbox(context, plan, candidate);
-            List<ProjectDiagnostic> baselineDiagnostics = diagnostics(before, baselinePath, plan.operation(), changeSets.view(context).touchedPaths());
-            List<ProjectDiagnostic> currentDiagnostics = diagnostics(after, candidatePath, plan.operation(), changeSets.view(context).touchedPaths());
-            Set<String> baselineKeys = baselineDiagnostics.stream().map(ProjectValidationService::responsibilityFingerprint)
-                    .collect(java.util.stream.Collectors.toSet());
-            List<ProjectDiagnostic> introduced = currentDiagnostics.stream()
-                    .filter(item -> !baselineKeys.contains(responsibilityFingerprint(item))).toList();
-            List<ProjectDiagnostic> existing = currentDiagnostics.stream()
-                    .filter(item -> baselineKeys.contains(responsibilityFingerprint(item))).toList();
-            boolean passed;
-            if (!after.started() || after.timedOut()) passed = false;
-            else if (after.exitCode() == 0) passed = true;
-            else passed = before.started() && !before.timedOut() && before.exitCode() != 0 && introduced.isEmpty();
-            if (!passed && introduced.isEmpty()) introduced = List.of(infrastructureDiagnostic(after, plan.operation()));
-            var touched = changeSets.view(context).touchedPaths();
-            int remaining = Math.max(0, properties.getMaxValidationDiagnostics() - introduced.size());
-            return new Comparison(plan, before, after, bounded(introduced, touched), bounded(existing, touched, remaining), passed);
+            String candidate = changeSets.createValidationCandidate(context, name);
+            try {
+                resolver.preserveOriginalScripts(files, context.projectId(), ".", candidate);
+                CommandOutcome before = execute(context, plan, baseline);
+                CommandOutcome after = execute(context, plan, candidate);
+                List<String> touched = changeSets.view(context).touchedPaths();
+                List<ProjectDiagnostic> baselineDiagnostics = diagnostics(before, plan.operation(), touched);
+                List<ProjectDiagnostic> currentDiagnostics = diagnostics(after, plan.operation(), touched);
+                Set<String> baselineKeys = baselineDiagnostics.stream().map(ProjectValidationService::responsibilityFingerprint)
+                        .collect(java.util.stream.Collectors.toSet());
+                List<ProjectDiagnostic> introduced = currentDiagnostics.stream()
+                        .filter(item -> !baselineKeys.contains(responsibilityFingerprint(item))).toList();
+                List<ProjectDiagnostic> existing = currentDiagnostics.stream()
+                        .filter(item -> baselineKeys.contains(responsibilityFingerprint(item))).toList();
+                boolean passed;
+                if (!after.started() || after.timedOut()) passed = false;
+                else if (after.exitCode() == 0) passed = true;
+                else passed = before.started() && !before.timedOut() && before.exitCode() != 0 && introduced.isEmpty();
+                if (!passed && introduced.isEmpty()) introduced = List.of(infrastructureDiagnostic(after, plan.operation()));
+                List<ProjectDiagnostic> boundedIntroduced = bounded(introduced, touched);
+                int remaining = Math.max(0, properties.getMaxValidationDiagnostics() - boundedIntroduced.size());
+                return new Comparison(plan, before, after, boundedIntroduced, bounded(existing, touched, remaining), passed);
+            } finally {
+                try { sandbox.removeTree(context.projectId(), candidate); } catch (RuntimeException ignored) { }
+            }
         } finally {
             try { sandbox.removeTree(context.projectId(), baseline); } catch (RuntimeException ignored) { }
-            try { sandbox.removeTree(context.projectId(), candidate); } catch (RuntimeException ignored) { }
         }
     }
 
-    private CommandOutcome executeSandbox(AgentContext context, ProjectCommandResolver.CommandPlan plan, String root) {
+    private CommandOutcome execute(AgentContext context, ProjectCommandResolver.CommandPlan plan, String root) {
         var result = sandbox.exec(context.projectId(), root, plan.command());
         String output = result.stdout() + (result.error().isBlank() ? "" : "\n" + result.error());
-        return new CommandOutcome(!result.error().startsWith("Docker command could not be started"),
-                result.error().toLowerCase(Locale.ROOT).contains("timed out"), result.exitCode(), output);
+        return new CommandOutcome(result.started(), result.timedOut(), result.exitCode(), output,
+                sandbox.commandPath(context.projectId(), root));
     }
 
-    private ValidationReport aggregateSandboxReport(AgentContext context, boolean passed,
-                                                     List<ProjectDiagnostic> introduced,
-                                                     List<ProjectDiagnostic> existing, String summary) {
-        var progress = changeSets.validationProgress(context);
-        var capabilities = resolver.inspectSandbox(sandbox, context.projectId(), ".");
-        var view = changeSets.view(context);
-        List<ProjectDiagnostic> boundedIntroduced = bounded(introduced, view.touchedPaths());
-        int remaining = Math.max(0, properties.getMaxValidationDiagnostics() - boundedIntroduced.size());
-        return new ValidationReport(ValidationOperation.ALL, true, passed, passed, false, passed ? 0 : 1,
-                capabilities.packageManager(), "project validation", boundedIntroduced,
-                bounded(existing, view.touchedPaths(), remaining), progress.repairAttempts(),
-                progress.repairAttemptsRemaining(), progress.revision(), summary);
-    }
-
-    private static String sandboxRoot(Path path) {
-        String value = path.toString().replace('\\', '/');
-        if (value.startsWith("/workspace/")) return value.substring("/workspace/".length());
-        return value.startsWith("/") ? value.substring(1) : value;
-    }
-
-    private Comparison compare(AgentContext context, ProjectCommandResolver.CommandPlan plan, String scope) {
-        var view = changeSets.view(context);
-        Path baseline = changeSets.createValidationBaseline(context, plan.operation().name().toLowerCase(Locale.ROOT));
-        Path candidate = changeSets.createValidationCandidate(context, plan.operation().name().toLowerCase(Locale.ROOT));
-        resolver.preserveOriginalScripts(view.liveRoot(), candidate);
-        attachDependencyTree(view.liveRoot(), baseline);
-        attachDependencyTree(view.liveRoot(), candidate);
-        CommandOutcome before = execute(plan, baseline, view.liveRoot());
-        CommandOutcome after = execute(plan, candidate, view.liveRoot());
-
-        List<ProjectDiagnostic> baselineDiagnostics = diagnostics(before, baseline, plan.operation(), view.touchedPaths());
-        List<ProjectDiagnostic> currentDiagnostics = diagnostics(after, candidate, plan.operation(), view.touchedPaths());
-        Set<String> baselineKeys = baselineDiagnostics.stream().map(ProjectValidationService::responsibilityFingerprint)
-                .collect(java.util.stream.Collectors.toSet());
-        List<ProjectDiagnostic> introduced = currentDiagnostics.stream()
-                .filter(item -> !baselineKeys.contains(responsibilityFingerprint(item))).toList();
-        List<ProjectDiagnostic> existing = currentDiagnostics.stream()
-                .filter(item -> baselineKeys.contains(responsibilityFingerprint(item))).toList();
-
-        boolean passed;
-        if (!after.started() || after.timedOut()) passed = false;
-        else if (after.exitCode() == 0) passed = true;
-        else passed = before.started() && !before.timedOut() && before.exitCode() != 0 && introduced.isEmpty();
-
-        if (!passed && introduced.isEmpty()) {
-            ProjectDiagnostic diagnostic = infrastructureDiagnostic(after, plan.operation());
-            introduced = List.of(diagnostic);
-        }
-        List<ProjectDiagnostic> boundedIntroduced = bounded(introduced, view.touchedPaths());
-        int remaining = Math.max(0, properties.getMaxValidationDiagnostics() - boundedIntroduced.size());
-        return new Comparison(plan, before, after, boundedIntroduced,
-                bounded(existing, view.touchedPaths(), remaining), passed);
-    }
-
-    private CommandOutcome execute(ProjectCommandResolver.CommandPlan plan, Path workingDirectory, Path liveRoot) {
-        ProcessBuilder builder = new ProcessBuilder(plan.command()).directory(workingDirectory.toFile()).redirectErrorStream(true);
-        sanitizeEnvironment(builder.environment(), liveRoot);
-        Process process;
-        try { process = builder.start(); }
-        catch (IOException error) { return new CommandOutcome(false, false, -1, "Validation executable could not be started"); }
-
-        OutputCapture capture = new OutputCapture(process.getInputStream(), Math.max(1_000, properties.getValidationOutputMaxChars()));
-        Thread drain = new Thread(capture, "agent-validation-output");
-        drain.setDaemon(true);
-        drain.start();
-        boolean finished;
-        try {
-            finished = process.waitFor(Math.max(1_000, properties.getValidationTimeoutMs()), TimeUnit.MILLISECONDS);
-            if (!finished) {
-                process.descendants().forEach(ProcessHandle::destroyForcibly);
-                process.destroyForcibly();
-            }
-            drain.join(1_000);
-            return new CommandOutcome(true, !finished, finished ? process.exitValue() : -1, capture.text());
-        } catch (InterruptedException error) {
-            process.descendants().forEach(ProcessHandle::destroyForcibly);
-            process.destroyForcibly();
-            Thread.currentThread().interrupt();
-            throw new AgentToolException("VALIDATION_INTERRUPTED", "Project validation was interrupted");
-        }
-    }
-
-    private void sanitizeEnvironment(Map<String, String> environment, Path liveRoot) {
-        Map<String, String> inherited = new HashMap<>(environment);
-        environment.clear();
-        for (String key : List.of("SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA")) {
-            if (inherited.get(key) != null) environment.put(key, inherited.get(key));
-        }
-        String originalPath = inherited.getOrDefault("PATH", inherited.getOrDefault("Path", ""));
-        String binaryPath = liveRoot.resolve("node_modules/.bin").toAbsolutePath().toString();
-        environment.put("PATH", binaryPath + java.io.File.pathSeparator + originalPath);
-        environment.put("NODE_PATH", liveRoot.resolve("node_modules").toAbsolutePath().toString());
-        environment.put("CI", "true");
-        environment.put("NO_COLOR", "1");
-    }
-
-    private static void attachDependencyTree(Path liveRoot, Path validationRoot) {
-        Path dependencies = liveRoot.resolve("node_modules").toAbsolutePath().normalize();
-        Path link = validationRoot.resolve("node_modules");
-        if (!Files.isDirectory(dependencies) || Files.exists(link)) return;
-        try {
-            Files.createSymbolicLink(link, dependencies);
-        } catch (IOException | UnsupportedOperationException | SecurityException ignored) {
-            // PATH/NODE_PATH still cover script executables and Node resolution. Some Windows hosts
-            // disallow symlinks; baseline comparison prevents those environment errors being blamed
-            // on the staged change.
-        }
-    }
-
-    private List<ProjectDiagnostic> diagnostics(CommandOutcome outcome, Path root, ValidationOperation operation,
-                                                List<String> touched) {
+    private List<ProjectDiagnostic> diagnostics(CommandOutcome outcome, ValidationOperation operation, List<String> touched) {
+        String root = outcome.root();
         List<ProjectDiagnostic> diagnostics = new ArrayList<>();
         for (String raw : outcome.output().split("\\R")) {
             String line = ANSI.matcher(raw).replaceAll("").trim();
@@ -368,7 +182,7 @@ public class ProjectValidationService {
         return bounded(diagnostics, touched);
     }
 
-    private ProjectDiagnostic parsed(Path root, String file, String line, String column, String severity,
+    private ProjectDiagnostic parsed(String root, String file, String line, String column, String severity,
                                      String message, ValidationOperation operation, String code) {
         String normalized = normalizeFile(root, file);
         DiagnosticSeverity level = "warning".equalsIgnoreCase(severity) ? DiagnosticSeverity.WARNING : DiagnosticSeverity.ERROR;
@@ -414,8 +228,8 @@ public class ProjectValidationService {
         List<ProjectDiagnostic> boundedIntroduced = bounded(introduced, view.touchedPaths());
         int remaining = Math.max(0, properties.getMaxValidationDiagnostics() - boundedIntroduced.size());
         return new ValidationReport(ValidationOperation.ALL, true, passed, passed, false, passed ? 0 : 1,
-                resolver.inspect(view.liveRoot()).packageManager(), "project validation", boundedIntroduced,
-                bounded(existing, view.touchedPaths(), remaining), progress.repairAttempts(),
+                resolver.inspect(files, context.projectId(), view.liveRoot()).packageManager(), "project validation",
+                boundedIntroduced, bounded(existing, view.touchedPaths(), remaining), progress.repairAttempts(),
                 progress.repairAttemptsRemaining(), progress.revision(), summary);
     }
 
@@ -446,19 +260,20 @@ public class ProjectValidationService {
         }
     }
 
-    private static String normalizeFile(Path root, String raw) {
+    /** A tool's file reference relative to the directory the command ran in ({@code root}, as the command saw it). */
+    static String normalizeFile(String root, String raw) {
         String clean = raw.trim().replace('\\', '/');
-        try {
-            Path path = Path.of(raw.trim()).toAbsolutePath().normalize();
-            Path normalizedRoot = root.toAbsolutePath().normalize();
-            if (path.startsWith(normalizedRoot)) return normalizedRoot.relativize(path).toString().replace('\\', '/');
-        } catch (RuntimeException ignored) { }
+        String base = root.replace('\\', '/').replaceAll("/+$", "");
+        if (!base.isEmpty() && clean.regionMatches(true, 0, base + "/", 0, base.length() + 1)) {
+            clean = clean.substring(base.length() + 1);
+        }
         while (clean.startsWith("./")) clean = clean.substring(2);
         return clean;
     }
-    private static String normalizeMessage(Path root, String message) {
-        String normalized = message.replace(root.toAbsolutePath().normalize().toString(), "<project>");
-        return normalized.replace(root.toAbsolutePath().normalize().toString().replace('\\', '/'), "<project>");
+
+    private static String normalizeMessage(String root, String message) {
+        String forward = root.replace('\\', '/');
+        return message.replace(root, "<project>").replace(forward, "<project>");
     }
     private static String responsibilityFingerprint(ProjectDiagnostic item) {
         return String.join("|", item.file() == null ? "" : item.file(), item.severity().name(),
@@ -466,7 +281,8 @@ public class ProjectValidationService {
     }
     private static String truncate(String value, int max) { return value.length() <= max ? value : value.substring(0, max) + "..."; }
 
-    private record CommandOutcome(boolean started, boolean timedOut, int exitCode, String output) {}
+    /** {@code root}: the directory the command ran in, as the command saw it (for mapping its paths back). */
+    private record CommandOutcome(boolean started, boolean timedOut, int exitCode, String output, String root) {}
     private record Comparison(ProjectCommandResolver.CommandPlan plan, CommandOutcome before, CommandOutcome after,
                               List<ProjectDiagnostic> introduced, List<ProjectDiagnostic> preExisting,
                               boolean changePassed) {}
@@ -474,19 +290,4 @@ public class ProjectValidationService {
                                     List<String> availableOperations, String error) {}
     public record DiagnosticsSnapshot(CapabilitySummary capabilities, ValidationReport lastReport,
                                       ChangeSetService.ValidationProgress progress) {}
-
-    private static final class OutputCapture implements Runnable {
-        private final InputStream input; private final int limit; private final ByteArrayOutputStream kept = new ByteArrayOutputStream();
-        private OutputCapture(InputStream input, int limit) { this.input = input; this.limit = limit; }
-        @Override public void run() {
-            try (InputStream stream = input) {
-                byte[] buffer = new byte[8192];
-                for (int count; (count = stream.read(buffer)) >= 0;) {
-                    int remaining = limit - kept.size();
-                    if (remaining > 0) kept.write(buffer, 0, Math.min(count, remaining));
-                }
-            } catch (IOException ignored) { }
-        }
-        private String text() { return kept.toString(StandardCharsets.UTF_8); }
-    }
 }

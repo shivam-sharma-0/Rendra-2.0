@@ -14,8 +14,6 @@ import com.code.pal.agent.exception.AgentRunNotFoundException;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.repository.AgentStepRepository;
-import com.code.pal.agent.snapshot.WorkspaceSnapshotService;
-import com.code.pal.agent.workspace.WorkspaceStorage;
 import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.service.ProjectService;
@@ -36,8 +34,6 @@ public class AgentRunController {
     private final ProjectService projects;
     private final AgentRunRepository runs;
     private final AgentStepRepository steps;
-    private final WorkspaceStorage workspace;
-    private final WorkspaceSnapshotService snapshots;
     private final SandboxPort sandbox;
     private final AgentEvents events;
     private final AgentJobQueue queue;
@@ -90,11 +86,9 @@ public class AgentRunController {
         if (latest == null || !latest.getId().equals(runId) || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.QUEUED) {
             throw new AgentRunConflictException("Only the latest completed build can be rolled back");
         }
-        if (run.getSnapshotRef().startsWith("docker:")) {
-            sandbox.restoreTree(projectId, ".codepal/history/" + run.getId() + "/original");
-        } else {
-            snapshots.restore(workspace.ensure(projectId), run.getSnapshotRef());
-        }
+        String archive = ChangeSetService.archiveFor(run.getSnapshotRef());
+        if (archive == null) throw new AgentRunConflictException("This run's snapshot can no longer be restored");
+        sandbox.restoreTree(projectId, archive);
         events.emit(run, AgentStepType.STATUS, "Workspace restored to the snapshot before this run.", null);
     }
 

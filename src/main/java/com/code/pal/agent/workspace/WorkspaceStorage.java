@@ -13,8 +13,8 @@ import java.util.UUID;
 
 /**
  * Owns each project's on-disk code directory ({@code <base>/<projectId>}). Central place for
- * creating and deleting a project's workspace. Path safety for tool access is enforced by
- * {@link com.code.pal.agent.tool.AgentContext#resolveSafe} (traversal + symlink + protected-path guard).
+ * creating and deleting a project's workspace. Files inside it are accessed through {@link ProjectFiles}
+ * (path rules in {@link ProjectPaths}) and commands through {@link SandboxPort}.
  */
 @Slf4j
 @Service

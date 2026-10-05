@@ -1,6 +1,6 @@
 package com.code.pal.agent.web;
 
-import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.shared.security.AuthPrincipal;
@@ -18,24 +18,21 @@ import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 
-/** Stores user attachments inside the persistent project sandbox, never on the backend host. */
+/** Stores user attachments in the project's {@code uploads/} folder, within the project quota. */
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/projects/{projectId}/attachments")
 public class ProjectAttachmentController {
     private final ProjectService projects;
+    private final ProjectFiles files;
     private final SandboxPort sandbox;
-    private final AgentProperties properties;
 
     @PostMapping(consumes = "multipart/form-data")
     public List<AttachmentResponse> upload(@AuthenticationPrincipal AuthPrincipal principal,
                                            @org.springframework.web.bind.annotation.PathVariable UUID projectId,
-                                           @RequestPart("files") List<MultipartFile> files) {
+                                           @RequestPart("files") List<MultipartFile> uploads) {
         projects.requireCanEdit(principal.userId(), projectId);
-        if (!properties.getSandbox().isRequired()) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Project sandbox is not enabled");
-        }
-        return files.stream().map(file -> store(projectId, file)).toList();
+        return uploads.stream().map(file -> store(projectId, file)).toList();
     }
 
     private AttachmentResponse store(UUID projectId, MultipartFile file) {
@@ -44,16 +41,17 @@ public class ProjectAttachmentController {
         String original = file.getOriginalFilename() == null ? "attachment" : file.getOriginalFilename();
         String safeName = original.replace('\\', '/');
         safeName = safeName.substring(safeName.lastIndexOf('/') + 1).replaceAll("[^A-Za-z0-9._-]", "_");
-        if (safeName.isBlank()) safeName = "attachment";
+        if (safeName.isBlank() || safeName.matches("\\.+")) safeName = "attachment";
         if (safeName.length() > 100) safeName = safeName.substring(safeName.length() - 100);
         String path = "uploads/" + UUID.randomUUID() + "-" + safeName;
         try {
-            sandbox.writeBytes(projectId, path, file.getBytes());
+            files.writeBytes(projectId, path, file.getBytes());
+            sandbox.enforceQuota(projectId);
             return new AttachmentResponse(path, original, file.getSize(), file.getContentType());
         } catch (IOException | RuntimeException error) {
-            // writeBytes validates the quota after writing; remove the file if that validation fails.
+            // Over quota (or a failed write): leave nothing behind.
             try {
-                sandbox.delete(projectId, path);
+                files.delete(projectId, path);
             } catch (RuntimeException ignored) {
                 // Preserve the original upload error; cleanup is best effort.
             }

@@ -12,6 +12,7 @@ import com.code.pal.project.domain.DeploymentStatus;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.exception.ProjectNotFoundException;
 import com.code.pal.project.service.ProjectService;
+import com.code.pal.agent.workspace.LocalProject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
@@ -32,15 +33,15 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 class AgentReadOnlyToolsTest {
-    private Path workspace;
+    private LocalProject project;
     private UUID projectId;
+    private Path workspace;
 
     @BeforeEach
     void setUp() throws Exception {
-        Path base = Path.of("target", "test-workspaces");
-        Files.createDirectories(base);
-        workspace = Files.createTempDirectory(base, "readonly-agent-");
-        projectId = UUID.randomUUID();
+        project = LocalProject.create();
+        workspace = project.dir();
+        projectId = project.projectId;
     }
 
     @Test
@@ -77,7 +78,9 @@ class AgentReadOnlyToolsTest {
         UUID workspaceId = UUID.randomUUID();
         AgentProjectMetadata metadata = new AgentProjectMetadata(projectId, workspaceId, "Authentication API",
                 ProjectType.CHAT, false, DeploymentStatus.NONE, Instant.parse("2026-01-01T00:00:00Z"), null);
-        AgentContext context = new AgentContext(projectId, 7L, ProjectType.CHAT, workspace, metadata);
+        AgentContext context = new AgentContext(projectId, 7L, ProjectType.CHAT, ".", metadata,
+                new com.code.pal.agent.context.ProjectContextTrace(), UUID.randomUUID(),
+                new com.code.pal.agent.plan.AgentPlanState(), project.files);
 
         Map<String, Object> result = new GetProjectMetadataTool().execute(Map.of(), context);
 
@@ -89,7 +92,7 @@ class AgentReadOnlyToolsTest {
 
     @Test
     void rejectsParentSegmentsEvenWhenNormalizationWouldRemainInsideWorkspace() {
-        assertThrows(IllegalArgumentException.class, () -> context().resolveSafe("src/../pom.xml"));
+        assertThrows(IllegalArgumentException.class, () -> context().resolvePath("src/../pom.xml"));
     }
 
     @Test
@@ -154,6 +157,6 @@ class AgentReadOnlyToolsTest {
     }
 
     private AgentContext context() {
-        return new AgentContext(projectId, 7L, ProjectType.CHAT, workspace);
+        return new AgentContext(projectId, 7L, ProjectType.CHAT, ".", project.files);
     }
 }
