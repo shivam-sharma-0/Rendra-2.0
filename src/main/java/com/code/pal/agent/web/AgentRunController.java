@@ -15,6 +15,7 @@ import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.repository.AgentStepRepository;
 import com.code.pal.agent.workspace.SandboxPort;
+import com.code.pal.agent.preview.SiteBuildService;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.shared.security.AuthPrincipal;
@@ -39,6 +40,7 @@ public class AgentRunController {
     private final AgentJobQueue queue;
     private final FileChangeRepository fileChanges;
     private final ChangeSetService changeSets;
+    private final SiteBuildService sites;
 
     @GetMapping
     public List<AgentRunResponse> list(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId) {
@@ -89,6 +91,7 @@ public class AgentRunController {
         String archive = ChangeSetService.archiveFor(run.getSnapshotRef());
         if (archive == null) throw new AgentRunConflictException("This run's snapshot can no longer be restored");
         sandbox.restoreTree(projectId, archive);
+        sites.buildLater(projectId);   // rebuild the served site from the restored files
         events.emit(run, AgentStepType.STATUS, "Workspace restored to the snapshot before this run.", null);
     }
 

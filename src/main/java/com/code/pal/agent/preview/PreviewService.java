@@ -29,17 +29,57 @@ public class PreviewService {
     private static final Set<String> SKIP = Set.of(".git", ".ssh", ".secrets", "node_modules", ProjectPaths.INTERNAL);
 
     private final ProjectFiles files;
+    private final SiteBuildService sites;
 
     public PreviewFile serve(UUID projectId, String requested) {
         String path = safePath(requested);
-        String target = firstFile(projectId, candidates(path));
-        if (target == null) target = firstFile(projectId, indexCandidates());
+        String site = sites.currentSite(projectId);
+        String target = site != null ? siteFile(projectId, site, path) : projectFile(projectId, path);
         if (target == null) throw notFound();
         try {
             return new PreviewFile(files.readBytes(projectId, ".", target, MAX_BYTES), contentType(target));
         } catch (RuntimeException error) {
             throw notFound();
         }
+    }
+
+    /**
+     * A built site: the file itself, a folder's index.html, an asset referenced relatively from a nested
+     * route ({@code a/b/assets/x.js} finds {@code assets/x.js}), else the site's index.html for client-side
+     * routes. A missing file with an extension is a real 404, never HTML in place of a script.
+     */
+    private String siteFile(UUID projectId, String site, String path) {
+        List<String> candidates = new ArrayList<>(List.of(site + "/" + path, site + "/" + path + "/index.html"));
+        nestedSuffixes(path).forEach(suffix -> candidates.add(site + "/" + suffix));
+        String found = firstFile(projectId, candidates);
+        if (found != null || hasExtension(path)) return found;
+        return firstFile(projectId, List.of(site + "/index.html"));
+    }
+
+    /** Project files served as they are (static sites), preferring conventional build folders. */
+    private String projectFile(UUID projectId, String path) {
+        String found = firstFile(projectId, candidates(path));
+        if (found == null && hasExtension(path)) {
+            List<String> nested = new ArrayList<>();
+            nestedSuffixes(path).forEach(suffix -> nested.addAll(candidates(suffix)));
+            found = firstFile(projectId, nested);
+        }
+        return found != null ? found : firstFile(projectId, indexCandidates());
+    }
+
+    /** {@code a/b/c.js} → {@code b/c.js}, {@code c.js}: relative asset URLs requested from a nested route. */
+    private static List<String> nestedSuffixes(String path) {
+        if (!hasExtension(path)) return List.of();
+        List<String> suffixes = new ArrayList<>();
+        for (int slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1)) {
+            suffixes.add(path.substring(slash + 1));
+        }
+        return suffixes;
+    }
+
+    private static boolean hasExtension(String path) {
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        return name.lastIndexOf('.') > 0;
     }
 
     private String firstFile(UUID projectId, List<String> candidates) {

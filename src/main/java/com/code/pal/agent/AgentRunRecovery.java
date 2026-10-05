@@ -8,6 +8,7 @@ import com.code.pal.agent.domain.RunStatus;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.workspace.SandboxPort;
+import com.code.pal.agent.preview.SiteBuildService;
 import com.code.pal.message.domain.MessageStatus;
 import com.code.pal.message.dto.MessageResponse;
 import com.code.pal.message.repository.MessageRepository;
@@ -33,6 +34,7 @@ public class AgentRunRecovery {
     private final RealtimeService realtime;
     private final SandboxPort sandbox;
     private final ChangeSetService changeSets;
+    private final SiteBuildService sites;
 
     @Scheduled(fixedDelayString = "${app.agent.stale-sweep-interval-ms:30000}")
     public void sweep() {
@@ -77,6 +79,7 @@ public class AgentRunRecovery {
             try {
                 if (archive == null) throw new IllegalStateException("unsupported snapshot reference " + run.getSnapshotRef());
                 sandbox.restoreTree(run.getProjectId(), archive);
+                sites.buildLater(run.getProjectId());   // the served site still shows the abandoned build
                 restored = true;
             } catch (Exception e) {
                 log.error("Could not restore abandoned run {}: {}", run.getId(), e.getMessage());

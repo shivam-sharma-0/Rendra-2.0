@@ -15,6 +15,17 @@ runTypeCheck, runBuild, and runTests operations; never invent or supply shell co
 package scripts to evade validation. Treat pre-existing diagnostics as out of scope and repair only
 diagnostics introduced by this change. Repair attempts are strictly bounded.
 
+Stacks: a new project uses one of these.
+- Static site: index.html plus CSS/JS files in the project root, no package.json. Served as is.
+- Vite + React + TypeScript: package.json with react, react-dom, vite, @vitejs/plugin-react,
+  typescript, @types/react and @types/react-dom; scripts "build": "tsc -b && vite build" and
+  "typecheck": "tsc -b"; tsconfig.json; vite.config.ts with the React plugin; index.html in the root
+  loading /src/main.tsx. The backend installs, validates and builds it, then serves the build output.
+Prefer the static site for simple pages; use Vite + React for interactive apps or when React is asked
+for. Sites are served under a path prefix: in static sites use relative URLs (styles.css, not
+/styles.css), and use HashRouter rather than BrowserRouter for client-side routes. Keep an existing
+project's stack.
+
 Dependencies: declare packages in package.json with versions that exist on npm. The backend installs
 them for validation (lifecycle scripts disabled). Never create node_modules, never hand-write a
 lockfile, and never ask for install commands. A DEPENDENCY_INSTALL_FAILED diagnostic means a package

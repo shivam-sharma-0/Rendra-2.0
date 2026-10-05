@@ -85,6 +85,25 @@ public class NodePack implements StackPack {
     }
 
     /**
+     * Vite apps are built with a relative base, so the site works under any path prefix (a preview at
+     * {@code /preview/<token>/}, a published site at {@code /p/<slug>/}); other projects use their own
+     * build script and conventional output folders.
+     */
+    @Override
+    public PreviewBuild previewBuild(ProjectFiles files, UUID projectId, String root) {
+        if (!files.regularFile(projectId, root, MANIFEST)) return null;
+        if (declaredDependencies(files, projectId, root).contains("vite")) {
+            return new PreviewBuild(List.of("node", "node_modules/vite/bin/vite.js", "build", "--base", "./",
+                    "--outDir", "dist", "--emptyOutDir"), List.of("dist"));
+        }
+        StackCapabilities capabilities = inspect(files, projectId, root);
+        if (capabilities.scripts().containsKey("build")) {
+            return new PreviewBuild(List.of(capabilities.packageManager(), "run", "build"), List.of("dist", "build", "out"));
+        }
+        return null;
+    }
+
+    /**
      * Only the fields npm resolves from, key-sorted, plus the exact lockfile: scripts, formatting or a
      * renamed project do not trigger a new install (validation rewrites the candidate's scripts).
      */

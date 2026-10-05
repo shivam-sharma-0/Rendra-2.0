@@ -27,6 +27,7 @@ public class PublicSiteController {
 
     @GetMapping({"/p/{slug}", "/p/{slug}/**"})
     public ResponseEntity<byte[]> serve(@PathVariable String slug, HttpServletRequest request) {
+        if (request.getRequestURI().equals("/p/" + slug)) return PreviewSiteController.slashRedirect(request);
         UUID projectId = projects.resolvePublishedProject(slug);
         String path = relativePath(request.getRequestURI(), slug);
         PreviewService.PreviewFile file = preview.serve(projectId, path.isBlank() ? "index.html" : path);

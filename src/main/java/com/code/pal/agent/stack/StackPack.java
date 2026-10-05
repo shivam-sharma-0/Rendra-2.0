@@ -63,6 +63,20 @@ public interface StackPack {
         return CommandPlan.unavailable(operation, inspect(files, projectId, stagedRoot), "No fixed " + operation.name().toLowerCase() + " command for " + id());
     }
 
+    /**
+     * How to produce the site the preview serves, or null when the project's files are served as they
+     * are (a static site). The command runs on a copy of the project with dependencies prepared.
+     */
+    default PreviewBuild previewBuild(ProjectFiles files, UUID projectId, String root) {
+        return null;
+    }
+
+    /**
+     * A backend-chosen build command and the folders (relative to the build's root, in order of
+     * preference) where it may leave a site with an {@code index.html}.
+     */
+    record PreviewBuild(List<String> command, List<String> outputDirectories) {}
+
     /** The install command for the project under {@code root}, or empty when nothing needs installing. */
     default List<String> installCommand(ProjectFiles files, UUID projectId, String root) {
         return List.of();

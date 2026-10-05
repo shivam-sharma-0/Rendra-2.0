@@ -33,9 +33,10 @@ public class SitesOrigin {
         this.port = uri.getPort() != -1 ? uri.getPort() : ("https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80);
     }
 
-    public String previewUrl(String token) { return baseUrl + "/preview/" + token; }
+    /** Trailing slash: built sites reference their assets relatively ({@code ./assets/...}). */
+    public String previewUrl(String token) { return baseUrl + "/preview/" + token + "/"; }
 
-    public String publishedUrl(String slug) { return baseUrl + "/p/" + slug; }
+    public String publishedUrl(String slug) { return baseUrl + "/p/" + slug + "/"; }
 
     /** Absolute URL of {@code path} (which must start with '/') on the sites origin. */
     public String resolve(String path) { return baseUrl + path; }

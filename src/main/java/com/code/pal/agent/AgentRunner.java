@@ -36,6 +36,7 @@ import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.tool.ToolExecutionResult;
 import com.code.pal.agent.usage.AgentUsagePolicy;
 import com.code.pal.agent.workspace.ProjectFiles;
+import com.code.pal.agent.preview.SiteBuildService;
 import com.code.pal.agent.validation.ProjectValidationService;
 import com.code.pal.agent.validation.ValidationReport;
 import com.code.pal.message.domain.Message;
@@ -104,6 +105,8 @@ public class AgentRunner implements AgentRuntime {
     private final NotificationService notifications;
     private final ProjectArtifactService artifacts;
     private final GeneratedDatabaseService databases;
+    /** Builds the served site after a commit; null in focused tests. */
+    private final SiteBuildService sites;
     /** Per-user daily token quota; null in focused tests, where no quota applies. */
     private final AgentUsagePolicy usage;
 
@@ -116,7 +119,8 @@ public class AgentRunner implements AgentRuntime {
             ObjectMapper objectMapper, ChangeSetService changeSets,
             ProjectValidationService validation, NotificationService notifications,
             ProjectArtifactService artifacts, GeneratedDatabaseService databases,
-            AgentUsagePolicy usage) {
+            SiteBuildService sites, AgentUsagePolicy usage) {
+        this.sites = sites;
         this.usage = usage;
         this.llm = llm;
         this.intentClassifier = intentClassifier;
@@ -153,7 +157,7 @@ public class AgentRunner implements AgentRuntime {
             ProjectValidationService validation, NotificationService notifications) {
         this(llm, intentClassifier, tools, toolExecutor, events, props, projectContexts, runRepository, projects,
                 messageRepository, realtime, files, heartbeat, queue, objectMapper, changeSets, validation,
-                notifications, null, null, null);
+                notifications, null, null, null, null);
     }
 
     /**
@@ -333,6 +337,7 @@ public class AgentRunner implements AgentRuntime {
                             artifacts.writeBuild(run, "COMMITTED", committed.changedPaths());
                         if (databases != null)
                             databases.ensure(run.getProjectId());
+                        buildSite(run);
                         moveProject(run, ProjectStage.REVIEW);
                     }
                     runtime.transitionPhase(AgentPhase.FINISH);
@@ -658,6 +663,14 @@ public class AgentRunner implements AgentRuntime {
         }).collect(java.util.stream.Collectors.joining("\n"));
         return "The automatic final validation found errors introduced by the staged changes. "
                 + "Repair only these errors, then finish so the backend can validate once more:\n" + details;
+    }
+
+    /** Refreshes the served site; a failed build keeps the previous site and does not fail the run. */
+    private void buildSite(AgentRun run) {
+        if (sites == null) return;
+        SiteBuildService.Result site = sites.build(run.getProjectId());
+        if (site.built()) events.emit(run, AgentStepType.STATUS, "Preview built", null);
+        else if (site.error() != null) events.emit(run, AgentStepType.STATUS, "Preview build failed", Map.of("error", site.error()));
     }
 
     private static boolean hasPreviewEntrypoint(AgentContext context) {
