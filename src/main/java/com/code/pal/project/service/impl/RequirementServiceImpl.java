@@ -10,15 +10,18 @@ import com.code.pal.message.service.MessageService;
 import com.code.pal.project.domain.*;
 import com.code.pal.project.dto.RequirementDtos;
 import com.code.pal.project.artifact.ProjectArtifactService;
+import com.code.pal.project.exception.InvalidRequirementAnswerException;
 import com.code.pal.project.exception.ProjectNotFoundException;
+import com.code.pal.project.exception.WorkflowStageException;
 import com.code.pal.project.repository.RequirementQuestionRepository;
 import com.code.pal.project.repository.RequirementSessionRepository;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.project.service.RequirementService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -27,7 +30,6 @@ import java.util.*;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class RequirementServiceImpl implements RequirementService {
     /**
      * These calls run inside the user's HTTP request and already fall back to deterministic questions,
@@ -43,6 +45,27 @@ public class RequirementServiceImpl implements RequirementService {
     private final ObjectMapper objectMapper;
     private final ProjectArtifactService artifacts;
     private final MessageService messages;
+    /**
+     * Model calls take up to {@link #LLM_BUDGET}; holding a pooled DB connection that long would let a
+     * few slow requests starve the whole app. So start/answer read and write in short transactions
+     * and call the model between them, with no transaction open.
+     */
+    private final TransactionTemplate tx;
+
+    public RequirementServiceImpl(ProjectService projects, RequirementSessionRepository sessions,
+                                  RequirementQuestionRepository questions, LlmClient llm, AgentProperties properties,
+                                  ObjectMapper objectMapper, ProjectArtifactService artifacts, MessageService messages,
+                                  PlatformTransactionManager transactionManager) {
+        this.projects = projects;
+        this.sessions = sessions;
+        this.questions = questions;
+        this.llm = llm;
+        this.properties = properties;
+        this.objectMapper = objectMapper;
+        this.artifacts = artifacts;
+        this.messages = messages;
+        this.tx = new TransactionTemplate(transactionManager);
+    }
 
     @Override
     @Transactional(readOnly = true)
@@ -53,70 +76,94 @@ public class RequirementServiceImpl implements RequirementService {
     }
 
     @Override
-    @Transactional
     public RequirementDtos.Session start(Long userId, UUID projectId) {
-        Project project = projects.requireCanEdit(userId, projectId);
-        RequirementSession session = sessions.findByProjectId(projectId).orElseGet(() -> sessions.save(
-                RequirementSession.builder().projectId(projectId).sourcePrompt(Optional.ofNullable(project.getInitialPrompt()).orElse("")).build()));
-        if (questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty()) {
-            List<QuestionDraft> drafts = generate(project);
-            saveQuestions(session, drafts);
-        }
-        if (session.getStatus() == RequirementStatus.DRAFT) session.setStatus(RequirementStatus.IN_PROGRESS);
-        return view(session);
+        // Without a transaction: generating questions calls the model (see {@link #tx}).
+        ProjectBrief needsQuestions = tx.execute(status -> {
+            Project project = projects.requireCanEdit(userId, projectId);
+            RequirementSession session = sessions.findByProjectId(projectId).orElseGet(() -> sessions.save(
+                    RequirementSession.builder().projectId(projectId).sourcePrompt(Optional.ofNullable(project.getInitialPrompt()).orElse("")).build()));
+            return questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty() ? ProjectBrief.of(project) : null;
+        });
+        List<QuestionDraft> drafts = needsQuestions == null ? List.of() : generate(needsQuestions);
+        return tx.execute(status -> {
+            RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
+            // A concurrent start may have saved its questions meanwhile; the first set wins.
+            if (!drafts.isEmpty() && questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty()) {
+                saveQuestions(session, drafts);
+            }
+            if (session.getStatus() == RequirementStatus.DRAFT) session.setStatus(RequirementStatus.IN_PROGRESS);
+            return view(session);
+        });
     }
 
     @Override
-    @Transactional
     public RequirementDtos.Session answer(Long userId, UUID projectId, UUID questionId, RequirementDtos.AnswerRequest request) {
-        Project project = projects.requireCanEdit(userId, projectId);
-        RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
-        RequirementQuestion question = questions.findByIdAndSessionId(questionId, session.getId()).orElseThrow(ProjectNotFoundException::new);
-        String selected = clean(request.selectedOption(), 80);
-        String other = clean(request.otherText(), 4_000);
-        if (question.isRequired() && (selected == null || selected.isBlank()) && (other == null || other.isBlank())) {
-            throw new IllegalArgumentException("This requirement question needs an answer");
-        }
-        question.setSelectedOption(selected);
-        question.setOtherText(other);
-        session.setStatus(RequirementStatus.IN_PROGRESS);
-        if (complete(session)) refineOrApprove(project, session);
-        return view(session);
-    }
-
-    /** Re-checks the completed answer set once, adding only genuinely missing decisions. */
-    private void refineOrApprove(Project project, RequirementSession session) {
-        List<RequirementQuestion> answered = questions.findBySessionIdOrderBySequenceAsc(session.getId());
-        try {
-            Assessment assessment = assess(project, answered);
-            if (!assessment.clear() && !assessment.questions().isEmpty()) {
-                Set<String> knownKeys = answered.stream().map(RequirementQuestion::getQuestionKey)
-                        .map(String::toLowerCase).collect(java.util.stream.Collectors.toSet());
-                int remaining = Math.max(0, 8 - answered.size());
-                List<QuestionDraft> additional = assessment.questions().stream()
-                        .filter(item -> knownKeys.add(item.key().toLowerCase(Locale.ROOT)))
-                        .limit(remaining)
-                        .toList();
-                if (!additional.isEmpty()) {
-                    saveQuestions(session, additional, answered.size());
-                    session.setStatus(RequirementStatus.IN_PROGRESS);
-                    return;
-                }
+        // Without a transaction: the last answer triggers a model review (see {@link #tx}).
+        Recorded recorded = tx.execute(status -> {
+            Project project = projects.requireCanEdit(userId, projectId);
+            RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
+            RequirementQuestion question = questions.findByIdAndSessionId(questionId, session.getId()).orElseThrow(ProjectNotFoundException::new);
+            String selected = clean(request.selectedOption(), 80);
+            String other = clean(request.otherText(), 4_000);
+            if (question.isRequired() && (selected == null || selected.isBlank()) && (other == null || other.isBlank())) {
+                throw new InvalidRequirementAnswerException("This requirement question needs an answer");
             }
+            question.setSelectedOption(selected);
+            question.setOtherText(other);
+            session.setStatus(RequirementStatus.IN_PROGRESS);
+            if (!complete(session)) return new Recorded(view(session), null, null);
+            return new Recorded(null, ProjectBrief.of(project), answerSummary(questions.findBySessionIdOrderBySequenceAsc(session.getId())));
+        });
+        if (recorded.view() != null) return recorded.view();
+
+        Assessment assessment;
+        try {
+            assessment = assess(recorded.project(), recorded.summary());
         } catch (RuntimeException error) {
             // The user can still review the complete answer set when the assessment provider is unavailable.
-            log.warn("Requirement assessment fell back to approval project={}: {}", project.getId(), error.getMessage());
+            log.warn("Requirement assessment fell back to approval project={}: {}", projectId, error.getMessage());
+            assessment = new Assessment(true, List.of());
+        }
+        Assessment verdict = assessment;
+        return tx.execute(status -> {
+            RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
+            // Answers may have changed (or been approved) while the model was reviewing them.
+            if (session.getStatus() != RequirementStatus.APPROVED && complete(session)) refineOrApprove(session, verdict);
+            return view(session);
+        });
+    }
+
+    /** Applies a review of the complete answer set, adding only genuinely missing decisions. */
+    private void refineOrApprove(RequirementSession session, Assessment assessment) {
+        List<RequirementQuestion> answered = questions.findBySessionIdOrderBySequenceAsc(session.getId());
+        if (!assessment.clear() && !assessment.questions().isEmpty()) {
+            Set<String> knownKeys = answered.stream().map(RequirementQuestion::getQuestionKey)
+                    .map(key -> key.toLowerCase(Locale.ROOT)).collect(java.util.stream.Collectors.toSet());
+            int remaining = Math.max(0, 8 - answered.size());
+            List<QuestionDraft> additional = assessment.questions().stream()
+                    .filter(item -> knownKeys.add(item.key().toLowerCase(Locale.ROOT)))
+                    .limit(remaining)
+                    .toList();
+            if (!additional.isEmpty()) {
+                saveQuestions(session, additional, answered.size());
+                session.setStatus(RequirementStatus.IN_PROGRESS);
+                return;
+            }
         }
         session.setStatus(RequirementStatus.APPROVAL_REQUIRED);
     }
 
-    private Assessment assess(Project project, List<RequirementQuestion> answered) {
+    private String answerSummary(List<RequirementQuestion> answered) {
         StringBuilder summary = new StringBuilder();
         for (RequirementQuestion question : answered) {
             String answer = answerLabel(question);
             summary.append("- ").append(question.getQuestionKey()).append(": ")
                     .append(answer == null ? "Not specified" : answer).append('\n');
         }
+        return summary.toString();
+    }
+
+    private Assessment assess(ProjectBrief project, String summary) {
         String prompt = """
                 Return only valid JSON object with this shape:
                 {"requirementsClear":true|false,"questions":[{"key":"...","prompt":"...","required":true,"recommended":"...","options":[{"id":"...","label":"...","description":"..."}]}]}
@@ -126,7 +173,7 @@ public class RequirementServiceImpl implements RequirementService {
                 Do not repeat a decision already answered. User's original request: %s
                 Current answers:
                 %s
-                """.formatted(Optional.ofNullable(project.getInitialPrompt()).orElse(""), summary);
+                """.formatted(project.initialPrompt(), summary);
         AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
         LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
                 List.of(LlmMessage.system("You are a strict product requirements reviewer."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET));
@@ -141,7 +188,7 @@ public class RequirementServiceImpl implements RequirementService {
         projects.requireCanEdit(userId, projectId);
         RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
         if (session.getStatus() == RequirementStatus.APPROVED) return view(session);
-        if (!complete(session)) throw new IllegalArgumentException("Answer all required requirement questions first");
+        if (!complete(session)) throw new WorkflowStageException("Answer all required requirement questions first");
         session.setStatus(RequirementStatus.APPROVED);
         session.setApprovedAt(Instant.now());
         session.setApprovedBy(userId);
@@ -222,7 +269,7 @@ public class RequirementServiceImpl implements RequirementService {
         }
     }
 
-    private List<QuestionDraft> generate(Project project) {
+    private List<QuestionDraft> generate(ProjectBrief project) {
         try {
             AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
             String prompt = """
@@ -237,15 +284,15 @@ public class RequirementServiceImpl implements RequirementService {
                     database (Cloud), This device only), and visual style (Clean & minimal, Calm & warm,
                     Bold & structured, Dark & moody). Add Write your own... as the final option for each.
                     Do not ask questions already answered clearly by the user prompt. User prompt: %s
-                    """.formatted(project.getInitialPrompt());
+                    """.formatted(project.initialPrompt());
             LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
                     List.of(LlmMessage.system("You are a product requirements analyst."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET));
             List<QuestionDraft> parsed = parseQuestions(result.content());
             if (!parsed.isEmpty()) return parsed.stream().limit(8).toList();
         } catch (RuntimeException error) {
-            log.warn("Requirement question generation fell back to defaults project={}: {}", project.getId(), error.getMessage());
+            log.warn("Requirement question generation fell back to defaults project={}: {}", project.id(), error.getMessage());
         }
-        return defaults(project.getInitialPrompt());
+        return defaults(project.initialPrompt());
     }
 
     private List<QuestionDraft> parseQuestions(String content) {
@@ -296,4 +343,12 @@ public class RequirementServiceImpl implements RequirementService {
     private record OptionDraft(String id, String label, String description) {}
     private record QuestionDraft(String key, String prompt, boolean required, String recommended, List<OptionDraft> options) {}
     private record Assessment(boolean clear, List<QuestionDraft> questions) {}
+    /** What the model calls need from a project, read inside a transaction and used outside it. */
+    private record ProjectBrief(UUID id, String initialPrompt) {
+        static ProjectBrief of(Project project) {
+            return new ProjectBrief(project.getId(), Optional.ofNullable(project.getInitialPrompt()).orElse(""));
+        }
+    }
+    /** Result of recording an answer: the session view when no review is due, else what the review needs. */
+    private record Recorded(RequirementDtos.Session view, ProjectBrief project, String summary) {}
 }
