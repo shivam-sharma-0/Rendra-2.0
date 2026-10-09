@@ -4,17 +4,9 @@ import { notificationApi } from '../../api/projects'
 import { useMarkAllNotificationsRead, useNotifications, useUnreadCount } from '../../api/queries'
 import { ICON } from '../icons'
 import { relTime } from '../parts'
+import { notificationStyle } from '../ui/notificationStyle'
 import ShellIcon from './ShellIcon'
 import type { PopoverControl } from './types'
-
-const TYPE_STYLE: Record<string, { icon: string; bg: string; fg: string }> = {
-  BUILD_FINISHED: { icon: ICON.check, bg: '#E7F8EF', fg: '#0B6B45' },
-  BUILD_FAILED: { icon: ICON.close, bg: '#FDECEA', fg: '#B42318' },
-  PROJECT_SHARED: { icon: ICON.share, bg: '#F1EEFF', fg: '#3D30C9' },
-  WORKSPACE_INVITE: { icon: ICON.userPlus, bg: '#FFF1EB', fg: '#A33511' },
-  ROLE_CHANGED: { icon: ICON.settingsCog, bg: '#E4F1F7', fg: '#135E84' },
-}
-const DEFAULT_STYLE = { icon: 'M12 2v14', bg: '#F1EEFF', fg: '#3D30C9' }
 
 /** Bell with unread badge and a popover listing notifications (all / unread). */
 export default function NotificationsMenu({ open, onToggle, onClose }: PopoverControl) {
@@ -82,7 +74,7 @@ export default function NotificationsMenu({ open, onToggle, onClose }: PopoverCo
               </div>
             ) : (
               shown.map((n) => {
-                const s = TYPE_STYLE[n.type] ?? DEFAULT_STYLE
+                const s = notificationStyle(n.type)
                 return (
                   <button key={n.id} type="button" className={`kap-notif-pop-item ${n.read ? '' : 'unread'}`} onClick={() => void openItem(n)}>
                     <span className="kap-notif-pop-icon" style={{ background: s.bg, color: s.fg }}><ShellIcon d={s.icon} size={15} /></span>

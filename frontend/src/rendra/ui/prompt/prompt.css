@@ -1,0 +1,9 @@
+/* Pieces shared by the prompt boxes (dashboard composer, project workspace composer). */
+
+.prompt-menu { width: 280px; max-width: none; }
+
+.prompt-files { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; padding: 0; }
+.prompt-file { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px 0 10px; border-radius: 999px; font-size: 12.5px; color: var(--neu-muted); }
+.prompt-file span { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-file button { width: 20px; height: 20px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--neu-faint); cursor: pointer; }
+.prompt-file button:hover { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }

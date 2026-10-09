@@ -8,10 +8,8 @@ import { useWorkspace } from '../../../workspace/WorkspaceContext'
 import { useTypewriter } from '../../hooks/useTypewriter'
 import { ICON } from '../../icons'
 import { Ico } from '../../parts'
-import AttachMenu from './AttachMenu'
-import AttachmentList from './AttachmentList'
+import { AttachMenu, AttachmentList, ModeMenu } from '../../ui/prompt'
 import { PLACEHOLDERS } from './content'
-import ModeMenu from './ModeMenu'
 
 type Props = {
   draft: string
@@ -68,7 +66,7 @@ export default function Composer({ draft, onDraftChange, mode, onModeChange }: P
 
         <div className="db-composer__bar">
           <input type="file" multiple hidden ref={fileInput} onChange={addFiles} />
-          <AttachMenu onUpload={() => fileInput.current?.click()} />
+          <AttachMenu onUpload={() => fileInput.current?.click()} onImport={() => nav('/import')} onUseSkill={() => nav('/skills')} />
           <NeuButton size="sm" pill className="db-composer__template" onClick={() => nav('/templates')}>
             <Ico d={ICON.templateAdd} size={14} sw={1.9} /><span>Start from a template</span>
           </NeuButton>

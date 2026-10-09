@@ -9,7 +9,7 @@ import RecentsList from './RecentsList'
 import ShellIcon from './ShellIcon'
 import SidebarNav from './SidebarNav'
 import type { NavId, PopoverControl } from './types'
-import { useEscape } from '../hooks/useEscape'
+import { useEscape } from '../../lib/useEscape'
 import { RAIL_WIDTH } from './useSidebarState'
 import WorkspaceSwitcher from './WorkspaceSwitcher'
 

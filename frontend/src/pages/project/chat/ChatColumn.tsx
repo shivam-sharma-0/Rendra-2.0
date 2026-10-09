@@ -1,0 +1,110 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { type AgentRun, type AgentStep, type Message, type MessageFeedback, type Project, type ProjectType, type RequirementSession } from '../../../api/projects'
+import { Ico } from '../../../rendra/parts'
+import { RequirementAnswerCard, RequirementWaiting } from '../dialogs/RequirementDialog'
+import { needsRequirementInterview } from '../runUtils'
+import type { LayoutMode, Quote } from '../workspaceTypes'
+import { BuildStatus } from './BuildStatus'
+import { ChatMessage } from './ChatMessage'
+import { Composer } from './Composer'
+import { orderMessages } from './orderMessages'
+import { SelectionReplyPopup } from './SelectionReplyPopup'
+import './chat.css'
+
+const CHEVRON_ICON = 'm6 9 6 6 6-6'
+/** Panel outline with its side open / closed, for the "show panel" / "focus chat" toggle. */
+const PANEL_OPEN_ICON = 'M3 3h18v18H3zM15 3v18M8 10l2 2-2 2'
+const PANEL_CLOSE_ICON = 'M3 3h18v18H3zM15 3v18'
+
+type ChatColumnProps = {
+  project: Project | null
+  messages: Message[]
+  runs: AgentRun[]
+  stepsByRun: Record<string, AgentStep[]>
+  loading: boolean
+  hasOlder: boolean
+  loadingOlder: boolean
+  onLoadOlder: () => void
+  requirements: RequirementSession | null
+  rollbackError?: string
+  sendError?: string
+  editRequest: { text: string; nonce: number } | null
+  onSend: (prompt: string, mode: ProjectType, files?: File[]) => Promise<void>
+  onFeedback: (messageId: string, feedback: MessageFeedback | null) => void
+  onEdit: (text: string) => void
+  onOpenDetails: () => void
+  onOpenPreview: () => void
+  onOpenThinking: (reasoning: string, seconds: number) => void
+  layoutMode: LayoutMode
+  chatWidth: number
+  dragging: boolean
+  onToggleFocus: () => void
+}
+
+/** Left side of the workspace: project header, the conversation, and the composer. */
+export function ChatColumn({
+  project, messages, runs, stepsByRun, loading, hasOlder, loadingOlder, onLoadOlder,
+  requirements, rollbackError, sendError, editRequest, onSend, onFeedback, onEdit,
+  onOpenDetails, onOpenPreview, onOpenThinking, layoutMode, chatWidth, dragging, onToggleFocus,
+}: ChatColumnProps) {
+  const [quote, setQuote] = useState<Quote | null>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const chatInnerRef = useRef<HTMLDivElement>(null)
+  const ordered = useMemo(() => orderMessages(messages), [messages])
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+
+  return (
+    <section className={'ws-chat' + (layoutMode === 'preview-only' ? ' ws-chat--hidden' : '')} style={{
+      width: layoutMode === 'split' ? chatWidth : undefined,
+      flex: layoutMode === 'chat-only' ? '1 1 auto' : undefined,
+      transition: dragging ? 'none' : 'flex-basis .3s cubic-bezier(.16,1,.3,1), width .18s ease, opacity .25s ease',
+    }}>
+      <header className="ws-chat-head">
+        <button type="button" className="ws-project">
+          <span>{project?.name ?? 'Loading…'}</span>
+          <Ico d={CHEVRON_ICON} size={13} sw={2.2} />
+        </button>
+        <BuildStatus runs={runs} />
+        <span className="ws-grow" />
+        <button
+          type="button"
+          className="ws-flat-btn"
+          onClick={onToggleFocus}
+          aria-label={layoutMode === 'chat-only' ? 'Show panel' : 'Focus chat'}
+          title={layoutMode === 'chat-only' ? 'Show panel' : 'Focus chat'}
+        >
+          <Ico d={layoutMode === 'chat-only' ? PANEL_OPEN_ICON : PANEL_CLOSE_ICON} size={16} sw={2} />
+        </button>
+      </header>
+      <SelectionReplyPopup containerRef={chatInnerRef} onQuote={setQuote} />
+      <div className="ws-chat__scroll">
+        <div className="ws-chat__inner" ref={chatInnerRef}>
+          {!loading && hasOlder && (
+            <button type="button" className="ws-chat__older" onClick={onLoadOlder} disabled={loadingOlder}>
+              {loadingOlder ? 'Loading…' : 'Load older messages'}
+            </button>
+          )}
+          {loading
+            ? <p className="ws-chat__note">Loading conversation…</p>
+            : ordered.map((m) => {
+                const msgRun = m.role === 'ASSISTANT' ? runs.find((r) => r.messageId === m.id) : undefined
+                const msgSteps = msgRun ? stepsByRun[msgRun.id] ?? [] : []
+                return (
+                  <ChatMessage key={m.id} message={m} run={msgRun} steps={msgSteps}
+                    onOpenDetails={onOpenDetails} onOpenPreview={onOpenPreview} onOpenThinking={onOpenThinking}
+                    onFeedback={(feedback) => onFeedback(m.id, feedback)} onEdit={onEdit} />
+                )
+              })}
+          {rollbackError && <p className="ws-chat__error">{rollbackError}</p>}
+          {sendError && <p className="ws-chat__error" role="alert">{sendError}</p>}
+          {requirements?.complete && <RequirementAnswerCard projectName={project?.name} session={requirements} onPreview={onOpenPreview} />}
+          {project?.lifecycleStage === 'REQUIREMENTS' && needsRequirementInterview(project) && <RequirementWaiting />}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+      <Composer defaultMode={project?.type ?? 'BUILD'} onSend={onSend} quote={quote} onClearQuote={() => setQuote(null)}
+        editRequest={editRequest} />
+    </section>
+  )
+}

@@ -1,31 +1,30 @@
-import type { ComponentType } from 'react'
 import { clearLoggedOutMarker, googleLoginUrl } from '../../../auth/api'
+import BrandLogo from '../../../components/brand/BrandLogo'
+import type { BrandId } from '../../../components/brand/brands'
 import { NeuButton } from '../../../components/neu'
-import { AppleLogo, GitHubLogo, GoogleLogo } from './ProviderLogos'
 
 type Provider = {
-  id: 'google' | 'github' | 'apple'
+  id: Extract<BrandId, 'google' | 'github' | 'apple'>
   name: string
-  Logo: ComponentType<{ className?: string }>
   /** OAuth start URL; providers without one are shown as "Soon". */
   href?: () => string
   lastUsed?: boolean
 }
 
 const PROVIDERS: readonly Provider[] = [
-  { id: 'google', name: 'Google', Logo: GoogleLogo, href: googleLoginUrl, lastUsed: true },
-  { id: 'github', name: 'GitHub', Logo: GitHubLogo },
-  { id: 'apple', name: 'Apple', Logo: AppleLogo },
+  { id: 'google', name: 'Google', href: googleLoginUrl, lastUsed: true },
+  { id: 'github', name: 'GitHub' },
+  { id: 'apple', name: 'Apple' },
 ]
 
 /** "Continue with …" buttons. Only providers with an OAuth URL are enabled. */
 export default function SocialProviders() {
   return (
     <>
-      {PROVIDERS.map(({ id, name, Logo, href, lastUsed }) => {
+      {PROVIDERS.map(({ id, name, href, lastUsed }) => {
         const content = (
           <>
-            <Logo className="kau-provider-logo" />
+            <BrandLogo brand={id} size={18} className="kau-provider-logo" />
             <span>Continue with {name}</span>
             {!href && <span className="kau-tag">Soon</span>}
             {href && lastUsed && <span className="kau-tag kau-tag--last neu-well">Last used</span>}

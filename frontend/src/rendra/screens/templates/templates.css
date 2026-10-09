@@ -1,0 +1,15 @@
+/* Templates screen. Colours and depth come from the neumorphic kit's --neu-* tokens. */
+
+.tp-cats { display: flex; flex-wrap: wrap; gap: 10px; }
+.tp-cat { color: var(--neu-muted); }
+.tp-cat:hover { color: var(--neu-ink); }
+/* The chosen category is pressed in. */
+.tp-cat.is-on, .tp-cat.is-on:hover { color: var(--neu-ink); font-weight: 600; box-shadow: var(--neu-inset-sm); }
+
+.tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 24px; }
+.tp-card { display: flex; flex-direction: column; gap: 12px; padding: 10px 10px 12px; }
+.tp-card__well { padding: 6px; border-radius: 14px; }
+.tp-card__meta { display: flex; align-items: center; gap: 10px; padding: 0 4px 0 6px; }
+.tp-card__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tp-card__text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14.5px; font-weight: 600; }
+.tp-card__text small { font-size: 12.5px; color: var(--neu-faint); }

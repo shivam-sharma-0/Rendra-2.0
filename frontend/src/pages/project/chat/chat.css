@@ -1,0 +1,153 @@
+/* The conversation: message list, user bubbles, reply chips and actions, pending states and the
+   composer. On the neumorphic kit's --neu-* tokens, so it follows light/dark. The reply menu and the
+   "Reply" pill are portalled to <body>, so they use only global tokens. */
+
+/* ── List ── */
+.ws-chat__scroll { flex: 1; min-height: 0; overflow: auto; padding: 4px 14px 12px; }
+.ws-chat__inner { max-width: var(--chat-col); margin: 0 auto; display: flex; flex-direction: column; gap: 18px; padding-top: 6px; }
+.ws-chat__older {
+  align-self: center; height: 30px; padding: 0 14px; border: 0; border-radius: 999px;
+  background: var(--neu-surface); box-shadow: var(--neu-raised-sm); color: var(--neu-muted);
+  font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+}
+.ws-chat__older:hover { color: var(--neu-ink); }
+.ws-chat__older:disabled { opacity: .6; cursor: progress; }
+.ws-chat__note { margin: 0; padding: 8px; text-align: center; font-size: 13px; color: var(--neu-faint); }
+.ws-chat__error { margin: 0; padding: 9px 12px; border-radius: 12px; box-shadow: var(--neu-inset-sm); font-size: 13px; color: var(--neu-danger); }
+
+/* ── Messages ── */
+.msg { display: flex; flex-direction: column; min-width: 0; }
+.msg--user { align-items: flex-end; gap: 4px; }
+.msg--agent { gap: 8px; color: var(--neu-ink); }
+.msg__bubble {
+  max-width: 82%; padding: 10px 15px; border-radius: 18px 18px 6px 18px;
+  background: var(--neu-surface); box-shadow: var(--neu-raised-sm); color: var(--neu-ink);
+  font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+/* "Thought for 6s" / "2 files changed" */
+.msg__chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.msg-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px;
+  border: 0; border-radius: 999px; background: var(--neu-surface); box-shadow: var(--neu-raised-sm);
+  color: var(--neu-muted); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  transition: box-shadow .18s, color .15s;
+}
+.msg-chip svg { flex: none; color: var(--neu-faint); }
+.msg-chip:hover { color: var(--neu-ink); box-shadow: var(--neu-raised); }
+.msg-chip:active { box-shadow: var(--neu-inset-sm); }
+
+/* Copy / feedback / more; on user messages they appear on hover or focus */
+.msg__actions { display: flex; align-items: center; gap: 2px; margin-left: -6px; }
+.msg__actions--on-hover { margin: 0 -4px 0 0; opacity: 0; transition: opacity .15s; }
+.msg--user:hover .msg__actions--on-hover, .msg--user:focus-within .msg__actions--on-hover { opacity: 1; }
+.msg__time { margin-left: 6px; font-size: 11.5px; color: var(--neu-dim); white-space: nowrap; }
+.msg-icon {
+  width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 9px;
+  background: none; color: var(--neu-dim); cursor: pointer; transition: box-shadow .15s, color .15s;
+}
+.msg-icon:hover { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
+.msg-icon.is-active { color: var(--neu-accent); box-shadow: var(--neu-inset-sm); }
+.msg-icon.is-copied { color: #16A36A; }
+
+.ws-chat__older:focus-visible, .msg-chip:focus-visible, .msg-icon:focus-visible, .msg-menu__item:focus-visible,
+.msg-reply-pop:focus-visible, .ws-quote button:focus-visible {
+  outline: 2px solid var(--neu-focus); outline-offset: 2px;
+}
+
+/* ── Reply text (Markdown) in the chat ── */
+.ws-chat .pw-md { font-size: 14.5px; font-weight: 400; line-height: 1.65; color: var(--neu-ink); }
+.ws-chat .pw-md :is(p, li) { font-size: inherit; color: var(--neu-ink); }
+.ws-chat .pw-md :is(h1, h2, h3) { font-family: inherit; color: var(--neu-ink); letter-spacing: -.01em; }
+.ws-chat .pw-md h1 { font-size: 18px; }
+.ws-chat .pw-md h2 { font-size: 16px; }
+.ws-chat .pw-md h3 { font-size: 15px; }
+/* The global reset removes list markers; replies need them back */
+.ws-chat .pw-md ul { list-style: disc; }
+.ws-chat .pw-md ol { list-style: decimal; }
+.ws-chat .pw-md li::marker { color: var(--neu-dim); }
+.ws-chat .pw-md a { color: var(--neu-link); }
+.ws-chat .pw-md hr { border-top-color: var(--ws-line); }
+.ws-chat .pw-md code { padding: 1px 6px; border: 0; border-radius: 6px; background: var(--neu-surface); box-shadow: var(--neu-inset-sm); color: var(--neu-ink); font-size: 12.5px; }
+.ws-chat .pw-md pre { padding: 12px 14px; border-radius: 12px; background: #1B1A20; box-shadow: var(--neu-inset); }
+.ws-chat .pw-md pre code { padding: 0; background: none; box-shadow: none; color: #F3F1EC; }
+.ws-chat .pw-md blockquote { border-left: 3px solid var(--neu-accent); border-radius: 0 10px 10px 0; background: none; box-shadow: var(--neu-inset-sm); color: var(--neu-muted); }
+/* Tables sit in a recessed well */
+.ws-chat .pw-md table { border-collapse: separate; border-spacing: 0; border-radius: 12px; box-shadow: var(--neu-inset-sm); overflow: hidden; font-size: 13.5px; }
+.ws-chat .pw-md :is(th, td) { padding: 8px 12px; border: 0; border-top: 1px solid var(--ws-line); }
+.ws-chat .pw-md thead :is(th, td), .ws-chat .pw-md table > tbody:first-child > tr:first-child > * { border-top: 0; }
+.ws-chat .pw-md th { background: none; color: var(--neu-faint); font-size: 11.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+
+/* ── While a reply is pending ── */
+.msg-thinking { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 13.5px; color: var(--neu-muted); }
+.msg-spin { flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--ws-line); border-top-color: var(--neu-accent); animation: msg-spin .8s linear infinite; }
+.msg-build { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 16px; background: var(--neu-surface); box-shadow: var(--neu-raised-sm); }
+.msg-build > b { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; }
+.msg-build__orb { flex: none; width: 20px; height: 20px; border-radius: 50%; background: conic-gradient(from 0deg, #FF5B2E, #FFB23E, #5B4CF5, #FF5B2E); animation: msg-spin 1.4s linear infinite; }
+.msg-build .pw-step { color: var(--neu-muted); }
+.msg-build .pw-step.thinking { color: var(--neu-ink); }
+.msg-build .pw-dot { background: var(--neu-dim); }
+.msg-build .pw-step code { background: var(--neu-surface); box-shadow: var(--neu-inset-sm); color: var(--neu-muted); }
+/* The reasoning step inside the card matches the reply chips */
+.msg-build .pw-thinking { height: 28px; padding: 0 11px; border: 0; background: var(--neu-surface); box-shadow: var(--neu-raised-sm); color: var(--neu-muted); }
+.msg-build .pw-thinking:hover:not(:disabled) { background: var(--neu-surface); color: var(--neu-ink); }
+.msg-build .pw-thinking.active { background: var(--neu-surface); box-shadow: var(--neu-inset-sm); color: var(--neu-ink); }
+.msg-build .pw-thinking svg { color: var(--neu-faint); }
+@keyframes msg-spin { to { transform: rotate(360deg); } }
+
+/* ── Reply "more" menu (portalled) ── */
+.msg-menu-anchor { position: relative; }
+.msg-menu-scrim { position: fixed; inset: 0; z-index: 1000; }
+.msg-menu {
+  position: fixed; z-index: 1001; width: 210px; padding: 6px; border-radius: 14px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--neu-surface); box-shadow: var(--neu-raised); color: var(--neu-ink);
+  font: 13px/1.4 Geist, system-ui, sans-serif;
+}
+.msg-menu__item { height: 34px; padding: 0 10px; border: 0; border-radius: 10px; background: none; color: var(--neu-ink); font: inherit; font-weight: 500; text-align: left; cursor: pointer; }
+.msg-menu__item:hover:not(:disabled) { box-shadow: var(--neu-raised-sm); }
+.msg-menu__item:disabled { color: var(--neu-dim); cursor: not-allowed; }
+.msg-menu__sep { margin: 4px 6px; border-top: 1px solid var(--neu-dashed); }
+.msg-menu__row { display: flex; align-items: center; justify-content: space-between; padding: 5px 10px; font-size: 12.5px; color: var(--neu-faint); }
+.msg-menu__row b { color: var(--neu-ink); font-weight: 600; }
+
+/* "Reply" pill over selected text (portalled) */
+.msg-reply-pop {
+  position: fixed; z-index: 1001; transform: translate(-50%, calc(-100% - 8px));
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px;
+  border: 0; border-radius: 999px; background: var(--neu-primary-bg); color: var(--neu-primary-ink);
+  box-shadow: var(--neu-raised-sm); font: 500 12.5px Geist, system-ui, sans-serif; cursor: pointer;
+}
+
+/* ── Composer ── */
+.ws-composer {
+  flex: none; width: calc(100% - 20px); max-width: var(--chat-col); margin: 0 auto 10px; padding: 10px;
+  border-radius: 20px; background: var(--neu-surface); box-shadow: var(--neu-raised);
+}
+.ws-composer__field { padding: 10px 12px; border-radius: 14px; }
+.ws-composer__field:focus-within { box-shadow: var(--neu-inset), 0 0 0 2px var(--neu-focus); }
+.ws-composer__field textarea {
+  display: block; width: 100%; min-height: 44px; max-height: 160px; padding: 0; border: 0; outline: none; resize: none;
+  background: transparent; color: var(--neu-ink); font: inherit; font-size: 14.5px; line-height: 1.5;
+}
+.ws-composer__field textarea::placeholder { color: var(--neu-dim); }
+.ws-composer .prompt-files { margin-top: 8px; }
+.ws-composer__bar { display: flex; align-items: center; gap: 8px; padding: 10px 2px 0; }
+.ws-composer__send { width: 34px; height: 34px; }
+.ws-composer__send:disabled { opacity: .45; cursor: not-allowed; }
+
+/* The quoted selection being replied to */
+.ws-quote {
+  display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; padding: 8px 10px;
+  border-left: 3px solid var(--neu-accent); border-radius: 4px 12px 12px 4px; box-shadow: var(--neu-inset-sm);
+  font-size: 12.5px; color: var(--neu-muted);
+}
+.ws-quote > svg { flex: none; margin-top: 2px; color: var(--neu-faint); }
+.ws-quote span { flex: 1; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; }
+.ws-quote button { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: var(--neu-faint); cursor: pointer; }
+.ws-quote button:hover { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-spin, .msg-build__orb { animation-duration: 3s; }
+  .msg-chip, .msg-icon, .msg__actions--on-hover { transition: none; }
+}

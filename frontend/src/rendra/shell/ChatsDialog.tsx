@@ -6,7 +6,7 @@ import { useWorkspace } from '../../workspace/WorkspaceContext'
 import { ICON } from '../icons'
 import { relTime } from '../parts'
 import ShellIcon from './ShellIcon'
-import { useEscape } from '../hooks/useEscape'
+import { useEscape } from '../../lib/useEscape'
 
 const PAGE_SIZE = 8
 const FILTERS = { all: 'All', recent: 'Recent', pinned: 'Pinned' } as const

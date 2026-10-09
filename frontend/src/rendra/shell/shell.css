@@ -142,3 +142,6 @@
 .kap-rail-toggle:hover .kap-brand-orb, .kap-rail-toggle:focus-visible .kap-brand-orb { opacity: 0; }
 .kap-rail-toggle:hover .kap-rail-toggle__icon, .kap-rail-toggle:focus-visible .kap-rail-toggle__icon { opacity: 1; }
 .kap .kap-ws-progress-fill.is-near-limit { background: var(--neu-danger); }
+.kap .kap-main--plain .kap-search-btn { border: 0; background: var(--neu-surface); color: var(--neu-faint); box-shadow: var(--neu-inset-sm); transition: box-shadow .18s, color .15s; }
+.kap .kap-main--plain .kap-search-btn:hover { color: var(--neu-ink); box-shadow: var(--neu-inset); }
+.kap .kap-main--plain .kap-search-btn kbd { border: 0; background: transparent; color: var(--neu-dim); box-shadow: var(--neu-raised-sm); }

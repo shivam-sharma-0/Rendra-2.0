@@ -1,7 +1,8 @@
 import { useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { cx } from '../../lib/cx'
 
-export type SegmentOption<T extends string> = { value: T; label: ReactNode }
+/** `title` names an option whose label is only an icon (used as its accessible name and tooltip). */
+export type SegmentOption<T extends string> = { value: T; label: ReactNode; title?: string }
 
 type Props<T extends string> = {
   options: readonly SegmentOption<T>[]
@@ -43,6 +44,8 @@ export default function NeuSegmentedControl<T extends string>({ options, value, 
           aria-checked={i === selected}
           tabIndex={i === selected ? 0 : -1}
           className="neu-segmented__option"
+          aria-label={option.title}
+          title={option.title}
           onClick={() => onChange(option.value)}
         >
           {option.label}

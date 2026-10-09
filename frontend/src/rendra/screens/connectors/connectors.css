@@ -1,0 +1,15 @@
+/* Connectors screen. Colours and depth come from the neumorphic kit's --neu-* tokens. */
+
+.cn-group { display: flex; flex-direction: column; gap: 14px; }
+.cn-group h2 { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--neu-faint); }
+.cn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 22px; }
+
+.cn-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.cn-card__top { display: flex; align-items: center; gap: 12px; }
+.cn-card__logo { flex: none; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
+.cn-card__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cn-card__text b { font-size: 14.5px; font-weight: 600; }
+.cn-card__text small { font-size: 12px; color: var(--neu-faint); }
+.cn-card p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--neu-muted); }
+/* Connected is shown pressed in, with a green check. */
+.cn-card__toggle.is-on, .cn-card__toggle.is-on:hover { color: #16A36A; box-shadow: var(--neu-inset-sm); }

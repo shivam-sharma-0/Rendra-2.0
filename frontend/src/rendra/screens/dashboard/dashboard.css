@@ -2,7 +2,6 @@
 
 .db { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; padding: 0 28px 40px; color: var(--neu-ink); }
 .db-grow { flex: 1; }
-.db-anchor { position: relative; }
 
 /* Hero: fills the first screen below the top bar; the extra bottom padding lifts the
    composer to just below the middle, like the landing page. */
@@ -29,32 +28,6 @@
 .db-composer__bar { display: flex; align-items: center; gap: 10px; padding: 14px 2px 0; }
 .db-composer__template { color: var(--neu-muted); }
 
-.db-files { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; padding: 0; }
-.db-file { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px 0 10px; border-radius: 999px; font-size: 12.5px; color: var(--neu-muted); }
-.db-file span { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.db-file button { width: 20px; height: 20px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--neu-faint); cursor: pointer; }
-.db-file button:hover { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
-
-/* Dropdown menus (attach, mode) */
-.db-menu {
-  position: absolute; top: calc(100% + 10px); left: 0; z-index: 60;
-  width: 280px; padding: 6px; border-radius: 16px;
-  display: flex; flex-direction: column; gap: 2px;
-  background: var(--neu-surface); box-shadow: var(--neu-raised);
-  animation: db-pop .16s ease both;
-}
-.db-menu--end { left: auto; right: 0; }
-.db-menu__item {
-  display: flex; align-items: flex-start; gap: 10px; width: 100%;
-  padding: 9px 10px; border: 0; border-radius: 11px; background: transparent;
-  color: var(--neu-muted); font: inherit; text-align: left; cursor: pointer; transition: box-shadow .15s, color .15s;
-}
-.db-menu__item svg { flex: none; margin-top: 2px; }
-.db-menu__item b { display: block; font-size: 13px; font-weight: 600; color: var(--neu-ink); line-height: 1.3; }
-.db-menu__item small { display: block; margin-top: 1px; font-size: 11.5px; line-height: 1.35; color: var(--neu-faint); }
-.db-menu__item:hover, .db-menu__item:focus-visible { outline: none; box-shadow: var(--neu-raised-sm); color: var(--neu-ink); }
-.db-menu__item.is-selected { box-shadow: var(--neu-inset-sm); color: var(--neu-ink); }
-
 /* Idea chips */
 .db-ideas { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; max-width: 720px; }
 .db-ideas .neu-btn { color: var(--neu-muted); gap: 7px; }
@@ -67,25 +40,6 @@
 .db-recent__state { display: grid; place-items: center; padding: 40px; }
 .db-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; }
 
-.db-card { display: flex; flex-direction: column; gap: 12px; padding: 10px 10px 14px; color: inherit; text-decoration: none; }
-.db-card:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 3px; }
-.db-card__well { position: relative; padding: 6px; border-radius: 14px; }
-.db-card__preview { height: 132px; padding: 16px; border-radius: 10px; display: flex; flex-direction: column; gap: 9px; background: var(--card-bg); }
-.db-card__bar { width: 62%; height: 14px; border-radius: 5px; background: var(--card-fg); }
-.db-card__bar--short { width: 40%; height: 8px; opacity: .45; }
-.db-card__tiles { margin-top: auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.db-card__tiles span { height: 36px; border-radius: 8px; background: var(--card-tile); }
-.db-card__status {
-  position: absolute; top: 14px; right: 14px;
-  display: flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px;
-  background: rgba(255, 255, 255, .9); color: #16151A; font-size: 11px; font-weight: 600;
-}
-.db-card__status i { width: 7px; height: 7px; border-radius: 50%; }
-.db-card__meta { display: flex; flex-direction: column; gap: 2px; padding: 0 6px; min-width: 0; }
-.db-card__meta b { font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.db-card__meta small { font-size: 12.5px; color: var(--neu-faint); }
-
-@keyframes db-pop { from { opacity: 0; transform: translateY(-4px) } }
 
 @media (max-width: 900px) {
   .db { padding: 0 16px 32px; }
@@ -95,7 +49,4 @@
 @media (max-width: 560px) {
   .db-composer__template span { display: none; }
   .db-composer__bar { gap: 8px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .db-menu { animation: none; }
 }

@@ -4,8 +4,8 @@ import { neuButtonClass } from '../../../components/neu'
 import { EmptyState, ErrorState, Spinner } from '../../../components/ui/States'
 import { useWorkspace } from '../../../workspace/WorkspaceContext'
 import { ICON } from '../../icons'
-import { Ico, paletteFor } from '../../parts'
-import ProjectCard from './ProjectCard'
+import { Ico } from '../../parts'
+import ProjectCard from '../../ui/ProjectCard'
 
 const SHOWN = 3
 
@@ -31,7 +31,7 @@ export default function RecentProjects() {
         <EmptyState title="No projects yet" hint="Describe an idea above to create your first one." />
       ) : (
         <div className="db-grid">
-          {projects.map((p) => <ProjectCard key={p.id} project={p} palette={paletteFor(p.id)} />)}
+          {projects.map((p) => <ProjectCard key={p.id} project={p} />)}
         </div>
       )}
     </section>

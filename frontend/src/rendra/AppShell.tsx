@@ -5,7 +5,7 @@ import ChatsDialog from './shell/ChatsDialog'
 import Sidebar from './shell/Sidebar'
 import TopBar from './shell/TopBar'
 import type { NavId, PopoverControl, ShellPopover } from './shell/types'
-import { useEscape } from './hooks/useEscape'
+import { useEscape } from '../lib/useEscape'
 import { useSidebarState } from './shell/useSidebarState'
 import '../components/neu' // soft-UI --neu-* tokens used by shell.css
 import './shell/shell.css'

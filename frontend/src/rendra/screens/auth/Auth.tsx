@@ -1,3 +1,4 @@
+import { Navigate } from 'react-router-dom'
 import { NeuSegmentedControl, type SegmentOption } from '../../../components/neu'
 import type { AuthMode } from './authSchema'
 import AuthDialog from './AuthDialog'
@@ -20,6 +21,7 @@ const TITLES: Record<AuthMode, string> = {
 /** Log in / sign up dialog shown over the landing page at /auth, /login and /signup. */
 export default function Auth() {
   const flow = useAuthFlow()
+  if (flow.signedInAlready) return <Navigate to="/dashboard" replace />
 
   return (
     <AuthDialog title={TITLES[flow.mode]} onClose={flow.close} footer={<AuthFooter mode={flow.mode} />}>

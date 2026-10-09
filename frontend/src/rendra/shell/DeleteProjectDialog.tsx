@@ -1,4 +1,4 @@
-import { useEscape } from '../hooks/useEscape'
+import { useEscape } from '../../lib/useEscape'
 
 type Props = {
   projectName: string
