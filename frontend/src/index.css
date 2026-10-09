@@ -320,25 +320,6 @@ body {
 .kl button { font-family: inherit; cursor: pointer; transition: background .2s, color .2s, border-color .2s, transform .2s, box-shadow .2s; }
 .kl button:active { transform: scale(.97); }
 
-/* ── Rendra Auth scoped tokens + base resets ──────────────────────────────── */
-.kau {
-  --ink: #16151A; --muted: #4A4852; --faint: #6E6B74; --dim: #8A8791;
-  --bg: #F6F4EF; --card: #FFFFFF; --line: #E8E4DB; --line-2: #CFCBC0;
-  --accent: #FF5B2E; --violet: #5B4CF5; --violet-soft: #F1EEFF; --violet-ink: #3D30C9;
-  --tab-bg: #F1EEE8;
-}
-.dark .kau {
-  --bg: #17161B; --card: #201F25; --ink: #F4F1E9; --muted: #C9C6CE; --faint: #AAA6AF;
-  --line: #3A373F; --line-2: #3A373F; --tab-bg: #2B2930;
-}
-.kau a { text-decoration: none; color: var(--ink); }
-.kau button { font-family: inherit; cursor: pointer; transition: background .2s, color .2s, border-color .2s, transform .2s, box-shadow .2s; }
-.kau button:active { transform: scale(.98); }
-.kau input { font-family: inherit; }
-.kau input::placeholder { color: var(--dim); }
-.dark .kau-input { background: #19181D; }
-.dark .kau-cta { background: #F6F4EF; color: #16151A; }
-
 /* ── Rendra shared keyframes ──────────────────────────────────────────────── */
 @keyframes kl-fade { from { opacity: 0 } to { opacity: 1 } }
 @keyframes kl-spin { to { transform: rotate(360deg) } }
@@ -348,9 +329,6 @@ body {
 @keyframes kl-floaty-left { 0%, 100% { transform: translateY(0) rotate(-4deg) } 50% { transform: translateY(-10px) rotate(-4deg) } }
 @keyframes kl-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
 @keyframes kl-marquee { to { transform: translateX(-50%) } }
-@keyframes kau-fade { from { opacity: 0 } to { opacity: 1 } }
-@keyframes kau-spin { to { transform: rotate(360deg) } }
-@keyframes kau-rise { from { opacity: 0; transform: translateY(14px) } to { opacity: 1; transform: none } }
 
 /* Rendra landing staggered-rise utilities */
 .kl-rise { animation: kl-rise .8s cubic-bezier(.2,.8,.2,1) both; }

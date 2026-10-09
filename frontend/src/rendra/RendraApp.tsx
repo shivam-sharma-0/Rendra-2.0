@@ -9,7 +9,7 @@ import { LoadingState } from '../components/ui/States'
 import RendraLanding from './screens/Landing'
 
 // Auth pulls in react-hook-form + zod; lazy-load it so those stay out of the landing bundle.
-const Auth = lazy(() => import('./screens/Auth'))
+const Auth = lazy(() => import('./screens/auth/Auth'))
 // Onboarding is a large post-signup wizard with its own CSS — lazy-load it too.
 const Onboarding = lazy(() => import('./screens/Onboarding'))
 // Dashboard home uses the shared AppShell (own CSS) — lazy-load it.

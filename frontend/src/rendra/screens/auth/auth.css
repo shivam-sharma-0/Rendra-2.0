@@ -1,0 +1,77 @@
+/* Auth dialog layout. Colours and depth come from the neumorphic kit's --neu-* tokens. */
+
+.kau-backdrop {
+  position: fixed; inset: 0; z-index: 999;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+  /* No tint: the page stays visible, just softened slightly so the dialog reads first. */
+  background: transparent;
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  color: var(--neu-ink);
+  font: 14px/1.4 'Geist', system-ui, sans-serif;
+  animation: kau-fade .26s ease both;
+}
+
+/* The backdrop is transparent, so a visible edge keeps the dialog distinct from the page behind it. */
+.kau-dialog {
+  --kau-edge: #CFC6B6;
+  width: 380px; max-width: 100%; max-height: 95vh; overflow-y: auto;
+  padding: 26px 28px 20px;
+  border: 1.5px solid var(--kau-edge);
+  animation: kau-rise .45s cubic-bezier(.2, .8, .2, 1) both;
+}
+.dark .kau-dialog { --kau-edge: #45424C; }
+@media (max-width: 600px) {
+  .kau-dialog { padding: 22px 18px 18px; border-radius: 20px; }
+}
+
+.kau-top { display: flex; align-items: center; justify-content: space-between; }
+.kau-brand { display: inline-flex; }
+.kau-brand .k-mark { width: 28px; height: 28px; }
+.kau-brand .k-mark i { width: 10px; height: 10px; background: var(--neu-surface); }
+
+.kau-head { display: flex; flex-direction: column; margin: 16px 0 14px; }
+.kau-eyebrow { font-size: 13.5px; font-weight: 600; color: var(--neu-dim); }
+.kau-eyebrow em { font-style: normal; color: var(--neu-accent); }
+.kau-head h1 { margin: 3px 0 0; font-size: 20px; font-weight: 700; line-height: 1.2; letter-spacing: -.01em; }
+
+.kau-modes { margin-bottom: 16px; }
+
+.kau-step { display: flex; flex-direction: column; gap: 9px; }
+.kau-dialog > .kau-step { animation: kau-swap .3s ease both; }
+
+/* Social provider logos and status tags */
+.kau-provider-logo { flex: none; }
+.kau-tag { position: absolute; right: 10px; padding: 3px 7px; border-radius: 8px; font-size: 10.5px; font-weight: 600; color: var(--neu-dim); }
+.kau-tag--last { color: var(--neu-link); }
+
+/* Password step */
+.kau-back {
+  align-self: flex-start; display: flex; align-items: center; gap: 6px;
+  padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--neu-faint);
+}
+.kau-back:hover { color: var(--neu-ink); }
+.kau-back:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 2px; border-radius: 4px; }
+
+.kau-email { height: 42px; padding: 0 6px 0 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--neu-muted); }
+.kau-email > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kau-email__change { height: 30px; padding: 0 11px; border-radius: 9px; font-size: 12.5px; font-weight: 600; color: var(--neu-link); }
+
+.kau-note { display: flex; align-items: center; gap: 7px; padding-left: 4px; font-size: 12px; color: var(--neu-faint); }
+
+.kau-foot {
+  position: relative; display: flex; flex-direction: column; gap: 6px;
+  margin-top: 16px; padding-top: 13px;
+  text-align: center; font-size: 11.5px; line-height: 1.4; color: var(--neu-faint);
+}
+.kau-foot::before { content: ""; position: absolute; top: 0; left: 18%; right: 18%; height: 3px; border-radius: 3px; box-shadow: var(--neu-inset-sm); }
+.kau-foot a { color: var(--neu-muted); text-decoration: underline; }
+.kau-sso { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+
+@keyframes kau-fade { from { opacity: 0 } }
+@keyframes kau-rise { from { opacity: 0; transform: translateY(14px) scale(.985) } }
+@keyframes kau-swap { from { opacity: 0; transform: translateX(10px) } }
+
+@media (prefers-reduced-motion: reduce) {
+  .kau-backdrop, .kau-dialog, .kau-dialog > .kau-step { animation: none; }
+}

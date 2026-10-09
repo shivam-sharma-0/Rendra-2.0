@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import AuroraBackground from '../components/AuroraBackground'
 import Logo from '../components/Logo'
-import { startProject, type ProjectType } from '../api/projects'
+import { startProject } from '../api/projects'
+import { takePendingPrompt } from '../rendra/pendingPrompt'
 
 /**
  * Landing spot for the backend's post-OAuth redirect. The refresh token was set as an
@@ -36,12 +37,9 @@ export default function OAuthCallback() {
     // Carry a guest's pending prompt through the OAuth round-trip: start their project and open it,
     // otherwise land on the dashboard.
     let cancelled = false
-    const pending = sessionStorage.getItem('rendra_pending_prompt')
+    const pending = takePendingPrompt()
     if (pending) {
-      const mode = (sessionStorage.getItem('rendra_pending_mode') || 'BUILD') as ProjectType
-      sessionStorage.removeItem('rendra_pending_prompt')
-      sessionStorage.removeItem('rendra_pending_mode')
-      startProject(pending, mode)
+      startProject(pending.prompt, pending.mode)
         .then((project) => { if (!cancelled) navigate(`/project/${project.id}`, { replace: true }) })
         .catch(() => { if (!cancelled) navigate('/dashboard', { replace: true }) })
     } else {
