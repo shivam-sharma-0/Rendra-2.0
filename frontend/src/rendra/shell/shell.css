@@ -141,3 +141,4 @@
 .kap-rail-toggle:hover, .kap-rail-toggle:focus-visible { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); outline: none; }
 .kap-rail-toggle:hover .kap-brand-orb, .kap-rail-toggle:focus-visible .kap-brand-orb { opacity: 0; }
 .kap-rail-toggle:hover .kap-rail-toggle__icon, .kap-rail-toggle:focus-visible .kap-rail-toggle__icon { opacity: 1; }
+.kap .kap-ws-progress-fill.is-near-limit { background: var(--neu-danger); }

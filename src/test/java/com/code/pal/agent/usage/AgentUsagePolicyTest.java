@@ -64,6 +64,25 @@ class AgentUsagePolicyTest {
     }
 
     @Test
+    void dailyUsageReportsTokensQuotaAndNextMidnightUtc() {
+        properties.getLimits().setDailyTokenQuota(50_000);
+        when(runs.sumTokensByUserIdSince(USER, Instant.parse("2026-10-03T00:00:00Z"))).thenReturn(1_234L);
+
+        AgentUsagePolicy.DailyUsage usage = policy.dailyUsage(USER);
+
+        assertEquals(1_234L, usage.tokensUsed());
+        assertEquals(50_000L, usage.quota());
+        assertEquals(Instant.parse("2026-10-04T00:00:00Z"), usage.resetsAt());
+    }
+
+    @Test
+    void dailyUsageReportsZeroQuotaWhenUnlimited() {
+        properties.getLimits().setDailyTokenQuota(0);
+
+        assertEquals(0L, policy.dailyUsage(USER).quota());
+    }
+
+    @Test
     void quotaCountsFromMidnightUtc() {
         policy.tokensUsedToday(USER);
 

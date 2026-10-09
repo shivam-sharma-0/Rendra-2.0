@@ -77,8 +77,22 @@ public class AgentUsagePolicy implements AgentTurnAdmission {
 
     /** Tokens the user's runs have consumed since 00:00 UTC today. */
     public long tokensUsedToday(Long userId) {
-        Instant startOfDay = clock.instant().truncatedTo(ChronoUnit.DAYS);
-        return runs.sumTokensByUserIdSince(userId, startOfDay);
+        return runs.sumTokensByUserIdSince(userId, startOfToday());
+    }
+
+    /** Today's token use against the daily quota, and when the count resets (next 00:00 UTC). */
+    public DailyUsage dailyUsage(Long userId) {
+        Instant startOfDay = startOfToday();
+        return new DailyUsage(runs.sumTokensByUserIdSince(userId, startOfDay), dailyTokenQuota(),
+                startOfDay.plus(1, ChronoUnit.DAYS));
+    }
+
+    /** {@code quota} 0 means unlimited. */
+    public record DailyUsage(long tokensUsed, long quota, Instant resetsAt) {
+    }
+
+    private Instant startOfToday() {
+        return clock.instant().truncatedTo(ChronoUnit.DAYS);
     }
 
     /** 0 means unlimited. */

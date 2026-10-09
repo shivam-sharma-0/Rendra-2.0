@@ -168,6 +168,13 @@ export const projectMemberApi = {
 }
 
 /** The signed-in user's notification feed. */
+/** The signed-in user's AI token use today; `quota` 0 means unlimited. Resets at 00:00 UTC. */
+export type DailyUsage = { tokensUsed: number; quota: number; resetsAt: string }
+
+export const usageApi = {
+  daily: (opts?: ReadOpts) => apiGet<DailyUsage>('/api/usage/daily', opts),
+}
+
 export const notificationApi = {
   list: (opts?: ReadOpts) => apiGet<AppNotification[]>('/api/notifications', opts),
   unreadCount: (opts?: ReadOpts) => apiGet<{ count: number }>('/api/notifications/unread-count', opts),

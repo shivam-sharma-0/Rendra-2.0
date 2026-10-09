@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  agentApi, databaseApi, filesApi, insightsApi, memberApi, messageApi, notificationApi, projectApi, projectMemberApi, startProject, workspaceApi,
+  agentApi, databaseApi, filesApi, insightsApi, memberApi, messageApi, notificationApi, projectApi, projectMemberApi, startProject, usageApi, workspaceApi,
   type ProjectRole, type ProjectType, type WorkspaceRole,
 } from './projects'
 import { newRequestId } from '../lib/ids'
@@ -15,6 +15,7 @@ export const qk = {
   workspaces: ['workspaces'] as const,
   workspace: (id: string) => ['workspaces', id] as const,
   members: (workspaceId: string) => ['workspaces', workspaceId, 'members'] as const,
+  dailyUsage: ['usage', 'daily'] as const,
   projects: (workspaceId: string, types?: ProjectType[]) =>
     ['workspaces', workspaceId, 'projects', { types: types ?? null }] as const,
   project: (id: string) => ['projects', id] as const,
@@ -99,6 +100,16 @@ export function useStagedFiles(projectId: string | null | undefined, runId: stri
 
 export function useNotifications(enabled = true) {
   return useQuery({ queryKey: qk.notifications, queryFn: ({ signal }) => notificationApi.list({ signal }), enabled })
+}
+
+/** Today's AI token use against the daily quota (refreshed when stale and on window focus). */
+export function useDailyUsage(enabled = true) {
+  return useQuery({
+    queryKey: qk.dailyUsage,
+    queryFn: ({ signal }) => usageApi.daily({ signal }),
+    enabled,
+    staleTime: 30_000,
+  })
 }
 
 export function useUnreadCount(enabled = true) {

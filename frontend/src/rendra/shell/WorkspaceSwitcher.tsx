@@ -1,9 +1,11 @@
 import { Link } from 'react-router-dom'
+import { useMembers } from '../../api/queries'
 import { useWorkspace } from '../../workspace/WorkspaceContext'
 import { ICON } from '../icons'
 import { initials } from '../parts'
 import ShellIcon from './ShellIcon'
 import type { PopoverControl } from './types'
+import UsageMeter from './UsageMeter'
 
 const BADGE_COLOURS = ['#16151A', '#5B4CF5', '#9A6000', '#0B7F58', '#C92A66']
 
@@ -28,7 +30,7 @@ export default function WorkspaceSwitcher({ badgeLabel, open, onToggle, onClose 
             <div className="kap-ws-pop-avatar"><ShellIcon d={ICON.upload} size={19} /></div>
             <div className="kap-ws-pop-info">
               <div className="kap-ws-pop-title">{name}</div>
-              <div className="kap-ws-pop-subtitle">Free Plan • 1 member</div>
+              <PlanLine workspaceId={selectedId} />
             </div>
           </div>
 
@@ -43,16 +45,7 @@ export default function WorkspaceSwitcher({ badgeLabel, open, onToggle, onClose 
 
           <div className="kap-ws-divider" />
 
-          <div className="kap-ws-credits">
-            <div className="kap-ws-credits-head">
-              <span className="kap-ws-credits-title">Credits</span>
-              <Link to="/settings/billing-and-usage" className="kap-ws-credits-badge" onClick={onClose}>
-                5 left <ShellIcon d={ICON.chevronRight} size={12} />
-              </Link>
-            </div>
-            <div className="kap-ws-progress"><div className="kap-ws-progress-fill" style={{ width: '100%' }} /></div>
-            <div className="kap-ws-credits-reset"><span className="kap-ws-bullet" /><span>Daily credits reset at midnight UTC</span></div>
-          </div>
+          <UsageMeter onNavigate={onClose} />
 
           {workspaces.length > 1 && (
             <>
@@ -84,6 +77,17 @@ export default function WorkspaceSwitcher({ badgeLabel, open, onToggle, onClose 
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/** "Free plan · N members". Every workspace is on the free plan until billing exists. */
+function PlanLine({ workspaceId }: { workspaceId: string | null }) {
+  const { data: members } = useMembers(workspaceId)
+  const count = members?.length
+  return (
+    <div className="kap-ws-pop-subtitle">
+      Free plan{count !== undefined && ` • ${count} ${count === 1 ? 'member' : 'members'}`}
     </div>
   )
 }
