@@ -1,7 +1,7 @@
 package com.code.pal.identity.security;
 
 import com.code.pal.identity.domain.AuthProvider;
-import com.code.pal.identity.dto.AuthResponse;
+import com.code.pal.identity.dto.OAuthLoginResult;
 import com.code.pal.identity.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -14,6 +14,7 @@ import org.springframework.security.oauth2.client.authentication.OAuth2Authentic
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.authentication.SimpleUrlAuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -57,11 +58,15 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         }
 
         AuthProvider provider = resolveProvider(authentication);
-        AuthResponse tokens = authService.oauthLogin(email, name, provider);
+        OAuthLoginResult result = authService.oauthLogin(email, name, provider);
 
         // Refresh token → HttpOnly cookie; the SPA fetches its access token via /api/auth/refresh.
-        response.addHeader(HttpHeaders.SET_COOKIE, cookies.build(tokens.refreshToken()).toString());
-        getRedirectStrategy().sendRedirect(request, response, successRedirect);
+        response.addHeader(HttpHeaders.SET_COOKIE, cookies.build(result.tokens().refreshToken()).toString());
+        // A first sign-in is flagged so the SPA can start onboarding. The flag grants nothing.
+        String target = result.newAccount()
+                ? UriComponentsBuilder.fromUriString(successRedirect).queryParam("new", "1").build().toUriString()
+                : successRedirect;
+        getRedirectStrategy().sendRedirect(request, response, target);
     }
 
     private static AuthProvider resolveProvider(Authentication authentication) {

@@ -4,6 +4,7 @@ import com.code.pal.identity.domain.AuthProvider;
 import com.code.pal.identity.domain.User;
 import com.code.pal.identity.dto.AuthResponse;
 import com.code.pal.identity.dto.LoginRequest;
+import com.code.pal.identity.dto.OAuthLoginResult;
 import com.code.pal.identity.dto.SignUpRequest;
 import com.code.pal.identity.dto.UserResponse;
 import com.code.pal.identity.exception.EmailAlreadyExistsException;
@@ -96,12 +97,13 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional
-    public AuthResponse oauthLogin(String email, String name, AuthProvider provider) {
+    public OAuthLoginResult oauthLogin(String email, String name, AuthProvider provider) {
         String normalized = normalize(email);
 
         // One indexed read; provision on first sight, otherwise just touch last-login.
         User user = userRepository.findByEmail(normalized).orElse(null);
-        if (user == null) {
+        boolean newAccount = user == null;
+        if (newAccount) {
             user = userRepository.save(User.builder()
                     .email(normalized)
                     .provider(provider)
@@ -117,7 +119,7 @@ public class AuthServiceImpl implements AuthService {
             user.setLastLoginAt(Instant.now());   // flushed on tx commit; no extra save()
             log.info("OAuth login id={} email={} provider={}", user.getId(), normalized, provider);
         }
-        return tokensFor(user);
+        return new OAuthLoginResult(tokensFor(user), newAccount);
     }
 
     private AuthResponse tokensFor(User user) {

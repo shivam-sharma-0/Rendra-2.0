@@ -34,18 +34,19 @@ export default function OAuthCallback() {
     }
     if (handled.current) return
     handled.current = true
-    // Carry a guest's pending prompt through the OAuth round-trip: start their project and open it,
-    // otherwise land on the dashboard.
-    let cancelled = false
+    // The backend adds `?new=1` when this sign-in created the account, so a new user starts onboarding.
+    const home = new URLSearchParams(window.location.search).get('new') === '1' ? '/onboarding/about-you' : '/dashboard'
+    // Carry a guest's pending prompt through the OAuth round-trip: start their project and open it.
+    // Not cancelled on cleanup: StrictMode re-runs this effect and `handled` skips the second run,
+    // so the first run must be allowed to finish and navigate.
     const pending = takePendingPrompt()
     if (pending) {
       startProject(pending.prompt, pending.mode)
-        .then((project) => { if (!cancelled) navigate(`/project/${project.id}`, { replace: true }) })
-        .catch(() => { if (!cancelled) navigate('/dashboard', { replace: true }) })
+        .then((project) => navigate(`/project/${project.id}`, { replace: true }))
+        .catch(() => navigate(home, { replace: true }))
     } else {
-      navigate('/dashboard', { replace: true })
+      navigate(home, { replace: true })
     }
-    return () => { cancelled = true }
   }, [isAuthenticated, loading, navigate])
 
   return (
