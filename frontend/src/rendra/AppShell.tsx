@@ -4,6 +4,9 @@ import ChatsDialog from './shell/ChatsDialog'
 import Sidebar from './shell/Sidebar'
 import TopBar from './shell/TopBar'
 import type { NavId, PopoverControl, ShellPopover } from './shell/types'
+import { useEscape } from './shell/useEscape'
+import { useSidebarState } from './shell/useSidebarState'
+import './shell/shell.css'
 
 export type { NavId } from './shell/types'
 
@@ -15,14 +18,21 @@ export type { NavId } from './shell/types'
 export default function AppShell({ active, children }: { active?: NavId; children: ReactNode }) {
   const { pathname } = useLocation()
   const openProjectId = pathname.startsWith('/project/') ? pathname.split('/')[2] : null
+  const sidebar = useSidebarState()
   const [popover, setPopover] = useState<ShellPopover>('none')
   const [chatsOpen, setChatsOpen] = useState(false)
+  useEscape(() => setPopover('none'), popover !== 'none')
 
   const control = (id: Exclude<ShellPopover, 'none'>): PopoverControl => ({
     open: popover === id,
     onToggle: () => setPopover((cur) => (cur === id ? 'none' : id)),
     onClose: () => setPopover('none'),
   })
+
+  const openChats = () => {
+    sidebar.closeDrawer()
+    setChatsOpen(true)
+  }
 
   return (
     <div className="kap h-screen flex bg-[var(--bg)] text-[var(--ink)] font-['Geist',system-ui,sans-serif] overflow-hidden">
@@ -33,13 +43,18 @@ export default function AppShell({ active, children }: { active?: NavId; childre
         active={active}
         openProjectId={openProjectId}
         chatsOpen={chatsOpen}
-        onOpenChats={() => setChatsOpen(true)}
+        onOpenChats={openChats}
         workspaceMenu={control('workspace')}
         accountMenu={control('account')}
+        collapsed={sidebar.collapsed}
+        onToggleCollapsed={sidebar.toggleCollapsed}
+        compact={sidebar.compact}
+        drawerOpen={sidebar.drawerOpen}
+        onCloseDrawer={sidebar.closeDrawer}
       />
 
       <main className="kap-main">
-        {!openProjectId && <TopBar active={active} notifications={control('notifications')} />}
+        {!openProjectId && <TopBar active={active} notifications={control('notifications')} onOpenMenu={sidebar.openDrawer} />}
         {children}
       </main>
     </div>

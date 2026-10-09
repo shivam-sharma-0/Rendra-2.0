@@ -17,21 +17,18 @@ export default function RecentsList({ openProjectId }: { openProjectId: string |
   const recents = (page?.content ?? []).slice(0, MAX_RECENTS)
   const deleteProject = useDeleteProject(selectedId)
   const [menuFor, setMenuFor] = useState<string | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
-
-  const onDelete = (id: string) => {
-    if (id === openProjectId) setConfirmDelete(id)
-    else deleteProject.mutate(id)
-    setMenuFor(null)
-  }
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null)
+  const deletingOpen = confirmDelete?.id === openProjectId
 
   return (
     <div className="kap-recents">
       {confirmDelete && (
         <DeleteProjectDialog
+          projectName={confirmDelete.name}
+          isOpen={deletingOpen}
           onCancel={() => setConfirmDelete(null)}
           onConfirm={() => {
-            deleteProject.mutate(confirmDelete, { onSuccess: () => nav('/dashboard') })
+            deleteProject.mutate(confirmDelete.id, { onSuccess: () => { if (deletingOpen) nav('/dashboard') } })
             setConfirmDelete(null)
           }}
         />
@@ -50,7 +47,7 @@ export default function RecentsList({ openProjectId }: { openProjectId: string |
           </button>
           {menuFor === p.id && (
             <div className="kap-pop kap-recent-pop">
-              <button type="button" style={{ color: '#C63B2B' }} onClick={(e) => { e.preventDefault(); onDelete(p.id) }}>
+              <button type="button" style={{ color: '#C63B2B' }} onClick={(e) => { e.preventDefault(); setMenuFor(null); setConfirmDelete({ id: p.id, name: p.name }) }}>
                 <ShellIcon d={ICON.trash} size={15} /> Delete
               </button>
             </div>

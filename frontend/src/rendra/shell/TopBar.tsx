@@ -4,12 +4,20 @@ import NotificationsMenu from './NotificationsMenu'
 import ShellIcon from './ShellIcon'
 import type { NavId, PopoverControl } from './types'
 
-/** Bar above the main surface: a "what's new" banner on home, a search launcher elsewhere, and notifications. */
-export default function TopBar({ active, notifications }: { active?: NavId; notifications: PopoverControl }) {
+type Props = {
+  active?: NavId
+  notifications: PopoverControl
+  /** Opens the sidebar drawer; the button only shows on compact screens. */
+  onOpenMenu: () => void
+}
+
+/** Bar above the main surface: menu (compact screens), a "what's new" banner on home or a search launcher, and notifications. */
+export default function TopBar({ active, notifications, onOpenMenu }: Props) {
   const nav = useNavigate()
 
   return (
     <div className="kap-top">
+      <button type="button" className="kap-menu-btn" aria-label="Open menu" onClick={onOpenMenu}><ShellIcon d={ICON.menu} size={18} /></button>
       {active === 'home' ? (
         <span className="kap-whatsnew"><span>New</span>Multiplayer — build together in one project<ShellIcon d={ICON.arrowRight} size={13} /></span>
       ) : (

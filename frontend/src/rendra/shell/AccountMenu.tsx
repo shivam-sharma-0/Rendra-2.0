@@ -25,7 +25,7 @@ export default function AccountMenu({ collapsed, open, onToggle, onClose }: Popo
         <span className="kap-me-name">{user?.name || 'Rendra builder'}</span>
       </button>
       {open && (
-        <div className="kap-pop" style={{ left: collapsed ? 42 : 14, bottom: collapsed ? 8 : 56, width: 244 }}>
+        <div className="kap-pop" style={{ left: collapsed ? 64 : 14, bottom: collapsed ? 8 : 56, width: 244 }}>
           {user?.email && (
             <>
               <div className="kap-pop-user"><span className="kap-pop-user-mail" title={user.email}>{user.email}</span></div>

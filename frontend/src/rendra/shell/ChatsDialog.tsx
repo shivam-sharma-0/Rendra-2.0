@@ -6,6 +6,7 @@ import { useWorkspace } from '../../workspace/WorkspaceContext'
 import { ICON } from '../icons'
 import { relTime } from '../parts'
 import ShellIcon from './ShellIcon'
+import { useEscape } from './useEscape'
 
 const PAGE_SIZE = 8
 const FILTERS = { all: 'All', recent: 'Recent', pinned: 'Pinned' } as const
@@ -33,6 +34,8 @@ export default function ChatsDialog({ onClose }: { onClose: () => void }) {
   const pageItems = chats.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
 
   const close = () => { setFilterOpen(false); onClose() }
+  // Escape closes the filter menu first, then the dialog.
+  useEscape(() => (filterOpen ? setFilterOpen(false) : onClose()))
   const open = (id: string) => { onClose(); nav(`/project/${id}`) }
   const newChat = async () => {
     const p = await startProject.mutateAsync({ prompt: null, mode: 'CHAT', workspaceId: selectedId ?? undefined })
@@ -42,7 +45,7 @@ export default function ChatsDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="kap-dialog-overlay" onClick={close}>
-      <div className="kap-chats-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="kap-chats-modal" role="dialog" aria-modal="true" aria-label="Chats" onClick={(e) => e.stopPropagation()}>
         <div className="kap-chats-modal-hd">
           <button type="button" className="kap-chats-modal-ico-btn" onClick={onClose} aria-label="Back"><ShellIcon d={ICON.chevronLeft} size={17} /></button>
           <span className="kap-chats-modal-title">Chats</span>

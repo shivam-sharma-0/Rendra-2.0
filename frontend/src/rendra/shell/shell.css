@@ -1,0 +1,38 @@
+/* App shell: sidebar header, collapse toggle and the compact-screen drawer.
+   index.css loads after this file, so overrides of its .kap-side rules are scoped under .kap. */
+
+.kap-side-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-shrink: 0; }
+.kap-side-head .kap-brand { flex: 1; min-width: 0; }
+.kap .kap-side.collapsed .kap-side-head { flex-direction: column; width: 100%; }
+
+.kap-side-toggle, .kap-menu-btn {
+  width: 30px; height: 30px; flex: none; padding: 0; border: 0; border-radius: 8px;
+  display: grid; place-items: center;
+  background: transparent; color: var(--faint); cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.kap-side-toggle:hover, .kap-menu-btn:hover { background: var(--hover); color: var(--ink); }
+.kap-side-toggle:focus-visible, .kap-menu-btn:focus-visible, .kap-nav button:focus-visible { outline: 2px solid #5B4CF5; outline-offset: 2px; }
+
+.kap-menu-btn { display: none; }
+.kap-drawer-scrim { display: none; }
+
+@media (max-width: 1024px) {
+  .kap-menu-btn { display: grid; margin-right: 4px; }
+
+  /* The sidebar becomes an off-canvas drawer. */
+  .kap .kap-side--drawer {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 150;
+    width: 280px; max-width: 85vw;
+    background: var(--bg);
+    box-shadow: 0 24px 60px rgba(22, 21, 26, .28);
+    transform: translateX(-100%); visibility: hidden;
+    transition: transform .25s ease, visibility .25s;
+  }
+  .kap .kap-side--drawer.open { transform: none; visibility: visible; }
+  .kap-drawer-scrim { display: block; position: fixed; inset: 0; z-index: 140; background: rgba(22, 21, 26, .32); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kap .kap-side--drawer { transition: none; }
+}

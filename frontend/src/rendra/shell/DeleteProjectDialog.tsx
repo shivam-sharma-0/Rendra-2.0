@@ -1,16 +1,26 @@
-type Props = { onCancel: () => void; onConfirm: () => void }
+import { useEscape } from './useEscape'
 
-/** Confirmation before deleting the project that is currently open. */
-export default function DeleteProjectDialog({ onCancel, onConfirm }: Props) {
+type Props = {
+  projectName: string
+  /** The project is the one currently open; deleting it leaves the page. */
+  isOpen: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}
+
+/** Confirmation before deleting a project. Escape or a click outside cancels. */
+export default function DeleteProjectDialog({ projectName, isOpen, onCancel, onConfirm }: Props) {
+  useEscape(onCancel)
+
   return (
     <div className="kap-dialog-overlay" onClick={onCancel}>
-      <div className="kap-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="kap-dialog-title">Delete active project?</div>
+      <div className="kap-dialog" role="alertdialog" aria-modal="true" aria-labelledby="kap-delete-title" onClick={(e) => e.stopPropagation()}>
+        <div className="kap-dialog-title" id="kap-delete-title">Delete “{projectName}”?</div>
         <div className="kap-dialog-body">
-          This project is currently open. Are you sure you want to delete it? This action cannot be undone.
+          {isOpen ? 'This project is currently open. ' : ''}It will be permanently deleted. This action cannot be undone.
         </div>
         <div className="kap-dialog-actions">
-          <button type="button" className="kap-dialog-cancel" onClick={onCancel}>Cancel</button>
+          <button type="button" className="kap-dialog-cancel" onClick={onCancel} autoFocus>Cancel</button>
           <button type="button" className="kap-dialog-danger" onClick={onConfirm}>Delete project</button>
         </div>
       </div>

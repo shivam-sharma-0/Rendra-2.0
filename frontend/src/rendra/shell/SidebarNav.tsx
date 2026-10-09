@@ -11,6 +11,7 @@ const NAV: readonly NavItem[] = [
   { id: 'connectors', label: 'Connectors', icon: ICON.connectors, to: '/connectors' },
   { id: 'chats', label: 'Chats', icon: ICON.chats, to: '/chats' },
   { id: 'projects', label: 'Projects', icon: ICON.projects, to: '/projects' },
+  { id: 'templates', label: 'Templates', icon: ICON.templates, to: '/templates' },
 ]
 
 type Props = {
@@ -28,9 +29,11 @@ export default function SidebarNav({ active, inProject, chatsOpen, onOpenChats }
   return (
     <nav className="kap-nav">
       {NAV.map((n) => {
-        const on = !inProject && (active === n.id || (n.id === 'chats' && chatsOpen))
+        // While the chats dialog is open it is the current place, so only "Chats" is highlighted.
+        const on = chatsOpen ? n.id === 'chats' : !inProject && active === n.id
         return (
-          <button key={n.id} type="button" className={on ? 'on' : ''} onClick={() => (n.id === 'chats' ? onOpenChats() : nav(n.to))}>
+          <button key={n.id} type="button" className={on ? 'on' : ''} aria-current={on ? 'page' : undefined} title={n.label}
+            onClick={() => (n.id === 'chats' ? onOpenChats() : nav(n.to))}>
             <ShellIcon d={n.icon} size={18} /><span style={{ flexGrow: 1 }}>{n.label}</span>{n.kbd && <span className="kbd">{n.kbd}</span>}
           </button>
         )
