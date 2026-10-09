@@ -6,7 +6,7 @@ import { useMembers, useInviteMember, useUpdateMemberRole, useRemoveMember, useP
 import { useWorkspace } from '../workspace/WorkspaceContext'
 import { useTheme, type Theme } from '../theme/ThemeProvider'
 import { LoadingState } from '../components/ui/States'
-import RendraLanding from './screens/Landing'
+import RendraLanding from './screens/landing/Landing'
 
 // Auth pulls in react-hook-form + zod; lazy-load it so those stay out of the landing bundle.
 const Auth = lazy(() => import('./screens/auth/Auth'))
