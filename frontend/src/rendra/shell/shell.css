@@ -106,3 +106,38 @@
   .kap .kap-side--drawer { background: var(--neu-surface); }
   .kap .kap-main { box-shadow: none; }
 }
+
+/* Plain main area: content sits on the surface itself (neumorphic screens). The top bar's
+   controls then use the kit's raised / inset treatment too. */
+.kap .kap-main--plain { background: transparent; border-color: transparent; box-shadow: none; }
+.kap .kap-main--plain .kap-whatsnew { border: 0; background: var(--neu-surface); box-shadow: var(--neu-raised-sm); }
+.kap .kap-main--plain .kap-bell { border: 0; background: var(--neu-surface); color: var(--neu-muted); box-shadow: var(--neu-raised-sm); transition: box-shadow .18s, color .15s; }
+.kap .kap-main--plain .kap-bell:hover { background: var(--neu-surface); color: var(--neu-ink); box-shadow: var(--neu-raised); }
+.kap .kap-main--plain .kap-bell.open { background: var(--neu-surface); box-shadow: var(--neu-inset-sm); }
+.kap .kap-main--plain .kap-notif-pop { border: 0; background: var(--neu-surface); box-shadow: var(--neu-raised); }
+
+/* Drag handle on the sidebar's right edge (wide screens): a hairline that lights up in the brand
+   spectrum on hover and while dragging. */
+@keyframes kap-resizer-pulse{0%{background-position:0% 0%}100%{background-position:0% 250%}}
+.kap-resizer{position:absolute;right:-4px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:50;display:flex;justify-content:center}
+.kap-resizer::before{content:'';position:absolute;top:0;bottom:0;left:50%;transform:translateX(-50%);width:1px;background:var(--line-2);pointer-events:none;transition:opacity 0.2s ease}
+.kap-resizer::after{content:'';position:absolute;top:0;bottom:0;left:50%;transform:translateX(-50%);width:1px;opacity:0;pointer-events:none;background:linear-gradient(180deg,#FF5B2E 0%,#FFB23E 15%,#00E5FF 35%,#5B4CF5 55%,#D946EF 75%,#FF5B2E 100%);background-size:100% 250%;-webkit-mask-image:linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.08) 8%,rgba(0,0,0,0.4) 22%,rgba(0,0,0,0.85) 38%,#000000 50%,rgba(0,0,0,0.85) 62%,rgba(0,0,0,0.4) 78%,rgba(0,0,0,0.08) 92%,transparent 100%);mask-image:linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.08) 8%,rgba(0,0,0,0.4) 22%,rgba(0,0,0,0.85) 38%,#000000 50%,rgba(0,0,0,0.85) 62%,rgba(0,0,0,0.4) 78%,rgba(0,0,0,0.08) 92%,transparent 100%);box-shadow:0 0 3px rgba(255,91,46,0.45),0 0 7px rgba(91,76,245,0.35),0 0 12px rgba(0,229,255,0.25);animation:kap-resizer-pulse 3s linear infinite;transition:opacity 0.2s cubic-bezier(0.16,1,0.3,1),box-shadow 0.2s ease}
+.kap-resizer:hover::before,.kap-resizer.active::before{opacity:0}
+.kap-resizer:hover::after{opacity:0.85}
+.kap-resizer.active::after{opacity:1;box-shadow:0 0 4px rgba(255,91,46,0.55),0 0 8px rgba(91,76,245,0.45),0 0 15px rgba(0,229,255,0.35)}
+.kap-resizer:focus-visible{outline:none}
+.kap-resizer:focus-visible::after{opacity:1}
+@media (prefers-reduced-motion: reduce){.kap-resizer::after{animation:none}}
+
+/* Collapsed rail: the logo is also the expand button; on hover / focus it shows the sidebar icon. */
+.kap-rail-toggle {
+  position: relative; width: 32px; height: 32px; margin: 0 auto; padding: 0; border: 0; border-radius: 9px;
+  display: grid; place-items: center; background: transparent; color: var(--neu-muted); cursor: pointer;
+  transition: box-shadow .18s, color .15s;
+}
+.kap-rail-toggle > span { grid-area: 1 / 1; display: grid; place-items: center; transition: opacity .15s; }
+.kap-rail-toggle .kap-brand-orb { width: 24px; height: 24px; }
+.kap-rail-toggle__icon { opacity: 0; }
+.kap-rail-toggle:hover, .kap-rail-toggle:focus-visible { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); outline: none; }
+.kap-rail-toggle:hover .kap-brand-orb, .kap-rail-toggle:focus-visible .kap-brand-orb { opacity: 0; }
+.kap-rail-toggle:hover .kap-rail-toggle__icon, .kap-rail-toggle:focus-visible .kap-rail-toggle__icon { opacity: 1; }

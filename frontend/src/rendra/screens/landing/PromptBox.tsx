@@ -4,7 +4,7 @@ import { NeuIconButton, NeuPanel, NeuSegmentedControl } from '../../../component
 import { ICON } from '../../icons'
 import { Ico } from '../../parts'
 import { PROJECT_MODES, PROMPT_IDEAS } from './content'
-import { useTypewriter } from './useTypewriter'
+import { useTypewriter } from '../../hooks/useTypewriter'
 
 type Props = {
   value: string

@@ -13,7 +13,7 @@ const Auth = lazy(() => import('./screens/auth/Auth'))
 // Onboarding is a large post-signup wizard with its own CSS — lazy-load it too.
 const Onboarding = lazy(() => import('./screens/Onboarding'))
 // Dashboard home uses the shared AppShell (own CSS) — lazy-load it.
-const Dashboard = lazy(() => import('./screens/Dashboard'))
+const Dashboard = lazy(() => import('./screens/dashboard/Dashboard'))
 // Projects / Templates / Connectors share the AppShell — lazy-load each.
 const Projects = lazy(() => import('./screens/Projects'))
 const Templates = lazy(() => import('./screens/Templates'))

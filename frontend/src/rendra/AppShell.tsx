@@ -1,22 +1,33 @@
 import { useState, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
+import { cx } from '../lib/cx'
 import ChatsDialog from './shell/ChatsDialog'
 import Sidebar from './shell/Sidebar'
 import TopBar from './shell/TopBar'
 import type { NavId, PopoverControl, ShellPopover } from './shell/types'
-import { useEscape } from './shell/useEscape'
+import { useEscape } from './hooks/useEscape'
 import { useSidebarState } from './shell/useSidebarState'
 import '../components/neu' // soft-UI --neu-* tokens used by shell.css
 import './shell/shell.css'
 
 export type { NavId } from './shell/types'
 
+type Props = {
+  active?: NavId
+  /**
+   * `card` (default): content sits on a rounded card. `plain`: content sits directly on the
+   * soft surface, for screens built from the neumorphic kit (the dashboard).
+   */
+  surface?: 'card' | 'plain'
+  children: ReactNode
+}
+
 /**
- * Authenticated app shell: sidebar + top bar + a rounded main surface for `children`.
+ * Authenticated app shell: sidebar + top bar + the main area for `children`.
  * Shared by the dashboard, projects, chats, templates, connectors, notifications and
  * project screens, so the chrome is defined once. The pieces live in `./shell/`.
  */
-export default function AppShell({ active, children }: { active?: NavId; children: ReactNode }) {
+export default function AppShell({ active, surface = 'card', children }: Props) {
   const { pathname } = useLocation()
   const openProjectId = pathname.startsWith('/project/') ? pathname.split('/')[2] : null
   const sidebar = useSidebarState()
@@ -49,12 +60,17 @@ export default function AppShell({ active, children }: { active?: NavId; childre
         accountMenu={control('account')}
         collapsed={sidebar.collapsed}
         onToggleCollapsed={sidebar.toggleCollapsed}
+        width={sidebar.width}
+        resizing={sidebar.resizing}
+        onResizeStart={sidebar.startResize}
+        onResizeKey={sidebar.onResizeKey}
+        onResizeReset={sidebar.resetWidth}
         compact={sidebar.compact}
         drawerOpen={sidebar.drawerOpen}
         onCloseDrawer={sidebar.closeDrawer}
       />
 
-      <main className="kap-main">
+      <main className={cx('kap-main', surface === 'plain' && 'kap-main--plain')}>
         {!openProjectId && <TopBar active={active} notifications={control('notifications')} onOpenMenu={sidebar.openDrawer} />}
         {children}
       </main>
