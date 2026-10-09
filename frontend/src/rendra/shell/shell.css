@@ -36,3 +36,73 @@
 @media (prefers-reduced-motion: reduce) {
   .kap .kap-side--drawer { transition: none; }
 }
+
+/* ── Neumorphic chrome ─────────────────────────────────────────────────────
+   The shell sits on the kit's soft surface (--neu-* tokens). Controls are flat
+   until hovered (slightly raised); the current page is pressed in (inset).
+   The main content card keeps its own background and only gains a soft lift. */
+
+.kap.kap { background: var(--neu-surface); color: var(--neu-ink); }
+.kap .kap-side { padding: 14px 12px; gap: 8px; }
+.kap .kap-side.collapsed { padding: 14px 0; }
+
+/* Brand: plain mark, simple bold wordmark */
+.kap .kap-brand b { font-family: 'Geist', system-ui, sans-serif; font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
+.kap .kap-brand-orb i { background: var(--neu-surface); }
+
+.kap .kap-side-toggle:hover, .kap .kap-menu-btn:hover { background: transparent; color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
+.kap .kap-side-toggle:active, .kap .kap-menu-btn:active { box-shadow: var(--neu-inset-sm); }
+
+/* Workspace switcher: a softly raised pill that presses in while its menu is open */
+.kap .kap-ws { height: 38px; border: 0; border-radius: 12px; background: var(--neu-surface); box-shadow: var(--neu-raised-sm); }
+.kap .kap-ws:hover { background: var(--neu-surface); box-shadow: var(--neu-raised); }
+.kap .kap-ws.open { background: var(--neu-surface); box-shadow: var(--neu-inset-sm); }
+.kap .kap-side.collapsed .kap-ws { background: transparent; box-shadow: none; }
+.kap .kap-side.collapsed .kap-ws:hover { box-shadow: var(--neu-raised-sm); }
+
+/* Navigation and recents */
+.kap .kap-nav { gap: 4px; }
+.kap .kap-nav button, .kap .kap-recent-item > a { border-radius: 10px; color: var(--neu-muted); transition: box-shadow .18s, color .15s; }
+.kap .kap-nav button:hover, .kap .kap-recent-item > a:hover { background: transparent; color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
+.kap .kap-nav button.on, .kap .kap-nav button.on:hover,
+.kap .kap-recent-item > a.on, .kap .kap-recent-item > a.on:hover { background: transparent; color: var(--neu-ink); font-weight: 600; box-shadow: var(--neu-inset-sm); }
+.kap .kap-nav .kbd { color: var(--neu-dim); }
+.kap .kap-recents-h { padding: 12px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--neu-faint); }
+.kap .kap-recent-dots:hover { background: transparent; color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
+
+/* Go Pro: a light raised card instead of a dark block */
+.kap .kap-pro { background: var(--neu-surface); color: var(--neu-ink); border-radius: 16px; box-shadow: var(--neu-raised); }
+.kap .kap-pro p { color: var(--neu-muted); }
+.kap .kap-pro a { height: 32px; border-radius: 999px; background: var(--neu-primary-bg); color: var(--neu-primary-ink); box-shadow: 4px 4px 9px var(--neu-lo-strong); }
+.kap .kap-pro-orb { opacity: .5; }
+.kap .kap-pro-close { width: 22px; height: 22px; background: var(--neu-surface); color: var(--neu-faint); box-shadow: var(--neu-raised-sm); }
+.kap .kap-pro-close:hover { color: var(--neu-ink); }
+
+/* Account */
+.kap .kap-me { border-radius: 12px; transition: box-shadow .18s; }
+.kap .kap-me:hover, .kap .kap-me[aria-expanded="true"] { background: transparent; box-shadow: var(--neu-raised-sm); }
+.kap .kap-me-badge { background: var(--neu-primary-bg); color: var(--neu-primary-ink); }
+
+/* Popovers opened from the sidebar */
+.kap .kap-ws-pop, .kap .kap-side .kap-pop { background: var(--neu-surface); border: 0; box-shadow: var(--neu-raised); }
+.kap .kap-side .kap-pop-item:hover { background: transparent; box-shadow: var(--neu-inset-sm); }
+.kap .kap-ws-btn { border: 0; background: var(--neu-surface); box-shadow: var(--neu-raised-sm); transition: box-shadow .18s; }
+.kap .kap-ws-btn:hover { background: var(--neu-surface); box-shadow: var(--neu-raised); }
+.kap .kap-ws-progress { background: transparent; box-shadow: var(--neu-inset-sm); }
+.kap .kap-ws-progress-fill { background: var(--neu-accent); }
+.kap .kap-ws-divider { height: 3px; margin: 11px 0; border-radius: 3px; background: transparent; box-shadow: var(--neu-inset-sm); }
+.kap .kap-ws-pop-avatar { background: var(--neu-primary-bg); color: var(--neu-primary-ink); box-shadow: var(--neu-raised-sm); }
+.kap .kap-ws-pop-subtitle, .kap .kap-ws-credits-badge { color: var(--neu-faint); }
+.kap .kap-ws-credits-badge:hover { color: var(--neu-ink); }
+.kap .kap-ws-bullet { background: var(--neu-faint); }
+.kap .kap-ws-new-link:hover { background: transparent; box-shadow: var(--neu-inset-sm); }
+.kap .kap-ws-upgrade-btn { border-radius: 999px; background: var(--neu-surface); color: var(--neu-accent); box-shadow: var(--neu-raised-sm); }
+.kap .kap-ws-upgrade-btn:hover { background: var(--neu-surface); box-shadow: var(--neu-raised); }
+
+/* Main content card: no hairline border, a soft lift off the surface instead */
+.kap .kap-main { border-color: transparent; box-shadow: var(--neu-raised); }
+
+@media (max-width: 1024px) {
+  .kap .kap-side--drawer { background: var(--neu-surface); }
+  .kap .kap-main { box-shadow: none; }
+}

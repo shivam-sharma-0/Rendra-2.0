@@ -31,21 +31,22 @@
   --neu-inset-sm: inset 2px 2px 5px var(--neu-lo), inset -2px -2px 5px var(--neu-hi);
 }
 
+/* Dark: Rendra's brand ink (#16151A), the colour of the light theme's dark buttons. */
 .dark {
-  --neu-surface: #24232A;
-  --neu-hi: rgba(255, 255, 255, .055);
+  --neu-surface: #16151A;
+  --neu-hi: rgba(255, 255, 255, .045);
   --neu-lo: rgba(0, 0, 0, .55);
-  --neu-lo-strong: rgba(0, 0, 0, .7);
+  --neu-lo-strong: rgba(0, 0, 0, .68);
   --neu-ink: #F4F1E9;
-  --neu-muted: #C9C6CE;
-  --neu-faint: #A6A2AB;
-  --neu-dim: #77737D;
+  --neu-muted: #B7B3BD;
+  --neu-faint: #8F8B96;
+  --neu-dim: #6E6A75;
   --neu-link: #A79DFF;
   --neu-danger: #FF7A68;
   --neu-danger-glow: rgba(255, 122, 104, .18);
-  --neu-primary-bg: #F6F4EF;
+  --neu-primary-bg: #F4F1E9;
   --neu-primary-ink: #16151A;
-  --neu-dashed: #3A3840;
+  --neu-dashed: #2E2C34;
 }
 
 /* Panel: the raised base every other control sits on. */
