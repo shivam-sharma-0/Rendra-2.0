@@ -1,0 +1,29 @@
+/* Plans page, on the landing layout and the kit's --neu-* tokens. */
+
+.pr { display: flex; flex-direction: column; align-items: center; gap: 40px; padding: 48px 0 72px; }
+.pr-head { display: flex; flex-direction: column; align-items: center; gap: 12px; max-width: 680px; text-align: center; }
+.pr-head small { font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--neu-faint); }
+.pr-head h1 { margin: 0; font-size: clamp(34px, 4.6vw, 56px); font-weight: 700; line-height: 1.04; letter-spacing: -.035em; text-wrap: balance; }
+.pr-head h1 em { font-style: normal; color: var(--neu-accent); }
+.pr-head p { margin: 0; font-size: 16px; line-height: 1.5; color: var(--neu-muted); }
+
+.pr-cards { width: 100%; max-width: 1040px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; align-items: stretch; }
+.pr-card { display: flex; flex-direction: column; gap: 16px; padding: 26px; border-radius: 24px; }
+.pr-card--soon { box-shadow: var(--neu-inset); color: var(--neu-ink); }
+.pr-card__top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pr-card h2 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+.pr-card > p { margin: 0; font-size: 14px; line-height: 1.5; color: var(--neu-muted); }
+.pr-tag { padding: 4px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--neu-faint); box-shadow: var(--neu-raised-sm); white-space: nowrap; }
+.pr-tag--on { color: #16A36A; }
+.pr-price { display: flex; align-items: baseline; gap: 6px; min-height: 44px; }
+.pr-price b { font-size: 38px; font-weight: 700; letter-spacing: -.03em; }
+.pr-price small { font-size: 13.5px; color: var(--neu-faint); }
+.pr-card ul { list-style: none; margin: 4px 0 0; padding: 18px 0 0; display: flex; flex-direction: column; gap: 11px; box-shadow: 0 -1px 0 var(--neu-dashed); }
+.pr-card li { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--neu-muted); }
+.pr-card li svg { flex: none; color: #16A36A; }
+.pr-card--soon li svg { color: var(--neu-faint); }
+
+@media (max-width: 900px) {
+  .pr { padding: 28px 0 48px; gap: 28px; }
+  .pr-cards { grid-template-columns: 1fr; max-width: 460px; gap: 18px; }
+}

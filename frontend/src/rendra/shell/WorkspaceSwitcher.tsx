@@ -1,9 +1,8 @@
 import { Link } from 'react-router-dom'
 import { useMembers } from '../../api/queries'
+import { AppIcon } from '../../components/icons'
 import { useWorkspace } from '../../workspace/WorkspaceContext'
-import { ICON } from '../icons'
 import { initials } from '../parts'
-import ShellIcon from './ShellIcon'
 import type { PopoverControl } from './types'
 import UsageMeter from './UsageMeter'
 
@@ -21,13 +20,13 @@ export default function WorkspaceSwitcher({ badgeLabel, open, onToggle, onClose 
         <span className="kap-ws-text" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
           <span className="kap-ws-name">{name}</span>
         </span>
-        <span className={`kap-ws-chevron ${open ? 'open' : ''}`}><ShellIcon d={ICON.chevronDown} size={15} /></span>
+        <span className={`kap-ws-chevron ${open ? 'open' : ''}`}><AppIcon name="chevronDown" /></span>
       </button>
 
       {open && (
         <div className="kap-ws-pop">
           <div className="kap-ws-pop-header">
-            <div className="kap-ws-pop-avatar"><ShellIcon d={ICON.upload} size={19} /></div>
+            <div className="kap-ws-pop-avatar" aria-hidden>{initials(badgeLabel)[0]}</div>
             <div className="kap-ws-pop-info">
               <div className="kap-ws-pop-title">{name}</div>
               <PlanLine workspaceId={selectedId} />
@@ -36,10 +35,10 @@ export default function WorkspaceSwitcher({ badgeLabel, open, onToggle, onClose 
 
           <div className="kap-ws-pop-actions">
             <Link to="/settings/members" className="kap-ws-btn" onClick={onClose}>
-              <ShellIcon d={ICON.invite} size={15} /><span>Invite members</span>
+              <AppIcon name="userPlus" /><span>Invite members</span>
             </Link>
             <Link to="/settings/members" className="kap-ws-btn" onClick={onClose}>
-              <ShellIcon d={ICON.gear} size={15} /><span>Workspace settings</span>
+              <AppIcon name="gear" /><span>Workspace settings</span>
             </Link>
           </div>
 
@@ -56,7 +55,7 @@ export default function WorkspaceSwitcher({ badgeLabel, open, onToggle, onClose 
                     onClick={() => { setSelectedId(w.id); onClose() }}>
                     <span className="kap-ws-item-badge" style={{ background: BADGE_COLOURS[i % BADGE_COLOURS.length] }}>{initials(w.name)[0]}</span>
                     <span className="kap-ws-item-name">{w.name}</span>
-                    {w.id === selectedId && <ShellIcon d={ICON.check} size={15} />}
+                    {w.id === selectedId && <AppIcon name="check" />}
                   </button>
                 ))}
               </div>
@@ -66,13 +65,13 @@ export default function WorkspaceSwitcher({ badgeLabel, open, onToggle, onClose 
           <div className="kap-ws-divider" />
 
           <Link to="/onboarding/workspace" className="kap-ws-new-link" onClick={onClose}>
-            <ShellIcon d={ICON.plus} size={16} /><span>New workspace</span>
+            <AppIcon name="plus" /><span>New workspace</span>
           </Link>
 
           <div className="kap-ws-divider" />
 
           <div className="kap-ws-footer">
-            <div className="kap-ws-pro-tag"><ShellIcon d={ICON.bolt} size={15} /><span>Turn Pro</span></div>
+            <div className="kap-ws-pro-tag"><AppIcon name="lightning" /><span>Turn Pro</span></div>
             <Link to="/settings/billing-and-usage" className="kap-ws-upgrade-btn" onClick={onClose}>Upgrade</Link>
           </div>
         </div>

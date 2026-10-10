@@ -1,21 +1,24 @@
 /* Project workspace frame: chat column, divider, and the panel card with its icon rail and header.
    Colours and depth come from the neumorphic kit's --neu-* tokens, so the frame follows light/dark.
-   The chat messages and the panels' own content still use the older .pw-* styles in index.css. */
+   The chat (chat/), the panel views (panel/panels.css) and the dialogs (dialogs/) have their own sheets. */
 
 .ws {
   --ws-line: #DCD5C9;
   width: 100%; height: 100%; min-height: 0; display: flex;
   padding: 8px 8px 8px 0;
   color: var(--neu-ink); font-size: 1rem; line-height: 1.5;
-  animation: pw-fade .26s ease both;
+  animation: ws-fade .26s ease both;
 }
 .dark .ws { --ws-line: #2E2C34; }
 /* The workspace uses the whole window: the shell's own margin around the main area is dropped. */
 .kap .kap-main:has(> .ws) { margin: 0; }
+@keyframes ws-fade { from { opacity: 0; } }
 .ws.is-dragging { cursor: col-resize; user-select: none; }
 .ws-grow { flex: 1; }
+/* "Project not found" */
+.ws-missing { flex: 1; display: grid; place-items: center; }
 
-.ws-flat-btn:focus-visible, .ws-project:focus-visible, .ws-rail__btn:focus-visible, .ws-url button:focus-visible {
+.ws-flat-btn:focus-visible, .ws-project:focus-visible, .ws-tab:focus-visible, .ws-url button:focus-visible {
   outline: 2px solid var(--neu-focus); outline-offset: 2px;
 }
 
@@ -36,7 +39,13 @@
 }
 .ws-project span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-project svg { flex: none; color: var(--neu-faint); }
-.ws-project:hover { box-shadow: var(--neu-raised-sm); }
+.ws-project:hover, .ws-project[aria-expanded="true"] { box-shadow: var(--neu-raised-sm); }
+.ws-project--loading { color: var(--neu-faint); font-weight: 500; }
+.ws-project-anchor { min-width: 0; }
+.ws-project-menu { width: 240px; }
+/* Rename / delete dialogs from the project menu */
+.ws-rename { display: flex; flex-direction: column; gap: 14px; }
+.ws-rename__actions { display: flex; justify-content: flex-end; gap: 10px; }
 
 /* Latest build state next to the project name */
 .ws-build { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; font-size: 12px; color: var(--neu-faint); white-space: nowrap; }
@@ -76,32 +85,67 @@
 .ws-rail {
   position: relative; z-index: 2;
   flex: none; width: 48px; display: flex; flex-direction: column; align-items: center;
-  padding: 8px 0; border-right: 1px solid var(--ws-line);
+  /* The dividing line is a shadow, not a border, so the 48px stay whole and the icons centre on whole pixels */
+  padding: 8px 0; box-shadow: 1px 0 0 var(--ws-line);
 }
-.ws-rail__tabs { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.ws-rail__groove { width: 20px; margin: 5px 0; border-top: 1px solid var(--ws-line); }
-.ws-rail__btn {
-  position: relative; width: 36px; height: 36px; display: grid; place-items: center;
-  border: 0; border-radius: 12px; background: none; color: var(--neu-faint);
+.ws-rail__expand { margin-top: auto; }
+
+/* ── View tabs: icons in the rail, icons + names in the header ── */
+.ws-tabs { position: relative; display: flex; align-items: center; gap: 4px; }
+/* The current tab's pill: one element that slides between tabs (see useSlidingThumb) */
+.ws-tabs__thumb { position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; border-radius: 12px; box-shadow: var(--neu-inset-sm); }
+.ws-tabs--horizontal .ws-tabs__thumb { border-radius: 10px; box-shadow: var(--neu-raised-sm); }
+.ws-tabs--measure .ws-tabs__thumb { display: none; }
+.ws-tabs--vertical { flex-direction: column; }
+.ws-tabs__groove { flex: none; }
+.ws-tabs--vertical .ws-tabs__groove { width: 20px; margin: 5px 0; border-top: 1px solid var(--ws-line); }
+/* In the header the tabs are one group: a recessed track, the current view raised in it */
+.ws-tabs--horizontal { gap: 2px; padding: 3px; border-radius: 13px; box-shadow: var(--neu-inset-sm); }
+.ws-tabs--horizontal .ws-tabs__groove { height: 16px; margin: 0 3px; border-left: 1px solid var(--ws-line); }
+
+.ws-tab {
+  position: relative; z-index: 1; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: none; color: var(--neu-faint); font: inherit; font-size: 13px; font-weight: 550; white-space: nowrap;
   transition: box-shadow .18s, color .15s;
 }
-.ws-rail__btn:hover { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
-.ws-rail__btn.is-active { color: var(--neu-ink); box-shadow: var(--neu-inset-sm); }
-.ws-rail__expand { margin-top: auto; }
-/* Name of the view, beside the icon */
-.ws-rail__btn[data-tip]:hover::after, .ws-rail__btn[data-tip]:focus-visible::after {
-  content: attr(data-tip);
+.ws-tabs--vertical .ws-tab, .ws-rail__expand { width: 36px; height: 36px; border-radius: 12px; }
+.ws-tabs--horizontal .ws-tab { height: 30px; padding: 0 8px; border-radius: 10px; }
+.ws-tab:hover { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
+.ws-tab.is-active, .ws-tab.is-active:hover { color: var(--neu-ink); box-shadow: none; } /* the thumb draws its pill */
+
+/* In the header only the current view shows its name; it folds and unfolds smoothly when the view
+   changes or the tabs move. */
+.ws-tab__label {
+  display: inline-block; max-width: 110px; margin-left: 7px; overflow: hidden; opacity: 1;
+  transition: max-width .32s cubic-bezier(.2, .8, .2, 1), margin-left .32s cubic-bezier(.2, .8, .2, 1), opacity .22s ease;
+}
+.ws-tab.is-folded .ws-tab__label { max-width: 0; margin-left: 0; opacity: 0; }
+
+/* Names of icon-only tabs: beside the rail, under the header */
+.ws-tab[data-tip]:hover::after, .ws-tab[data-tip]:focus-visible::after {
+  content: attr(data-tip); z-index: 5;
   position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
   padding: 5px 9px; border-radius: 8px; white-space: nowrap; pointer-events: none;
   background: var(--neu-primary-bg); color: var(--neu-primary-ink);
   font-size: 12px; font-weight: 500; line-height: 1.3;
 }
+.ws-tabs--horizontal .ws-tab[data-tip]:hover::after, .ws-tabs--horizontal .ws-tab[data-tip]:focus-visible::after {
+  left: 50%; top: calc(100% + 8px); transform: translateX(-50%);
+}
+
+/* Invisible copy of the labelled tabs, measured to decide what fits */
+.ws-tabs--measure { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; }
 
 .ws-panel__main { flex: 1; min-width: 0; display: flex; flex-direction: column; container-type: inline-size; }
 
 /* Three parts: title on the left, the view's own controls in the middle, actions on the right. The
    middle part is centred in the space between the other two; on a wide panel, in the panel itself. */
-.ws-phead { flex: none; height: 50px; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0 14px; }
+.ws-phead { position: relative; flex: none; height: 50px; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0 14px; }
+/* With the tabs in the header there is no title or centre group: tabs left, actions right. */
+.ws-phead.ws-phead--tabs { display: flex; }
+.ws-phead--tabs .ws-phead__center { flex: 1; margin: 0; justify-content: center; }
+/* Beside the tabs the address takes whatever room is left, never less than its minimum */
+.ws-phead--tabs .ws-url { flex: 0 1 260px; width: auto; }
 .ws-phead__center { flex: 0 1 auto; min-width: 0; margin: 0 auto; display: flex; align-items: center; gap: 10px; }
 .ws-phead__actions { flex: none; display: flex; align-items: center; gap: 10px; }
 @container (min-width: 900px) {
@@ -113,35 +157,30 @@
 .ws-phead .neu-btn { flex: none; gap: 7px; }
 .ws-phead__icon { width: 34px; height: 34px; }
 
+/* Address pill: reload · the page shown · open in a new tab. Never narrower than its minimum. */
 .ws-url {
-  flex: 0 1 260px; width: 260px; min-width: 120px; height: 34px; display: flex; align-items: center; gap: 8px;
-  padding: 0 4px 0 12px; border-radius: 999px; box-shadow: var(--neu-inset-sm); color: var(--neu-faint);
+  flex: 0 1 260px; width: 260px; min-width: 150px; height: 34px; display: flex; align-items: center; gap: 4px;
+  padding: 0 4px; border-radius: 999px; box-shadow: var(--neu-inset-sm); color: var(--neu-muted);
 }
-.ws-url svg { flex: none; }
-.ws-url span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 12px 'JetBrains Mono', ui-monospace, monospace; color: var(--neu-muted); }
-.ws-url button { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: var(--neu-muted); }
-.ws-url button:hover { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
-
-/* Device size: the kit's segmented control, sized for icons */
-.ws-devices { flex: none; padding: 3px; border-radius: 12px; box-shadow: var(--neu-inset-sm); }
-.ws-devices .neu-segmented__thumb { top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / var(--neu-seg-count)); border-radius: 9px; }
-.ws-devices .neu-segmented__option { width: 32px; height: 28px; display: grid; place-items: center; border-radius: 9px; }
+.ws-url > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 13px; font-weight: 500; color: var(--neu-ink); }
+.ws-url > button, .ws-url > a { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: var(--neu-muted); }
+.ws-url > button:hover, .ws-url > a:hover { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
+.ws-url > i { flex: none; width: 26px; } /* keeps the page name centred while there is no link */
+.ws-url > a:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 2px; }
 
 /* Publish (brand orange); a white dot once the project is live. The globe only shows when the label is hidden. */
 .ws-publish__icon { display: none; }
 .ws-publish__live { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 0 0 3px rgba(255, 255, 255, .3); }
 
-/* The selected view sits in a recessed screen, on the same surface as the rest of the page. */
+/* The selected view sits in a recessed screen, on the same surface as the rest of the page (views: panel/panels.css). */
 .ws-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0 8px 8px; padding: 5px; border-radius: 13px; box-shadow: var(--neu-inset-sm); }
-.ws-screen > .pw-panel-content { border-radius: 9px; overflow: hidden; background: var(--card); }
+.ws-screen > .pv-root { border-radius: 9px; }
+.ws-screen { --ws-code-bg: #E9E4DA; }
 
 /* Narrow panel: first the address collapses to its reload button, then the buttons lose their labels,
    then the title goes (the rail still marks the current view). */
 @container (max-width: 660px) {
   .ws-phead, .ws-phead__center, .ws-phead__actions { gap: 8px; }
-
-  .ws-url { flex: none; width: auto; min-width: 0; padding: 0 4px; }
-  .ws-url > svg, .ws-url > span { display: none; }
 }
 @container (max-width: 500px) {
   .ws-phead__label { display: none; }
@@ -153,51 +192,18 @@
   .ws-phead__title { display: none; }
 }
 
-/* The older .pw-* styles still used here — the panel views (until step 4) and, in the chat, the
-   requirement cards and shared step/markdown pieces — read these tokens, and some paint a fixed
-   white, ink or syntax colour. In light mode the panel views sit on the kit surface instead of a
-   white page; in dark mode both get the dark tokens. Dialogs stay light for now (step 5); the
-   preview iframe shows the app's own page. */
-.ws-screen {
-  --bg: #EFEBE3; --card: #EFEBE3; --cream: #EFEBE3;
-  --line: #DCD5C9; --line-2: #DCD5C9; --line-3: #E3DDD2;
-  --ws-code-bg: #E9E4DA;
-}
-.dark .ws-chat, .dark .ws-screen {
-  --bg: #16151A; --card: #1E1D23; --cream: #1E1D23;
-  --ink: #F4F1E9; --ink-2: #E4E0D8; --muted: #B7B3BD; --faint: #8F8B96; --dim: #6E6A75;
-  --line: #2E2C34; --line-2: #2E2C34; --line-3: #26252C;
-  --violet-soft: #26233F; --violet-ink: #A79DFF; --ok-bg: #12291F; --ok: #4ADE80;
-  --ws-code-bg: #1E1D23;
-}
-.dark .ws-chat .pw-thinking.active { background: var(--card); }
-.dark .ws-screen .pw-md code { background: #26252C; }
-.dark .ws-screen .pw-md pre { background: #0F0E12; }
-
-.ws-screen :is(
-  .pw-code, .pw-code > aside, .pw-code > article, .pw-code-tabbar, .pw-code-tab, .pw-code-search-wrap,
-  .pw-code-search-box:focus-within, .pw-code-icon-btn, .pw-code-action-btn, .pw-thinking-panel, .pw-tp-tab--on,
-  .pw-hrow, .pw-hrestore, .pw-sec-row, .pw-preview-switch button.on, .pw-preview-error
-) { background: var(--card); }
-.ws-screen .pw-codeview { background: var(--ws-code-bg); }
-/* The open file in the tree is pressed in, not highlighted with a fill */
-.ws-screen .pw-file-row.selected { background: none; box-shadow: var(--neu-inset-sm); }
-.dark .ws-screen .pw-file-row:hover, .dark .ws-screen .pw-codeline:hover { background: rgba(255, 255, 255, .04); }
-.dark .ws-screen :is(.pw-line-num, .pw-codelines > div > i) { color: var(--dim); }
-.dark .ws-screen .pw-dots { background-image: radial-gradient(#2A2930 1px, transparent 1px); }
-.dark .ws-screen .hl-key { color: #7DD3FC; }
-.dark .ws-screen .hl-str { color: #5EEAD4; }
-.dark .ws-screen .hl-num { color: #A5B4FC; }
-.dark .ws-screen .hl-bool { color: #FCD34D; }
-.dark .ws-screen .hl-kw { color: #C4B5FD; }
-.dark .ws-screen .hl-comment { color: #6E6A75; }
-.dark .ws-screen .hl-punct { color: #B7B3BD; }
-
 @media (prefers-reduced-motion: reduce) {
   .ws, .ws-build--busy i { animation: none; }
-  .ws-panel, .ws-gap__grip, .ws-rail__btn { transition: none; }
+  .ws-panel, .ws-gap__grip, .ws-tab, .ws-tab__label { transition: none; }
 }
 
 @media (max-width: 1024px) {
   .ws { padding: 8px; }
+}
+/* Narrow screens: one side at a time, full width (see useSplitLayout) */
+@media (max-width: 860px) {
+  .ws { padding: 0 6px 6px; }
+  .ws-chat:not(.ws-chat--hidden), .ws-panel:not(.ws-panel--hidden) { flex: 1 1 auto !important; width: auto !important; min-width: 0; }
+  .ws-gap { display: none; }
+  .ws-chat .ws-composer { width: calc(100% - 8px); }
 }

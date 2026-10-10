@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { NeuButton } from '../../components/neu'
+import { EmptyState } from '../../components/ui/States'
 import { cx } from '../../lib/cx'
 import AppShell from '../../rendra/AppShell'
 import { ChatColumn } from './chat/ChatColumn'
@@ -7,8 +9,7 @@ import { PublishDialog } from './dialogs/PublishDialog'
 import { RequirementDialog } from './dialogs/RequirementDialog'
 import { ShareDialog } from './dialogs/ShareDialog'
 import { PanelContent } from './panel/PanelContent'
-import { PanelHeader } from './panel/PanelHeader'
-import { PanelRail } from './panel/PanelRail'
+import { WorkspacePanel } from './panel/WorkspacePanel'
 import { ResizeHandle } from './ResizeHandle'
 import { isActive, needsRequirementInterview } from './runUtils'
 import { useProjectWorkspace } from './useProjectWorkspace'
@@ -27,9 +28,18 @@ export default function ProjectPage() {
     editRequest, requestEdit, sendError, send, setFeedback,
     cancel, cancelling, rollback, rollingBack, rollbackRun, rollingBackId, rollbackError,
   } = useProjectWorkspace(id)
-  const { layoutMode, setLayoutMode, chatWidth, dragging, splitRef, resizePointerDown, resizePointerMove, resizePointerUp } = useSplitLayout()
+  const { layoutMode, setLayoutMode, narrow, chatWidth, dragging, splitRef, resizePointerDown, resizePointerMove, resizePointerUp } = useSplitLayout()
+  // On a narrow screen the two sides take turns instead of splitting.
+  const showPanel = () => setLayoutMode(narrow ? 'preview-only' : 'split')
+  const showChat = () => setLayoutMode(narrow ? 'chat-only' : 'split')
+  const openView = (view: Tab) => {
+    setTab(view)
+    if (layoutMode === 'chat-only') showPanel()
+  }
   // The header's reload button: bumped here, followed by the preview panel.
   const [previewReloadRequest, setPreviewReloadRequest] = useState(0)
+  // The address the preview shows, for the header's "open in a new tab".
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('code')
   const [thinkingPanel, setThinkingPanel] = useState<{ reasoning: string; seconds: number } | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
@@ -49,12 +59,13 @@ export default function ProjectPage() {
 
   if (notFound) {
     return (
-      <AppShell active="chats">
-        <div className="pw-missing">
-          <div>
-            <p>This project does not exist or is not available to you.</p>
-            <Link to="/dashboard">← Back to dashboard</Link>
-          </div>
+      <AppShell active="chats" surface="plain">
+        <div className="ws-missing">
+          <EmptyState
+            title="Project not found"
+            hint="This project does not exist, or it is not shared with you."
+            action={<NeuButton href="/dashboard" variant="primary" size="sm">Back to dashboard</NeuButton>}
+          />
         </div>
       </AppShell>
     )
@@ -65,7 +76,7 @@ export default function ProjectPage() {
 
   return (
     <AppShell active="chats" surface="plain">
-      <div className={cx('pw ws', dragging && 'is-dragging')} ref={splitRef}>
+      <div className={cx('ws', dragging && 'is-dragging')} ref={splitRef}>
         {shareOpen && <ShareDialog projectId={id} onClose={() => setShareOpen(false)} />}
         {publishOpen && project && <PublishDialog project={project} onClose={() => setPublishOpen(false)} onChange={setProject} />}
         {project?.lifecycleStage === 'REQUIREMENTS' && needsRequirementInterview(project) && requirements && (
@@ -95,17 +106,17 @@ export default function ProjectPage() {
           onSend={send}
           onFeedback={(messageId, feedback) => void setFeedback(messageId, feedback)}
           onEdit={requestEdit}
-          onOpenDetails={() => setTab('details')}
-          onOpenPreview={() => setTab('preview')}
+          onOpenDetails={() => openView('details')}
+          onOpenPreview={() => openView('preview')}
           onOpenThinking={(reasoning, seconds) => {
             setThinkingPanel({ reasoning, seconds })
-            setTab('thinking')
-            if (layoutMode === 'chat-only') setLayoutMode('split')
+            openView('thinking')
           }}
+          onProjectChange={setProject}
           layoutMode={layoutMode}
           chatWidth={chatWidth}
           dragging={dragging}
-          onToggleFocus={() => setLayoutMode(layoutMode === 'chat-only' ? 'split' : 'chat-only')}
+          onToggleFocus={() => (layoutMode === 'chat-only' ? showPanel() : setLayoutMode('chat-only'))}
         />
 
         <ResizeHandle
@@ -117,46 +128,40 @@ export default function ProjectPage() {
           onPointerUp={resizePointerUp}
         />
 
-        <section className={cx('ws-panel', layoutMode === 'chat-only' && 'ws-panel--hidden')}>
-          <PanelRail
+        <WorkspacePanel
+          tab={tab}
+          onSelectTab={setTab}
+          hidden={layoutMode === 'chat-only'}
+          expanded={layoutMode === 'preview-only'}
+          onToggleExpand={() => (layoutMode === 'preview-only' ? showChat() : setLayoutMode('preview-only'))}
+          device={device}
+          onDevice={setDevice}
+          onReloadPreview={() => setPreviewReloadRequest((n) => n + 1)}
+          previewUrl={previewUrl}
+          run={{
+            active: runActive, cancelling, onCancel: () => void cancel(),
+            canRollback, rollingBack, onRollback: () => void rollback(),
+          }}
+          published={project?.deploymentStatus === 'LIVE'}
+          onShare={() => setShareOpen(true)}
+          onPublish={() => setPublishOpen(true)}
+        >
+          <PanelContent
             tab={tab}
-            onSelect={setTab}
-            expanded={layoutMode === 'preview-only'}
-            onToggleExpand={() => setLayoutMode(layoutMode === 'preview-only' ? 'split' : 'preview-only')}
+            projectId={id}
+            project={project}
+            activeRunId={runActive ? selectedRun?.id ?? null : null}
+            runs={runs}
+            selectedRun={selectedRun}
+            steps={steps}
+            requirements={requirements}
+            thinking={thinkingPanel}
+            onCloseThinking={() => { setTab('details'); setThinkingPanel(null) }}
+            onRestoreRun={rollbackRun}
+            rollingBackId={rollingBackId}
+            preview={{ update: previewUpdate, draftUpdate, reloadRequest: previewReloadRequest, device, onUrlChange: setPreviewUrl }}
           />
-          <div className="ws-panel__main">
-            <PanelHeader
-              tab={tab}
-              device={device}
-              onDevice={setDevice}
-              onReloadPreview={() => setPreviewReloadRequest((n) => n + 1)}
-              run={{
-                active: runActive, cancelling, onCancel: () => void cancel(),
-                canRollback, rollingBack, onRollback: () => void rollback(),
-              }}
-              published={project?.deploymentStatus === 'LIVE'}
-              onShare={() => setShareOpen(true)}
-              onPublish={() => setPublishOpen(true)}
-            />
-            <div className="ws-screen">
-              <PanelContent
-                tab={tab}
-                projectId={id}
-                project={project}
-                activeRunId={runActive ? selectedRun?.id ?? null : null}
-                runs={runs}
-                selectedRun={selectedRun}
-                steps={steps}
-                requirements={requirements}
-                thinking={thinkingPanel}
-                onCloseThinking={() => { setTab('details'); setThinkingPanel(null) }}
-                onRestoreRun={rollbackRun}
-                rollingBackId={rollingBackId}
-                preview={{ update: previewUpdate, draftUpdate, reloadRequest: previewReloadRequest }}
-              />
-            </div>
-          </div>
-        </section>
+        </WorkspacePanel>
       </div>
     </AppShell>
   )

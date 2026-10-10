@@ -1,67 +1,77 @@
 import { type AgentRun, type AgentStep, type Project, type RequirementSession } from '../../../api/projects'
+import { AppIcon } from '../../../components/icons'
+import { EmptyState } from '../../../components/ui/States'
+import { cx } from '../../../lib/cx'
 import { BuildStep } from '../chat/RunProgress'
-import { RUN_STATUS_META, runWhen } from '../runUtils'
+import { runStatus, runWhen } from '../runUtils'
 
-/* ── Build details (Figma 17) — the current run's metadata + full step timeline ────────────────── */
-function RequirementSummary({ session }: { session: RequirementSession }) {
-  const answered = session.questions.filter((question) => question.selectedOption || question.otherText).length
-  return (
-    <div className="pw-requirement-summary">
-      <div className="pw-requirement-summary-head">
-        <div><b>{session.status === 'APPROVED' ? 'Requirements approved' : 'Questions answered'}</b><small>{answered} of {session.questions.length} answered</small></div>
-        <span className={'pw-summary-pulse' + (session.complete ? ' done' : '')} />
-      </div>
-      <div className="pw-requirement-summary-list">
-        {session.questions.map((question) => {
-          const answer = question.otherText || question.options.find((option) => option.id === question.selectedOption)?.label
-          return <div className="pw-requirement-summary-row" key={question.id}><span>{question.prompt}</span><b>{answer ?? 'Waiting for answer'}</b></div>
-        })}
-      </div>
-    </div>
-  )
-}
+const STAGES = [
+  ['REQUIREMENTS', 'Requirements'], ['DESIGN', 'Design'], ['BUILDING', 'Build'],
+  ['REVIEW', 'Review'], ['DEPLOYING', 'Deploy'], ['LIVE', 'Live'],
+] as const
 
+/** Where the project is in its life: requirements → design → build → review → deploy → live. */
 function ProcessRail({ stage }: { stage?: Project['lifecycleStage'] }) {
-  const stages = [
-    ['REQUIREMENTS', 'Requirements'], ['DESIGN', 'Design'], ['BUILDING', 'Build'],
-    ['REVIEW', 'Review'], ['DEPLOYING', 'Deploy'], ['LIVE', 'Live'],
-  ] as const
-  const current = Math.max(0, stages.findIndex(([id]) => id === stage))
+  const current = Math.max(0, STAGES.findIndex(([id]) => id === stage))
   return (
-    <div className="pw-process-rail" aria-label="Project process">
-      {stages.map(([id, label], index) => (
-        <div key={id} className={'pw-process-rail-step' + (id === stage ? ' active' : '') + (index < current || stage === 'LIVE' ? ' complete' : '')}>
-          <span>{index < current || stage === 'LIVE' ? 'x' : index + 1}</span>
-          <b>{label}</b>
-        </div>
-      ))}
-    </div>
+    <ol className="pv-stages" aria-label="Project process">
+      {STAGES.map(([id, label], index) => {
+        const done = index < current || stage === 'LIVE'
+        return (
+          <li key={id} className={cx('pv-stage', id === stage && !done && 'is-current', done && 'is-done')} aria-current={id === stage ? 'step' : undefined}>
+            <span>{done ? <AppIcon name="check" /> : index + 1}</span>
+            <b>{label}</b>
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 
-export function DetailsPanel({ run, steps, stage, requirements }: { run: AgentRun | undefined; steps: AgentStep[]; stage?: Project['lifecycleStage']; requirements: RequirementSession | null }) {
-  if (!run && requirements) return <div className="pw-details"><ProcessRail stage={stage} /><RequirementSummary session={requirements} /></div>
-  if (!run) return <div className="pw-emptyfiles">No build to show yet — start a build and its details appear here.</div>
-  const meta = RUN_STATUS_META[run.status] ?? { label: run.status, color: '#6E6B74' }
+/** The requirements interview's answers. */
+function RequirementSummary({ session }: { session: RequirementSession }) {
+  const answered = session.questions.filter((q) => q.selectedOption || q.otherText).length
   return (
-    <div className="pw-details">
-      <div className="pw-details-head">
-        <b>{run.mode.toLowerCase()} run</b>
-        <span className="pw-details-status" style={{ color: meta.color }}>{meta.label}</span>
-      </div>
+    <section className="pv-card pv-reqs">
+      <header>
+        <b>{session.status === 'APPROVED' ? 'Requirements approved' : 'Questions answered'}</b>
+        <small>{answered} of {session.questions.length} answered</small>
+      </header>
+      <dl>
+        {session.questions.map((q) => {
+          const answer = q.otherText || q.options.find((o) => o.id === q.selectedOption)?.label
+          return <div key={q.id}><dt>{q.prompt}</dt><dd className={answer ? undefined : 'is-waiting'}>{answer ?? 'Waiting for an answer'}</dd></div>
+        })}
+      </dl>
+    </section>
+  )
+}
+
+/** The current run: its status, the project stage, its numbers and every step. */
+export function DetailsPanel({ run, steps, stage, requirements }: { run: AgentRun | undefined; steps: AgentStep[]; stage?: Project['lifecycleStage']; requirements: RequirementSession | null }) {
+  if (!run && requirements) return <div className="pv-page"><ProcessRail stage={stage} /><RequirementSummary session={requirements} /></div>
+  if (!run) return <EmptyState title="No build to show yet" hint="Start a build and its details appear here." />
+  const status = runStatus(run.status)
+  return (
+    <div className="pv-page">
+      <header className="pv-head">
+        <h3>{run.conversational ? 'Chat reply' : `${run.mode.charAt(0)}${run.mode.slice(1).toLowerCase()} run`}</h3>
+        <span className={`pv-chip pv-chip--${status.tone}`}>{status.label}</span>
+      </header>
       <ProcessRail stage={stage} />
       {requirements && <RequirementSummary session={requirements} />}
-      <dl className="pw-details-meta">
-        <div><dt>Started</dt><dd>{runWhen(run.createdAt)}</dd></div>
-        <div><dt>Prompt tokens</dt><dd>{run.promptTokens.toLocaleString()}</dd></div>
-        <div><dt>Completion tokens</dt><dd>{run.completionTokens.toLocaleString()}</dd></div>
-        <div><dt>Restore point</dt><dd>{run.rollbackAvailable ? 'Available' : '—'}</dd></div>
+      <dl className="pv-stats">
+        <div className="pv-stat"><dt>Started</dt><dd>{runWhen(run.createdAt)}</dd></div>
+        <div className="pv-stat"><dt>Prompt tokens</dt><dd>{run.promptTokens.toLocaleString()}</dd></div>
+        <div className="pv-stat"><dt>Completion tokens</dt><dd>{run.completionTokens.toLocaleString()}</dd></div>
+        <div className="pv-stat"><dt>Restore point</dt><dd>{run.rollbackAvailable ? 'Available' : '—'}</dd></div>
       </dl>
-      <div className="pw-details-steps">
+      <section className="pv-well pv-steps">
+        <h4>Steps</h4>
         {steps.length
-          ? steps.map((step, i) => <BuildStep key={step.seq} step={step} previousCreatedAt={steps[i - 1]?.createdAt ?? run.createdAt} />)
-          : <p className="pw-loading">No steps recorded for this run.</p>}
-      </div>
+          ? <div className="run-steps">{steps.map((step, i) => <BuildStep key={step.seq} step={step} previousCreatedAt={steps[i - 1]?.createdAt ?? run.createdAt} />)}</div>
+          : <p className="pv-note">No steps recorded for this run.</p>}
+      </section>
     </div>
   )
 }

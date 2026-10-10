@@ -1,19 +1,19 @@
 import { Link } from 'react-router-dom'
 import type { Project } from '../../../api/projects'
-import { ICON } from '../../icons'
-import { Ico, relTime } from '../../parts'
+import { AppIcon } from '../../../components/icons'
+import { relTime } from '../../parts'
 
 /** One conversation: its name, opening prompt and last activity. The whole row is the link. */
-export default function ChatRow({ chat }: { chat: Project }) {
+export default function ChatRow({ chat, onOpen }: { chat: Project; onOpen?: () => void }) {
   return (
-    <Link to={`/project/${chat.id}`} className="ch-row">
-      <span className="ch-row__icon neu-well" aria-hidden><Ico d={ICON.chats} size={16} sw={1.8} /></span>
+    <Link to={`/project/${chat.id}`} className="ch-row" onClick={onOpen}>
+      <span className="ch-row__icon neu-well" aria-hidden><AppIcon name="chats" /></span>
       <span className="ch-row__body">
         <b>{chat.name}</b>
         {chat.initialPrompt && <small>{chat.initialPrompt}</small>}
       </span>
       <span className="ch-row__time">{relTime(chat.lastActivityAt)}</span>
-      <Ico d={ICON.chevronRight} size={14} sw={2} />
+      <AppIcon name="caretRight" />
     </Link>
   )
 }

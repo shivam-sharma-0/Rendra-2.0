@@ -2,9 +2,8 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useDeleteProject, useProjects } from '../../api/queries'
 import { useWorkspace } from '../../workspace/WorkspaceContext'
-import { ICON } from '../icons'
+import { AppIcon } from '../../components/icons'
 import DeleteProjectDialog from './DeleteProjectDialog'
-import ShellIcon from './ShellIcon'
 
 const MAX_RECENTS = 7
 
@@ -18,7 +17,9 @@ export default function RecentsList({ openProjectId }: { openProjectId: string |
   const deleteProject = useDeleteProject(selectedId)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null)
+  const [deleteError, setDeleteError] = useState('')
   const deletingOpen = confirmDelete?.id === openProjectId
+  const askDelete = (target: { id: string; name: string } | null) => { setDeleteError(''); setConfirmDelete(target) }
 
   return (
     <div className="kap-recents">
@@ -26,10 +27,15 @@ export default function RecentsList({ openProjectId }: { openProjectId: string |
         <DeleteProjectDialog
           projectName={confirmDelete.name}
           isOpen={deletingOpen}
-          onCancel={() => setConfirmDelete(null)}
+          busy={deleteProject.isPending}
+          error={deleteError}
+          onCancel={() => askDelete(null)}
           onConfirm={() => {
-            deleteProject.mutate(confirmDelete.id, { onSuccess: () => { if (deletingOpen) nav('/dashboard') } })
-            setConfirmDelete(null)
+            setDeleteError('')
+            deleteProject.mutate(confirmDelete.id, {
+              onSuccess: () => { setConfirmDelete(null); if (deletingOpen) nav('/dashboard') },
+              onError: (err) => setDeleteError(err instanceof Error ? err.message : 'Could not delete the project.'),
+            })
           }}
         />
       )}
@@ -38,17 +44,17 @@ export default function RecentsList({ openProjectId }: { openProjectId: string |
       {recents.map((p) => (
         <div key={p.id} className="kap-recent-item" onMouseLeave={() => setMenuFor(null)}>
           <Link to={`/project/${p.id}`} className={openProjectId === p.id ? 'on' : ''}>
-            <ShellIcon d={p.type === 'CHAT' ? ICON.chats : ICON.projects} size={18} />
+            <AppIcon name={p.type === 'CHAT' ? 'chat' : 'projects'} size={16} />
             <span>{p.name}</span>
           </Link>
           <button type="button" className={`kap-recent-dots ${menuFor === p.id ? 'active' : ''}`} aria-label="Project actions"
             onClick={(e) => { e.preventDefault(); setMenuFor(menuFor === p.id ? null : p.id) }}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></svg>
+            <AppIcon name="more" size={16} />
           </button>
           {menuFor === p.id && (
             <div className="kap-pop kap-recent-pop">
-              <button type="button" style={{ color: '#C63B2B' }} onClick={(e) => { e.preventDefault(); setMenuFor(null); setConfirmDelete({ id: p.id, name: p.name }) }}>
-                <ShellIcon d={ICON.trash} size={15} /> Delete
+              <button type="button" style={{ color: 'var(--neu-danger)' }} onClick={(e) => { e.preventDefault(); setMenuFor(null); askDelete({ id: p.id, name: p.name }) }}>
+                <AppIcon name="trash" size={16} /> Delete
               </button>
             </div>
           )}

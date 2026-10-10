@@ -1,29 +1,33 @@
-import { useEscape } from '../../lib/useEscape'
+import { NeuAlert, NeuButton, NeuDialog } from '../../components/neu'
 
 type Props = {
   projectName: string
   /** The project is the one currently open; deleting it leaves the page. */
   isOpen: boolean
+  /** The delete request is running: buttons are disabled and the dialog cannot be dismissed. */
+  busy?: boolean
+  error?: string
   onCancel: () => void
   onConfirm: () => void
 }
 
 /** Confirmation before deleting a project. Escape or a click outside cancels. */
-export default function DeleteProjectDialog({ projectName, isOpen, onCancel, onConfirm }: Props) {
-  useEscape(onCancel)
-
+export default function DeleteProjectDialog({ projectName, isOpen, busy = false, error, onCancel, onConfirm }: Props) {
   return (
-    <div className="kap-dialog-overlay" onClick={onCancel}>
-      <div className="kap-dialog" role="alertdialog" aria-modal="true" aria-labelledby="kap-delete-title" onClick={(e) => e.stopPropagation()}>
-        <div className="kap-dialog-title" id="kap-delete-title">Delete “{projectName}”?</div>
-        <div className="kap-dialog-body">
-          {isOpen ? 'This project is currently open. ' : ''}It will be permanently deleted. This action cannot be undone.
-        </div>
-        <div className="kap-dialog-actions">
-          <button type="button" className="kap-dialog-cancel" onClick={onCancel} autoFocus>Cancel</button>
-          <button type="button" className="kap-dialog-danger" onClick={onConfirm}>Delete project</button>
-        </div>
-      </div>
-    </div>
+    <NeuDialog
+      title={`Delete “${projectName}”?`}
+      size="sm"
+      locked={busy}
+      onClose={onCancel}
+      footer={(
+        <>
+          <NeuButton onClick={onCancel} disabled={busy}>Cancel</NeuButton>
+          <NeuButton variant="danger" onClick={onConfirm} disabled={busy}>{busy ? 'Deleting…' : 'Delete project'}</NeuButton>
+        </>
+      )}
+    >
+      <p className="kap-delete-text">{isOpen ? 'This project is currently open. ' : ''}It will be permanently deleted. This action cannot be undone.</p>
+      {error && <NeuAlert>{error}</NeuAlert>}
+    </NeuDialog>
   )
 }

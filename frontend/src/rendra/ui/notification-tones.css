@@ -1,0 +1,11 @@
+/* Notification icon tones, light and dark. */
+.nt-tone--ok { background: #E7F8EF; color: #0B6B45; }
+.nt-tone--bad { background: #FDECEA; color: #B42318; }
+.nt-tone--share { background: #F1EEFF; color: #3D30C9; }
+.nt-tone--invite { background: #FFF1EB; color: #A33511; }
+.nt-tone--role { background: #E4F1F7; color: #135E84; }
+.dark .nt-tone--ok { background: rgba(52, 211, 153, .14); color: #6EE7B7; }
+.dark .nt-tone--bad { background: rgba(255, 122, 104, .14); color: #FF9A8B; }
+.dark .nt-tone--share { background: rgba(167, 157, 255, .14); color: #BDB4FF; }
+.dark .nt-tone--invite { background: rgba(255, 140, 90, .14); color: #FFB08A; }
+.dark .nt-tone--role { background: rgba(110, 190, 230, .14); color: #9AD4F0; }

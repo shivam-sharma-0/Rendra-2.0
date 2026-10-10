@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { type AgentRun, type AgentStep, type Message, type MessageFeedback, type Project, type ProjectType, type RequirementSession } from '../../../api/projects'
-import { Ico } from '../../../rendra/parts'
+import { AppIcon } from '../../../components/icons'
+import { useShellMenu } from '../../../rendra/shell/ShellMenu'
 import { RequirementAnswerCard, RequirementWaiting } from '../dialogs/RequirementDialog'
 import { needsRequirementInterview } from '../runUtils'
 import type { LayoutMode, Quote } from '../workspaceTypes'
@@ -8,13 +9,10 @@ import { BuildStatus } from './BuildStatus'
 import { ChatMessage } from './ChatMessage'
 import { Composer } from './Composer'
 import { orderMessages } from './orderMessages'
+import { ProjectMenu } from './ProjectMenu'
 import { SelectionReplyPopup } from './SelectionReplyPopup'
 import './chat.css'
 
-const CHEVRON_ICON = 'm6 9 6 6 6-6'
-/** Panel outline with its side open / closed, for the "show panel" / "focus chat" toggle. */
-const PANEL_OPEN_ICON = 'M3 3h18v18H3zM15 3v18M8 10l2 2-2 2'
-const PANEL_CLOSE_ICON = 'M3 3h18v18H3zM15 3v18'
 
 type ChatColumnProps = {
   project: Project | null
@@ -35,6 +33,8 @@ type ChatColumnProps = {
   onOpenDetails: () => void
   onOpenPreview: () => void
   onOpenThinking: (reasoning: string, seconds: number) => void
+  /** The project was renamed. */
+  onProjectChange: (project: Project) => void
   layoutMode: LayoutMode
   chatWidth: number
   dragging: boolean
@@ -45,9 +45,10 @@ type ChatColumnProps = {
 export function ChatColumn({
   project, messages, runs, stepsByRun, loading, hasOlder, loadingOlder, onLoadOlder,
   requirements, rollbackError, sendError, editRequest, onSend, onFeedback, onEdit,
-  onOpenDetails, onOpenPreview, onOpenThinking, layoutMode, chatWidth, dragging, onToggleFocus,
+  onOpenDetails, onOpenPreview, onOpenThinking, onProjectChange, layoutMode, chatWidth, dragging, onToggleFocus,
 }: ChatColumnProps) {
   const [quote, setQuote] = useState<Quote | null>(null)
+  const shell = useShellMenu()
   const bottomRef = useRef<HTMLDivElement>(null)
   const chatInnerRef = useRef<HTMLDivElement>(null)
   const ordered = useMemo(() => orderMessages(messages), [messages])
@@ -61,10 +62,12 @@ export function ChatColumn({
       transition: dragging ? 'none' : 'flex-basis .3s cubic-bezier(.16,1,.3,1), width .18s ease, opacity .25s ease',
     }}>
       <header className="ws-chat-head">
-        <button type="button" className="ws-project">
-          <span>{project?.name ?? 'Loading…'}</span>
-          <Ico d={CHEVRON_ICON} size={13} sw={2.2} />
-        </button>
+        {shell.compact && (
+          <button type="button" className="ws-flat-btn" aria-label="Open menu" title="Menu" onClick={shell.openMenu}>
+            <AppIcon name="menu" />
+          </button>
+        )}
+        <ProjectMenu project={project} onRenamed={onProjectChange} />
         <BuildStatus runs={runs} />
         <span className="ws-grow" />
         <button
@@ -74,7 +77,7 @@ export function ChatColumn({
           aria-label={layoutMode === 'chat-only' ? 'Show panel' : 'Focus chat'}
           title={layoutMode === 'chat-only' ? 'Show panel' : 'Focus chat'}
         >
-          <Ico d={layoutMode === 'chat-only' ? PANEL_OPEN_ICON : PANEL_CLOSE_ICON} size={16} sw={2} />
+          <AppIcon name="sidebar" />
         </button>
       </header>
       <SelectionReplyPopup containerRef={chatInnerRef} onQuote={setQuote} />

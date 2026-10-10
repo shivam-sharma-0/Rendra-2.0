@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { projectApi, type PreviewDraftEvent, type PreviewStatus, type Project } from '../../../api/projects'
+import { AppIcon } from '../../../components/icons'
+import { NeuSegmentedControl } from '../../../components/neu'
+import { cx } from '../../../lib/cx'
+import type { Device } from '../workspaceTypes'
 
-/* ── Preview ──────────────────────────────────────────────────────────────── */
-export function PreviewPanel({ project, update, draftUpdate, reloadRequest }: {
+const SOURCES = [{ value: 'latest', label: 'Latest' }, { value: 'published', label: 'Published' }] as const
+
+/**
+ * The running app in a frame sized for the chosen device (desktop fills the screen; tablet and mobile
+ * are centred at their width), with a status line above it: build state, draft, latest/published.
+ */
+export function PreviewPanel({ project, update, draftUpdate, reloadRequest, device, onUrlChange }: {
   project: Project | null; update: PreviewStatus | null; draftUpdate: PreviewDraftEvent | null; reloadRequest: number
+  device: Device
+  /** Told the address being shown (null when none), e.g. for the header's "open in a new tab". */
+  onUrlChange?: (url: string | null) => void
 }) {
   // The backend returns the full URL: previews live on a separate sites origin (never the API
   // origin), so the generated app cannot reach the API with the viewer's cookies.
@@ -54,38 +66,42 @@ export function PreviewPanel({ project, update, draftUpdate, reloadRequest }: {
   const publishedView = live && showPublished
   const draft = publishedView ? null : preview?.draft ?? null
   const url = publishedView ? project?.publishedUrl : draft ? draft.url : preview?.available ? preview.url : null
+
+  useEffect(() => {
+    onUrlChange?.(url ?? null)
+    return () => onUrlChange?.(null)
+  }, [url, onUrlChange])
   const building = status?.state === 'BUILDING'
   const failed = status?.state === 'FAILED'
 
+  const stateText = publishedView ? 'Published version'
+    : draft ? 'Draft — Rendra is still working, not checked yet'
+      : building ? 'Updating preview…'
+        : failed ? (preview?.available ? 'Build failed — showing the last working version' : 'Build failed')
+          : preview?.available ? 'Up to date' : ''
+
   return (
-    <div className="pw-preview">
-      <div className="pw-preview-bar">
+    <div className="pv-preview">
+      <div className="pv-preview__bar">
         {live && (
-          <div className="pw-preview-switch" role="tablist" aria-label="Preview source">
-            <button type="button" role="tab" aria-selected={!showPublished} className={!showPublished ? 'on' : ''} onClick={() => setShowPublished(false)}>Latest</button>
-            <button type="button" role="tab" aria-selected={showPublished} className={showPublished ? 'on' : ''} onClick={() => setShowPublished(true)}>Published</button>
-          </div>
+          <NeuSegmentedControl className="pv-source" options={SOURCES} value={showPublished ? 'published' : 'latest'} onChange={(v) => setShowPublished(v === 'published')} aria-label="Preview source" />
         )}
-        {draft && <span className="pw-preview-draft">Draft</span>}
-        <span className={'pw-preview-state' + (failed && !publishedView && !draft ? ' failed' : '')} title={failed && !publishedView ? status?.error ?? undefined : undefined} aria-live="polite">
-          {publishedView ? 'Published version'
-            : draft ? 'Draft — Rendra is still working, not checked yet'
-            : building ? 'Updating preview…'
-              : failed ? (preview?.available ? 'Build failed — showing the last working version' : 'Build failed')
-                : preview?.available ? 'Up to date' : ''}
-        </span>
+        {draft && <span className="pv-chip pv-chip--wait">Draft</span>}
+        <span className={cx('pv-preview__state', failed && !publishedView && !draft && 'is-failed')} title={failed && !publishedView ? status?.error ?? undefined : undefined} aria-live="polite">{stateText}</span>
       </div>
       {url
-        ? <iframe key={`${url}#${reloads}`} title="App preview" src={url} className="pw-frame" sandbox="allow-scripts allow-same-origin allow-forms" />
+        ? (
+          <div className={`pv-device pv-device--${device}`}>
+            <iframe key={`${url}#${reloads}`} title="App preview" src={url} className="pv-frame" sandbox="allow-scripts allow-same-origin allow-forms" />
+          </div>
+        )
         : (
-          <div className="pw-empty pw-dots">
-            <div>
-              <span className="pw-empty-icon">◐</span>
-              <h3>{previewError ? 'Preview unavailable' : building ? 'Building preview' : failed ? 'Preview build failed' : 'No preview yet'}</h3>
-              {failed && status?.error
-                ? <pre className="pw-preview-error">{status.error}</pre>
-                : <p>Your app’s live preview will appear here once it can run. For now, open the <b>Code</b> tab to see the files Rendra has written.</p>}
-            </div>
+          <div className="pv-preview__empty">
+            <span className="pv-preview__icon"><AppIcon name={failed ? 'warning' : 'preview'} size={20} /></span>
+            <h3>{previewError ? 'Preview unavailable' : building ? 'Building preview' : failed ? 'Preview build failed' : 'No preview yet'}</h3>
+            {failed && status?.error
+              ? <pre className="pv-preview__error">{status.error}</pre>
+              : <p>Your app’s live preview will appear here once it can run. For now, open <b>Code</b> to see the files Rendra has written.</p>}
           </div>
         )}
     </div>

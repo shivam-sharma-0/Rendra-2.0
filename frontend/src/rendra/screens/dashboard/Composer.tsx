@@ -8,7 +8,7 @@ import { useWorkspace } from '../../../workspace/WorkspaceContext'
 import { useTypewriter } from '../../hooks/useTypewriter'
 import { ICON } from '../../icons'
 import { Ico } from '../../parts'
-import { AttachMenu, AttachmentList, ModeMenu } from '../../ui/prompt'
+import { AttachMenu, AttachmentList, ModeSwitch } from '../../ui/prompt'
 import { PLACEHOLDERS } from './content'
 
 type Props = {
@@ -71,7 +71,7 @@ export default function Composer({ draft, onDraftChange, mode, onModeChange }: P
             <Ico d={ICON.templateAdd} size={14} sw={1.9} /><span>Start from a template</span>
           </NeuButton>
           <span className="db-grow" />
-          <ModeMenu mode={mode} onChange={onModeChange} />
+          <ModeSwitch mode={mode} onChange={onModeChange} />
           <NeuIconButton type="submit" size="lg" variant="accent" aria-label="Start building" disabled={!canSend}>
             {start.isPending ? <Spinner size={16} label="Starting" /> : <Ico d={ICON.arrowUp} size={17} sw={2.4} />}
           </NeuIconButton>

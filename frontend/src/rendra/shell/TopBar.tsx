@@ -1,7 +1,6 @@
-import { useNavigate } from 'react-router-dom'
-import { ICON } from '../icons'
+import { AppIcon } from '../../components/icons'
+import { useOpenSearch } from '../screens/search/searchRoute'
 import NotificationsMenu from './NotificationsMenu'
-import ShellIcon from './ShellIcon'
 import type { NavId, PopoverControl } from './types'
 
 type Props = {
@@ -13,16 +12,16 @@ type Props = {
 
 /** Bar above the main surface: menu (compact screens), a "what's new" banner on home or a search launcher, and notifications. */
 export default function TopBar({ active, notifications, onOpenMenu }: Props) {
-  const nav = useNavigate()
+  const openSearch = useOpenSearch()
 
   return (
     <div className="kap-top">
-      <button type="button" className="kap-menu-btn" aria-label="Open menu" onClick={onOpenMenu}><ShellIcon d={ICON.menu} size={18} /></button>
+      <button type="button" className="kap-menu-btn" aria-label="Open menu" onClick={onOpenMenu}><AppIcon name="menu" size={20} /></button>
       {active === 'home' ? (
-        <span className="kap-whatsnew"><span>New</span>Multiplayer — build together in one project<ShellIcon d={ICON.arrowRight} size={13} /></span>
+        <span className="kap-whatsnew"><span>New</span>Multiplayer — build together in one project<AppIcon name="arrowRight" /></span>
       ) : (
-        <button type="button" className="kap-search-btn" onClick={() => nav('/search')}>
-          <ShellIcon d={ICON.search} size={15} /><span>Search projects, chats and actions</span><kbd>⌘K</kbd>
+        <button type="button" className="kap-search-btn" onClick={openSearch}>
+          <AppIcon name="search" /><span>Search projects, chats and actions</span><kbd>⌘K</kbd>
         </button>
       )}
       <div style={{ flexGrow: 1 }} />

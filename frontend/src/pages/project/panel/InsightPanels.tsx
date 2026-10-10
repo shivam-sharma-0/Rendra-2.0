@@ -1,68 +1,80 @@
 import { useAnalytics, useDatabase, useSecurityScan } from '../../../api/queries'
 import { EmptyState, ErrorState, LoadingState } from '../../../components/ui/States'
 
-/* ── Analytics (Figma 21) — real activity aggregates ──────────────────────────────────────────── */
+/** Real activity aggregates for the project. */
 export function AnalyticsPanel({ projectId, active }: { projectId: string; active: boolean }) {
   const { data, isLoading, isError, refetch } = useAnalytics(projectId, active)
-  if (isLoading) return <div className="pw-insight"><LoadingState /></div>
-  if (isError || !data) return <div className="pw-insight"><ErrorState message="Couldn't load analytics." onRetry={() => void refetch()} /></div>
+  if (isLoading) return <LoadingState />
+  if (isError || !data) return <ErrorState message="Couldn't load analytics." onRetry={() => void refetch()} />
   const rate = data.totalRuns ? Math.round((data.completedRuns / data.totalRuns) * 100) : 0
   const stats: [string, string | number][] = [
     ['Builds', data.totalRuns], ['Completed', data.completedRuns], ['Failed', data.failedRuns],
     ['Success rate', `${rate}%`], ['Messages', data.totalMessages], ['Files', data.fileCount],
-    ['Tokens used', data.totalTokens.toLocaleString()], ['Status', data.deploymentStatus],
+    ['Tokens used', data.totalTokens.toLocaleString()], ['Status', data.deploymentStatus.toLowerCase()],
   ]
   return (
-    <div className="pw-insight">
-      <h2>Analytics</h2>
-      <p className="pw-insight-sub">Real activity for this project.</p>
-      <div className="pw-stat-grid">
-        {stats.map(([label, val]) => <div className="pw-stat" key={label}><span>{label}</span><b>{val}</b></div>)}
-      </div>
-      <p className="pw-insight-meta">Created {new Date(data.createdAt).toLocaleDateString()} · Last activity {new Date(data.lastActivityAt).toLocaleDateString()}</p>
+    <div className="pv-page">
+      <header className="pv-head"><h3>Analytics</h3></header>
+      <p className="pv-sub">Real activity for this project.</p>
+      <dl className="pv-stats">
+        {stats.map(([label, value]) => <div className="pv-stat" key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+      </dl>
+      <p className="pv-sub">Created {new Date(data.createdAt).toLocaleDateString()} · Last activity {new Date(data.lastActivityAt).toLocaleDateString()}</p>
     </div>
   )
 }
 
-/* ── Security scan (Figma 23) — real static scan of workspace files ────────────────────────────── */
+/** A static scan of the workspace files for secrets and risky patterns. */
 export function SecurityPanel({ projectId, active }: { projectId: string; active: boolean }) {
   const { data, isLoading, isError, refetch } = useSecurityScan(projectId, active)
-  if (isLoading) return <div className="pw-insight"><LoadingState label="Scanning workspace…" /></div>
-  if (isError || !data) return <div className="pw-insight"><ErrorState message="Couldn't run the security scan." onRetry={() => void refetch()} /></div>
+  if (isLoading) return <LoadingState label="Scanning workspace…" />
+  if (isError || !data) return <ErrorState message="Couldn't run the security scan." onRetry={() => void refetch()} />
   return (
-    <div className="pw-insight">
-      <h2>Security scan</h2>
-      <p className="pw-insight-sub">Static check of {data.scannedFiles} workspace file{data.scannedFiles === 1 ? '' : 's'}.</p>
-      <div className="pw-sec-summary">
-        <span className="pw-sev high">{data.high} high</span>
-        <span className="pw-sev medium">{data.medium} medium</span>
-        <span className="pw-sev low">{data.low} low</span>
+    <div className="pv-page">
+      <header className="pv-head"><h3>Security scan</h3></header>
+      <p className="pv-sub">Static check of {data.scannedFiles} workspace file{data.scannedFiles === 1 ? '' : 's'}.</p>
+      <div className="pv-chips">
+        <span className="pv-chip pv-chip--failed">{data.high} high</span>
+        <span className="pv-chip pv-chip--wait">{data.medium} medium</span>
+        <span className="pv-chip pv-chip--busy">{data.low} low</span>
       </div>
       {data.findings.length === 0
         ? <EmptyState title="No issues found" hint="No secrets or risky patterns detected in the scanned files." />
-        : <div className="pw-sec-list">
+        : (
+          <ol className="pv-list">
             {data.findings.map((f, i) => (
-              <div className="pw-sec-row" key={i}>
-                <span className={`pw-sev ${f.severity.toLowerCase()}`}>{f.severity}</span>
+              <li className="pv-card pv-finding" key={i}>
+                <span className={`pv-chip pv-chip--${f.severity === 'HIGH' ? 'failed' : f.severity === 'MEDIUM' ? 'wait' : 'busy'}`}>{f.severity.toLowerCase()}</span>
                 <div><b>{f.title}</b><small>{f.file} · {f.detail}</small></div>
-              </div>
+              </li>
             ))}
-          </div>}
+          </ol>
+        )}
     </div>
   )
 }
 
-/* ── Cloud database (Figma 22) — honest empty state (no managed DB backend yet) ────────────────── */
+/** The MongoDB namespace reserved for the generated app, and its collections. */
 export function DatabasePanel({ projectId }: { projectId: string }) {
   const { data, isLoading, isError, refetch } = useDatabase(projectId)
-  if (isLoading) return <div className="pw-insight"><LoadingState /></div>
-  if (isError || !data) return <div className="pw-insight"><ErrorState message="Could not load database status." onRetry={() => void refetch()} /></div>
+  if (isLoading) return <LoadingState />
+  if (isError || !data) return <ErrorState message="Could not load database status." onRetry={() => void refetch()} />
   return (
-    <div className="pw-insight">
-      <h2>Project database</h2>
-      <p className="pw-insight-sub">The MongoDB namespace reserved for this generated app.</p>
-      <div className="pw-db-status"><span className={'pw-sev ' + (data.reachable ? 'low' : 'medium')}>{data.reachable ? 'Connected' : 'Unavailable'}</span><code>{data.database}</code></div>
-      {data.reachable ? <div className="pw-db-collections">{data.collections.length ? data.collections.map((name) => <span key={name}>{name}</span>) : <span>No collections yet</span>}</div> : <EmptyState title="MongoDB is unavailable" hint="Start the local MongoDB service to inspect this project's data." />}
+    <div className="pv-page">
+      <header className="pv-head"><h3>Project database</h3></header>
+      <p className="pv-sub">The MongoDB namespace reserved for this generated app.</p>
+      <div className="pv-chips">
+        <span className={`pv-chip pv-chip--${data.reachable ? 'ok' : 'wait'}`}>{data.reachable ? 'Connected' : 'Unavailable'}</span>
+        <code className="pv-code">{data.database}</code>
+      </div>
+      {data.reachable
+        ? (
+          <div className="pv-well pv-collections">
+            <h4>Collections</h4>
+            {data.collections.length ? <ul>{data.collections.map((name) => <li key={name}><code>{name}</code></li>)}</ul> : <p className="pv-note">No collections yet.</p>}
+          </div>
+        )
+        : <EmptyState title="MongoDB is unavailable" hint="Start the local MongoDB service to inspect this project's data." />}
     </div>
   )
 }

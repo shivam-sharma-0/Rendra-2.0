@@ -1,82 +1,60 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
-import { inviteApi, type WorkspaceRole, type InvitePreview } from '../api/projects'
-import { useMembers, useInviteMember, useUpdateMemberRole, useRemoveMember, useProjects } from '../api/queries'
-import { useWorkspace } from '../workspace/WorkspaceContext'
-import { useTheme, type Theme } from '../theme/ThemeProvider'
 import { LoadingState } from '../components/ui/States'
 import RendraLanding from './screens/landing/Landing'
 
-// Auth pulls in react-hook-form + zod; lazy-load it so those stay out of the landing bundle.
+// Each screen is lazy-loaded so its code and CSS stay out of the landing bundle.
 const Auth = lazy(() => import('./screens/auth/Auth'))
-// Onboarding is a large post-signup wizard with its own CSS — lazy-load it too.
-const Onboarding = lazy(() => import('./screens/Onboarding'))
-// Dashboard home uses the shared AppShell (own CSS) — lazy-load it.
+const Onboarding = lazy(() => import('./screens/onboarding/Onboarding'))
 const Dashboard = lazy(() => import('./screens/dashboard/Dashboard'))
-// Projects / Templates / Connectors share the AppShell — lazy-load each.
 const Projects = lazy(() => import('./screens/projects/Projects'))
 const Templates = lazy(() => import('./screens/templates/Templates'))
 const Connectors = lazy(() => import('./screens/connectors/Connectors'))
 const Notifications = lazy(() => import('./screens/notifications/Notifications'))
 const Chats = lazy(() => import('./screens/chats/Chats'))
-
+const Settings = lazy(() => import('./screens/settings/Settings'))
+const Invite = lazy(() => import('./screens/invite/Invite'))
+const Pricing = lazy(() => import('./screens/pricing/Pricing'))
 
 function Mark() { return <span className="k-mark"><i /></span> }
 function Arrow() { return <span className="k-arrow">→</span> }
-function Icon({ children }: { children: string }) { return <span className="k-icon">{children}</span> }
-
-function PublicNav() {
-  return <nav className="k-public-nav"><Link to="/" className="k-brand"><Mark />Rendra</Link><div className="k-nav-links"><a href="#how">Product</a><Link to="/templates">Templates</Link><Link to="/pricing">Pricing</Link><a href="#docs">Docs</a><a href="#community">Community</a></div><div className="k-nav-actions"><Link to="/auth" className="k-login">Log in</Link><Link to="/signup" className="k-dark-btn">Start building <Arrow /></Link></div></nav>
-}
-
-
-
 
 function Workspace(){const location=useLocation(); const nav=useNavigate(); const [message,setMessage]=useState(''); const path=location.pathname; const tab=path.includes('code')?'Code':path.includes('details')?'Details':path.includes('history')?'History':path.includes('share')?'Share':path.includes('publish')?'Publish':path.includes('analytics')?'Analytics':path.includes('database')?'Database':path.includes('security')?'Security':path.includes('members')?'Members':path.includes('settings')?'Settings':'Preview'; return <div className="rendra k-workspace"><header><Link to="/dashboard" className="k-brand"><Mark/>Rendra</Link><span className="k-divider"/><button className="k-project-name">Cedar & Stone⌄</button><span className="k-spacer"/><button>↶</button><button>↷</button><button onClick={()=>nav('/project/demo/share')}>Share</button><button className="k-dark-btn" onClick={()=>nav('/project/demo/publish')}>Publish</button></header><nav className="k-work-tabs">{[['Preview','/project/demo'],['Code','/project/demo/code'],['Details','/project/demo/details'],['History','/project/demo/history']].map(([x,p])=><Link className={tab===x?'active':''} key={x} to={p}>{x}</Link>)}<span/><button onClick={()=>nav('/project/demo/analytics')}>More⌄</button></nav><main>{tab==='Preview'||tab==='Code'?<><section className="k-chat"><div className="k-chat-scroll"><article className="k-user-msg">Create a warm, minimal online home for Cedar & Stone — a furniture studio making considered pieces for everyday living.</article><article className="k-agent-msg"><b><Mark/> Rendra <small>just now</small></b><p>I’ve built the first version of your site. It has a calm editorial feel with an easy path to browse the collection.</p><div className="k-build-status"><span>✓</span> Created 8 files <small>View changes</small></div></article></div><form onSubmit={e=>{e.preventDefault();setMessage('')}}><textarea value={message} onChange={e=>setMessage(e.target.value)} placeholder="Ask Rendra to make a change..."/><footer><button type="button">＋</button><span/><button className="k-send">↑</button></footer></form></section><section className={'k-preview '+(tab==='Code'?'code':'')} >{tab==='Code'?<CodeView/>:<Preview/>}</section></>:<ProjectTool tab={tab}/>}</main></div>}
 function Preview(){return <div className="k-preview-page"><nav><b>CEDAR<br/>& STONE</b><span>Collection　 Story　 Journal</span><button>Visit us</button></nav><section><small>EST. 2014 — BROOKLYN, NY</small><h1>Objects for<br/><em>everyday</em> living.</h1><p>Furniture made slowly, from honest materials.</p><button>Explore collection　↗</button></section><footer><span>01 / 04</span><b>↓</b></footer></div>}
 function CodeView(){return <div className="k-code-view"><header><span>Explorer</span><button>＋</button></header><aside>{['src','  components','    Header.tsx','    Hero.tsx','  App.tsx','  main.tsx','package.json'].map(x=><div key={x} className={x.includes('Hero')?'selected':''}>{x}</div>)}</aside><article><code><i>1</i> import {'{ Header }'} from './components/Header'<br/><i>2</i><br/><i>3</i> export default function App() {'{'}<br/><i>4</i>　 return (&lt;main&gt;<br/><i>5</i>　　&lt;Header /&gt;<br/><i>6</i>　　&lt;Hero /&gt;<br/><i>7</i>　 &lt;/main&gt;)<br/><i>8</i> {'}'}</code></article></div>}
 function ProjectTool({tab}:{tab:string}){const titles:Record<string,[string,string]>={Details:['Build details','Everything Rendra changed in this version.'],History:['Version history','Restore any point in your project’s timeline.'],Share:['Share this project','Invite people to view, comment or build with you.'],Publish:['Publish your project','Make Cedar & Stone live for the world.'],Analytics:['Analytics','See how people are using your app.'],Database:['Cloud database','Your project’s data, ready when you are.'],Security:['Security scan','A quick check of your project’s security posture.'],Members:['Members & access','People who can access this project.'],Settings:['Project settings','Manage the details of this project.']};const [h,s]=titles[tab]??titles.Details;return <section className="k-tool"><div><small>PROJECT · {tab.toUpperCase()}</small><h1>{h}</h1><p>{s}</p></div>{tab==='Share'?<div className="k-tool-card"><label>Invite people<input placeholder="name@company.com"/></label><button className="k-dark-wide">Send invite</button><hr/><p><b>Alex Morgan</b><span>Owner</span></p><p><b>Maya Chen</b><span>Can edit</span></p></div>:tab==='Publish'?<div className="k-tool-card"><b className="k-publish-icon">↗</b><h2>Ready to publish?</h2><p>Your app will be live at a secure rendra.app URL.</p><label>Project URL<input value="cedar-stone.rendra.app" readOnly/></label><button className="k-dark-wide">Publish project <Arrow/></button></div>:<div className="k-tool-card k-list">{['Build completed successfully','Project is deployed and healthy','All team members have access','No issues found'].map((x,i)=><p key={x}><span>{tab==='Security'?'✓':i+1}</span>{x}<small>{i===0?'Today, 10:42 AM':'Updated recently'}</small></p>)}</div>}</section>}
 
-function Settings(){
-  const loc=useLocation(); const nav=useNavigate(); const {user,signOut}=useAuth(); const {selected}=useWorkspace(); const {theme,setTheme}=useTheme();
-  const path=loc.pathname; const current=path.includes('notifications')?'Notifications':path.includes('appearance')?'Appearance':path.includes('members')?'Members':path.includes('billing')?'Billing & usage':'Profile';
-  const items=[['Profile','/settings/profile'],['Notifications','/settings/notifications'],['Appearance','/settings/appearance'],['Members','/settings/members'],['Billing & usage','/settings/billing-and-usage']];
-  return <div className="rendra k-settings"><aside className="k-settings-nav"><Link to="/dashboard">← Back to dashboard</Link><h1>Settings</h1><small>PERSONAL</small>{items.slice(0,3).map(([x,p])=><Link key={x} className={x===current?'active':''} to={p}>{x}</Link>)}<small>WORKSPACE</small>{items.slice(3).map(([x,p])=><Link key={x} className={x===current?'active':''} to={p}>{x}</Link>)}<button onClick={()=>{signOut();nav('/')}}>↪ Log out</button></aside><main className="k-settings-main"><section className="k-settings-content"><header><div><small>SETTINGS · {current.toUpperCase()}</small><h2>{current}</h2><p>{current==='Profile'?'Manage your personal details.':current==='Appearance'?'Choose how Rendra looks and feels for you.':`Manage your ${current.toLowerCase()}.`}</p></div>{current==='Profile'&&<button className="k-dark-btn">Save changes</button>}</header>{current==='Appearance'?<AppearanceSettings theme={theme} setTheme={setTheme}/>:current==='Members'?<MembersSettings/>:current==='Notifications'?<NotificationSettings/>:current==='Billing & usage'?<BillingSettings/>:<ProfileSettings name={user?.name??''} email={user?.email??''} workspace={selected?.name??'Your workspace'}/>}</section></main></div>
-}
-function AppearanceSettings({theme,setTheme}:{theme:Theme;setTheme:(theme:Theme)=>void}){const themes:[Theme,string][]=[['light','Light'],['dark','Dark'],['system','System']];return <><h3 className="k-settings-label">Theme</h3><div className="k-theme-choice">{themes.map(([value,label])=><button key={value} className={theme===value?'active':''} onClick={()=>setTheme(value)}><span className={'k-theme-preview '+value}><i/><b><em/><em/><strong/></b></span><span>{label}{theme===value&&<b>✓</b>}</span></button>)}</div><div className="k-setting-row"><div><b>Reduce motion</b><small>Use fewer animations throughout Rendra.</small></div><Toggle/></div><div className="k-setting-row"><div><b>Compact density</b><small>Fit more content on screen.</small></div><Toggle/></div></>}
-function Toggle(){const [on,setOn]=useState(false);return <button role="switch" aria-checked={on} onClick={()=>setOn(!on)} className={'k-toggle '+(on?'on':'')}><i/></button>}
-function ProfileSettings({name,email,workspace}:{name:string;email:string;workspace:string}){const initials=(name||email||'K').split(/\s|@/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase();return <><div className="k-profile-card"><span><Mark/><b>{initials}</b></span><div><h3>{name||'Rendra builder'}</h3><p>Owner of {workspace}</p></div><button>Upload photo</button></div><div className="k-profile-fields"><label>Full name<input defaultValue={name}/></label><label>Email address<input defaultValue={email} readOnly/></label><label>Role<input defaultValue="Owner" readOnly/></label><label>Workspace<input defaultValue={workspace} readOnly/></label></div><label className="k-profile-bio">What do you build?<textarea placeholder="A line teammates will see on your profile"/></label></>}
-function NotificationSettings(){return <div className="k-notification-settings"><header><b>Project activity</b><span>In app</span><span>Email</span></header>{['Build completed','New comment','Project published','Security alerts'].map(x=><div key={x}><span><b>{x}</b><small>Keep me updated about {x.toLowerCase()}.</small></span><Toggle/><Toggle/></div>)}</div>}
-function MembersSettings(){
-  const {selectedId}=useWorkspace(); const {user}=useAuth();
-  const {data:members,isLoading}=useMembers(selectedId);
-  const invite=useInviteMember(selectedId); const updateRole=useUpdateMemberRole(selectedId); const removeMember=useRemoveMember(selectedId);
-  const [email,setEmail]=useState(''); const [error,setError]=useState(''); const [linkCopied,setLinkCopied]=useState(false);
-  const list=members??[];
-  const submit=async()=>{if(!email.trim())return;setError('');try{await invite.mutateAsync(email.trim());setEmail('')}catch(e){setError(e instanceof Error?e.message:'Could not send the invite.')}};
-  const copyLink=async()=>{if(!selectedId)return;setError('');try{const inv=await inviteApi.create(selectedId);await navigator.clipboard?.writeText(`${window.location.origin}/invite?token=${inv.token}`);setLinkCopied(true);setTimeout(()=>setLinkCopied(false),1600)}catch(e){setError(e instanceof Error?e.message:'Could not create an invite link.')}};
-  return <><div className="k-member-invite"><h3>Invite people to your workspace</h3><div><input value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@company.com" type="email"/><button onClick={()=>void submit()} disabled={invite.isPending}>{invite.isPending?'Sending…':'Send invite'}</button></div><button className="k-copy-link" onClick={()=>void copyLink()}>{linkCopied?'✓ Link copied':'⌁ Copy invite link'}</button>{error&&<p className="k-form-error">{error}</p>}</div>{isLoading?<div className="k-loading">Loading members…</div>:list.length?<div className="k-members-list">{list.map(m=>{const isOwner=m.role==='OWNER';const isSelf=!!user&&m.email===user.email;return <div key={m.id}><span className="k-avatar">{(m.name||m.email||'M')[0].toUpperCase()}</span><span><b>{m.name||m.email}{isSelf&&' (you)'}</b><small>{m.email}</small></span>{isOwner?<em>Owner</em>:<><select className="k-role-select" value={m.role} onChange={e=>updateRole.mutate({memberId:m.id,role:e.target.value as WorkspaceRole})} disabled={updateRole.isPending}><option value="ADMIN">Admin</option><option value="MEMBER">Member</option></select><button className="k-member-remove" onClick={()=>removeMember.mutate(m.id)} disabled={removeMember.isPending} title="Remove member" aria-label={`Remove ${m.email}`}>✕</button></>}</div>})}</div>:<div className="k-empty">No members yet — invite someone above.</div>}</>
-}
-function BillingSettings(){return <><div className="k-plan-card"><div><small>CURRENT PLAN</small><h3>Free</h3><p>For exploring your next big idea.</p></div><button>Upgrade plan</button></div><div className="k-setting-row"><div><b>Project usage</b><small>1 of 3 projects used</small></div><div className="k-usage"><i/></div></div></>}
-function Search(){
-  const nav=useNavigate(); const {selectedId}=useWorkspace(); const {data:page}=useProjects(selectedId); const [q,setQ]=useState('');
-  useEffect(()=>{const f=(e:KeyboardEvent)=>e.key==='Escape'&&nav('/dashboard');addEventListener('keydown',f);return()=>removeEventListener('keydown',f)},[nav]);
-  const all=page?.content??[]; const query=q.trim().toLowerCase();
-  const matches=query?all.filter(p=>p.name.toLowerCase().includes(query)||(p.initialPrompt||'').toLowerCase().includes(query)).slice(0,8):[];
-  const quick:[string,string,string][]=[['⌂','Go to dashboard','/dashboard'],['▣','View projects','/projects'],['◈','Templates','/templates'],['⌁','Connectors','/connectors']];
-  return <div className="rendra k-search-screen"><div className="k-search-modal"><header><span>⌕</span><input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search projects and actions..."/><kbd>ESC</kbd></header><section>{query?<><small>PROJECTS</small>{matches.length?matches.map(p=><button key={p.id} onClick={()=>nav(`/project/${p.id}`)}><Icon>▤</Icon>{p.name}<span>↵</span></button>):<div className="k-search-empty">No projects match “{q}”.</div>}</>:<><small>QUICK LINKS</small>{quick.map(([i,n,p])=><button key={n} onClick={()=>nav(p)}><Icon>{i}</Icon>{n}<span>↵</span></button>)}</>}</section><footer>Navigate <kbd>↑</kbd><kbd>↓</kbd>　 Select <kbd>↵</kbd></footer></div></div>;
-}
-function Invite(){
-  const nav=useNavigate(); const {user}=useAuth(); const {reload}=useWorkspace();
-  const token=new URLSearchParams(useLocation().search).get('token')||'';
-  const [preview,setPreview]=useState<InvitePreview|null>(null); const [loading,setLoading]=useState(true); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
-  useEffect(()=>{let live=true;if(!token){setLoading(false);return}inviteApi.preview(token).then(p=>{if(live)setPreview(p)}).catch(()=>{if(live)setError('Could not load this invite.')}).finally(()=>{if(live)setLoading(false)});return()=>{live=false}},[token]);
-  const accept=async()=>{setBusy(true);setError('');try{await inviteApi.accept(token);await reload();nav('/dashboard')}catch(e){setError(e instanceof Error?e.message:'Could not accept the invite.');setBusy(false)}};
-  if(loading)return <div className="rendra k-invite k-dots"><Link to="/" className="k-brand"><Mark/>Rendra</Link><main><div className="k-loading">Loading invite…</div></main></div>;
-  const valid=!!token&&(preview?.valid??false);
-  return <div className="rendra k-invite k-dots"><Link to="/" className="k-brand"><Mark/>Rendra</Link><main><div className="k-invite-people"><span>{(preview?.invitedByName||'K').charAt(0).toUpperCase()}</span><i>＋</i><span>YOU</span></div><small>WORKSPACE INVITATION</small>{valid?<><h1>{preview?.invitedByName||'A teammate'} invited you to<br/><em>{preview?.workspaceName||'a workspace'}</em></h1><p>Join the workspace to build together on shared projects.</p>{error&&<p className="k-form-error">{error}</p>}<button className="k-dark-wide" onClick={()=>void accept()} disabled={busy}>{busy?'Joining…':'Accept & join'} <Arrow/></button></>:<><h1>Invite unavailable</h1><p>{preview?.reason||error||'This invite link is invalid or has expired.'}</p><button className="k-dark-wide" onClick={()=>nav('/dashboard')}>Go to dashboard <Arrow/></button></>}</main><footer>Signed in as {user?.email||'your account'} · <Link to="/auth">Not you?</Link></footer></div>;
+const PRIVATE_PATHS = ['/dashboard', '/projects', '/chats', '/connectors', '/notifications', '/settings', '/workspace-preview', '/invite']
+
+/** Screen for the current path: public pages, then signed-in pages behind the auth check. Search is an overlay (`App`). */
+function screenFor(path: string) {
+  if (path === '/pricing') return <Pricing />
+  if (path === '/auth' || path === '/login' || path === '/signup') return <><RendraLanding /><Auth /></>
+  if (path.startsWith('/onboarding')) return <Onboarding />
+  if (path === '/invite') return <Invite />
+  if (path === '/dashboard') return <Dashboard />
+  if (path === '/projects') return <Projects />
+  if (path === '/chats') return <Chats />
+  if (path === '/templates') return <Templates />
+  if (path === '/connectors') return <Connectors />
+  if (path === '/notifications') return <Notifications />
+  if (path.startsWith('/settings')) return <Settings />
+  if (path === '/workspace-preview') return <Workspace />
+  return null
 }
 
-export default function RendraApp(){const p=useLocation().pathname;const nav=useNavigate();const {isAuthenticated,loading}=useAuth();useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();nav('/search')}};addEventListener('keydown',onKey);return()=>removeEventListener('keydown',onKey)},[nav]);const privatePath=['/dashboard','/projects','/chats','/connectors','/notifications','/search','/settings','/workspace-preview','/invite'].some(x=>p.startsWith(x));if(loading&&privatePath)return null;if(privatePath&&!isAuthenticated)return <Navigate to="/auth" replace/>;if(p==='/'){if(loading)return null;return isAuthenticated?<Navigate to="/dashboard" replace/>:<RendraLanding/>;}if(p==='/pricing')return <Pricing/>;if(p==='/auth'||p==='/login'||p==='/signup')return <Suspense fallback={<LoadingState/>}><RendraLanding/><Auth/></Suspense>;if(p.startsWith('/onboarding'))return <Suspense fallback={<LoadingState/>}><Onboarding/></Suspense>;if(p==='/invite')return <Invite/>;if(p==='/dashboard')return <Suspense fallback={<LoadingState/>}><Dashboard/></Suspense>;if(p==='/projects')return <Suspense fallback={<LoadingState/>}><Projects/></Suspense>;if(p==='/chats')return <Suspense fallback={<LoadingState/>}><Chats/></Suspense>;if(p==='/templates')return <Suspense fallback={<LoadingState/>}><Templates/></Suspense>;if(p==='/connectors')return <Suspense fallback={<LoadingState/>}><Connectors/></Suspense>;if(p==='/notifications')return <Suspense fallback={<LoadingState/>}><Notifications/></Suspense>;if(p==='/search')return <Search/>;if(p.startsWith('/settings'))return <Settings/>;if(p==='/workspace-preview')return <Workspace/>;return <Navigate to="/" replace/>}
-function Pricing(){const nav=useNavigate();return <div className="rendra"><PublicNav/><section className="k-pricing"><small>PLANS THAT SCALE WITH YOU</small><h1>Build freely.<br/><em>Grow confidently.</em></h1><p>Start for free, then choose the space you need to make your best work.</p><div className="k-price-cards">{[['Free','$0','For exploring your next big idea.',['3 projects','Public sharing','Rendra subdomain']],['Pro','$20','For individuals building serious products.',['Unlimited projects','Custom domains','Priority builds']],['Team','$40','For teams making things together.',['Everything in Pro','Collaboration','Shared workspace']]].map(([n,price,text,features],i)=><article className={i===1?'featured':''} key={String(n)}>{i===1&&<b className="k-popular">MOST POPULAR</b>}<h2>{n}</h2><p>{text}</p><h3>{price}<small>{price==='$0'?' forever':' / month'}</small></h3><button onClick={()=>nav('/signup')}>{i===1?'Start free trial':'Get started'} <Arrow/></button><hr/>{(features as string[]).map(x=><p className="k-feature" key={x}>✓ {x}</p>)}</article>)}</div></section></div>}
+export default function RendraApp() {
+  const p = useLocation().pathname
+  const { isAuthenticated, loading } = useAuth()
+
+  const privatePath = PRIVATE_PATHS.some((x) => p.startsWith(x))
+  if (loading && privatePath) return null
+  if (privatePath && !isAuthenticated) return <Navigate to="/auth" replace />
+  if (p === '/') {
+    if (loading) return null
+    return isAuthenticated ? <Navigate to="/dashboard" replace /> : <RendraLanding />
+  }
+  const screen = screenFor(p)
+  return screen ? <Suspense fallback={<LoadingState />}>{screen}</Suspense> : <Navigate to="/" replace />
+}

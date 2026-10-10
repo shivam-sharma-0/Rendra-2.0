@@ -1,17 +1,18 @@
 import type { NotificationType } from '../../api/projects'
-import { ICON } from '../icons'
+import type { AppIconName } from '../../components/icons'
+import './notification-tones.css'
 
-export type NotificationStyle = { icon: string; bg: string; fg: string }
+export type NotificationStyle = { icon: AppIconName; tone: 'ok' | 'bad' | 'share' | 'invite' | 'role' }
 
 const STYLES: Record<NotificationType, NotificationStyle> = {
-  BUILD_FINISHED: { icon: ICON.check, bg: '#E7F8EF', fg: '#0B6B45' },
-  BUILD_FAILED: { icon: ICON.close, bg: '#FDECEA', fg: '#B42318' },
-  PROJECT_SHARED: { icon: ICON.share, bg: '#F1EEFF', fg: '#3D30C9' },
-  WORKSPACE_INVITE: { icon: ICON.userPlus, bg: '#FFF1EB', fg: '#A33511' },
-  ROLE_CHANGED: { icon: ICON.settingsCog, bg: '#E4F1F7', fg: '#135E84' },
+  BUILD_FINISHED: { icon: 'check', tone: 'ok' },
+  BUILD_FAILED: { icon: 'close', tone: 'bad' },
+  PROJECT_SHARED: { icon: 'share', tone: 'share' },
+  WORKSPACE_INVITE: { icon: 'userPlus', tone: 'invite' },
+  ROLE_CHANGED: { icon: 'gear', tone: 'role' },
 }
 
-/** Icon and colours for a notification type (the bell menu and the Notifications screen). */
+/** Icon and colour tone (`nt-tone--<tone>`) for a notification type (the bell menu and the Notifications screen). */
 export function notificationStyle(type: string): NotificationStyle {
   return STYLES[type as NotificationType] ?? STYLES.PROJECT_SHARED
 }

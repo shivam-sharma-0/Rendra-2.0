@@ -1,17 +1,15 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../auth/AuthContext'
-import { ICON } from '../icons'
+import { AppIcon, type AppIconName } from '../../components/icons'
 import { initials } from '../parts'
-import ShellIcon from './ShellIcon'
 import type { PopoverControl } from './types'
 import { RAIL_WIDTH } from './useSidebarState'
 
-const LINKS = [
-  { label: 'Profile', to: '/settings/profile', icon: ICON.profile },
-  { label: 'Workspace settings', to: '/settings/members', icon: ICON.gear },
-  { label: 'Billing & usage', to: '/settings/billing-and-usage', icon: ICON.billing },
-  { label: 'Help & docs', to: '/dashboard', icon: ICON.help },
-] as const
+const LINKS: { label: string; to: string; icon: AppIconName }[] = [
+  { label: 'Profile', to: '/settings/profile', icon: 'user' },
+  { label: 'Workspace settings', to: '/settings/members', icon: 'gear' },
+  { label: 'Billing & usage', to: '/settings/billing-and-usage', icon: 'creditCard' },
+]
 
 /** Signed-in user button at the bottom of the sidebar, with settings links and log out. */
 export default function AccountMenu({ collapsed, open, onToggle, onClose }: PopoverControl & { collapsed: boolean }) {
@@ -34,11 +32,11 @@ export default function AccountMenu({ collapsed, open, onToggle, onClose }: Popo
             </>
           )}
           {LINKS.map((m) => (
-            <Link key={m.label} to={m.to} className="kap-pop-item" onClick={onClose}><ShellIcon d={m.icon} size={16} />{m.label}</Link>
+            <Link key={m.label} to={m.to} className="kap-pop-item" onClick={onClose}><AppIcon name={m.icon} />{m.label}</Link>
           ))}
           <div className="kap-pop-sep" />
-          <button type="button" className="kap-pop-item" style={{ color: '#B42318' }} onClick={() => { signOut(); nav('/') }}>
-            <ShellIcon d={ICON.logout} size={16} />Log out
+          <button type="button" className="kap-pop-item" style={{ color: 'var(--neu-danger)' }} onClick={() => { signOut(); nav('/') }}>
+            <AppIcon name="signOut" />Log out
           </button>
         </div>
       )}

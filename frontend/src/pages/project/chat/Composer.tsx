@@ -3,7 +3,7 @@ import { type ProjectType } from '../../../api/projects'
 import { NeuIconButton } from '../../../components/neu'
 import { ICON } from '../../../rendra/icons'
 import { Ico } from '../../../rendra/parts'
-import { AttachMenu, AttachmentList, ModeMenu } from '../../../rendra/ui/prompt'
+import { AttachMenu, AttachmentList, ModeSwitch } from '../../../rendra/ui/prompt'
 import { CLOSE_ICON, REPLY_ICON } from '../icons'
 import type { Quote } from '../workspaceTypes'
 
@@ -76,7 +76,7 @@ export function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest
       <div className="ws-composer__bar">
         <input type="file" multiple hidden ref={fileInputRef} onChange={addFiles} />
         <AttachMenu size="sm" side="above" onUpload={() => fileInputRef.current?.click()} onImport={notYet} onUseSkill={notYet} />
-        <ModeMenu mode={mode} onChange={setMode} align="start" side="above" />
+        <ModeSwitch mode={mode} onChange={setMode} />
         <span className="ws-grow" />
         <NeuIconButton type="submit" variant="accent" className="ws-composer__send" aria-label="Send" disabled={!draft.trim()}>
           <Ico d={ICON.arrowUp} size={16} sw={2.4} />

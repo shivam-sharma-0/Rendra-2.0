@@ -1,0 +1,51 @@
+/* Command palette (/search), on the kit's --neu-* tokens. */
+
+/* Over the page it was opened from: the same dimmed, lightly blurred backdrop as the kit's dialogs. */
+.sr {
+  position: fixed; inset: 0; z-index: 200; display: flex; justify-content: center; align-items: flex-start;
+  padding: clamp(24px, 14vh, 140px) 16px 24px; overflow-y: auto;
+  background: rgba(22, 21, 26, .18); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  color: var(--neu-ink); font-family: Geist, system-ui, sans-serif; animation: sr-fade .16s ease both;
+}
+.dark .sr { background: rgba(0, 0, 0, .45); }
+@keyframes sr-fade { from { opacity: 0; } }
+.sr-palette.neu-panel { box-shadow: var(--neu-float); }
+.sr-palette { width: 100%; max-width: 620px; display: flex; flex-direction: column; overflow: hidden; animation: sr-in .18s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes sr-in { from { opacity: 0; transform: translateY(6px); } }
+
+.sr-field { display: flex; align-items: center; gap: 12px; height: 60px; margin: 12px 12px 0; padding: 0 10px 0 16px; border-radius: 16px; box-shadow: var(--neu-inset); color: var(--neu-faint); }
+.sr-field:focus-within { box-shadow: var(--neu-inset), 0 0 0 2px var(--neu-focus); }
+.sr-field input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: none; color: var(--neu-ink); font: inherit; font-size: 16px; }
+.sr-field input::placeholder { color: var(--neu-dim); }
+.sr-esc {
+  flex: none; height: 28px; padding: 0 9px; border: 0; border-radius: 8px; background: var(--neu-surface);
+  box-shadow: var(--neu-raised-sm); color: var(--neu-muted); font: 600 11.5px Geist, system-ui, sans-serif; cursor: pointer;
+}
+.sr-esc:hover { color: var(--neu-ink); }
+.sr-esc:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 2px; }
+
+.sr-list { max-height: min(560px, 62vh); scrollbar-width: thin; scrollbar-color: var(--neu-dashed) transparent; overflow-y: auto; padding: 10px 12px 8px; display: flex; flex-direction: column; gap: 10px; }
+.sr-group { display: flex; flex-direction: column; gap: 2px; }
+.sr-group > small { padding: 6px 10px; font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--neu-faint); }
+.sr-item { display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 10px; border-radius: 12px; color: var(--neu-muted); font-size: 14px; cursor: pointer; }
+.sr-item.is-active { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
+.sr-item__icon { flex: none; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; box-shadow: var(--neu-inset-sm); }
+.sr-item.is-active .sr-item__icon { color: var(--neu-accent); }
+.sr-item__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.sr-item > small { flex: none; font-size: 12px; color: var(--neu-faint); }
+.sr-item__enter { flex: none; width: 16px; text-align: center; font-size: 13px; color: var(--neu-faint); visibility: hidden; }
+.sr-item.is-active .sr-item__enter { visibility: visible; }
+.sr-empty { margin: 0; padding: 28px 10px; text-align: center; font-size: 14px; color: var(--neu-faint); }
+
+.sr-foot { display: flex; gap: 18px; padding: 12px 22px 14px; box-shadow: 0 -1px 0 var(--neu-dashed); font-size: 12px; color: var(--neu-faint); }
+.sr-foot span { display: inline-flex; align-items: center; gap: 5px; }
+.sr-foot kbd {
+  min-width: 20px; height: 20px; display: inline-grid; place-items: center; padding: 0 5px; border-radius: 6px;
+  box-shadow: var(--neu-raised-sm); font: 600 11px Geist, system-ui, sans-serif; color: var(--neu-muted);
+}
+
+@media (max-width: 560px) {
+  .sr { padding-top: 16px; }
+  .sr-foot { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .sr, .sr-palette { animation: none; } }

@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ICON } from '../icons'
-import ShellIcon from './ShellIcon'
+import { AppIcon } from '../../components/icons'
 
 const DISMISSED_KEY = 'rendra_hide_pro'
 
@@ -22,8 +21,8 @@ export default function GoProCard() {
   return (
     <div className="kap-pro">
       <span className="kap-pro-orb" />
-      <button type="button" className="kap-pro-close" onClick={dismiss} aria-label="Dismiss"><ShellIcon d={ICON.close} size={15} /></button>
-      <div style={{ position: 'relative', paddingRight: '12px' }}><b>Go Pro</b><p>More builds, custom domains and private projects.</p></div>
+      <button type="button" className="kap-pro-close" onClick={dismiss} aria-label="Dismiss"><AppIcon name="close" /></button>
+      <div style={{ position: 'relative', paddingRight: '12px' }}><b>Pro is coming</b><p>A larger AI allowance, custom domains and priority builds.</p></div>
       <Link to="/pricing">See plans</Link>
     </div>
   )

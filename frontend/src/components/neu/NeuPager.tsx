@@ -1,3 +1,4 @@
+import { AppIcon } from '../icons'
 import NeuIconButton from './NeuIconButton'
 
 type Props = {
@@ -13,11 +14,11 @@ export default function NeuPager({ page, pageCount, onChange }: Props) {
   return (
     <nav className="neu-pager" aria-label="Pagination">
       <NeuIconButton aria-label="Previous page" disabled={page === 0} onClick={() => onChange(page - 1)}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m15 18-6-6 6-6" /></svg>
+        <AppIcon name="caretLeft" />
       </NeuIconButton>
       <span className="neu-pager__info" aria-live="polite">{page + 1} / {pageCount}</span>
       <NeuIconButton aria-label="Next page" disabled={page >= pageCount - 1} onClick={() => onChange(page + 1)}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m9 18 6-6-6-6" /></svg>
+        <AppIcon name="caretRight" />
       </NeuIconButton>
     </nav>
   )

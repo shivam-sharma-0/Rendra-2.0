@@ -55,28 +55,8 @@
   outline: 2px solid var(--neu-focus); outline-offset: 2px;
 }
 
-/* ── Reply text (Markdown) in the chat ── */
-.ws-chat .pw-md { font-size: 14.5px; font-weight: 400; line-height: 1.65; color: var(--neu-ink); }
-.ws-chat .pw-md :is(p, li) { font-size: inherit; color: var(--neu-ink); }
-.ws-chat .pw-md :is(h1, h2, h3) { font-family: inherit; color: var(--neu-ink); letter-spacing: -.01em; }
-.ws-chat .pw-md h1 { font-size: 18px; }
-.ws-chat .pw-md h2 { font-size: 16px; }
-.ws-chat .pw-md h3 { font-size: 15px; }
-/* The global reset removes list markers; replies need them back */
-.ws-chat .pw-md ul { list-style: disc; }
-.ws-chat .pw-md ol { list-style: decimal; }
-.ws-chat .pw-md li::marker { color: var(--neu-dim); }
-.ws-chat .pw-md a { color: var(--neu-link); }
-.ws-chat .pw-md hr { border-top-color: var(--ws-line); }
-.ws-chat .pw-md code { padding: 1px 6px; border: 0; border-radius: 6px; background: var(--neu-surface); box-shadow: var(--neu-inset-sm); color: var(--neu-ink); font-size: 12.5px; }
-.ws-chat .pw-md pre { padding: 12px 14px; border-radius: 12px; background: #1B1A20; box-shadow: var(--neu-inset); }
-.ws-chat .pw-md pre code { padding: 0; background: none; box-shadow: none; color: #F3F1EC; }
-.ws-chat .pw-md blockquote { border-left: 3px solid var(--neu-accent); border-radius: 0 10px 10px 0; background: none; box-shadow: var(--neu-inset-sm); color: var(--neu-muted); }
-/* Tables sit in a recessed well */
-.ws-chat .pw-md table { border-collapse: separate; border-spacing: 0; border-radius: 12px; box-shadow: var(--neu-inset-sm); overflow: hidden; font-size: 13.5px; }
-.ws-chat .pw-md :is(th, td) { padding: 8px 12px; border: 0; border-top: 1px solid var(--ws-line); }
-.ws-chat .pw-md thead :is(th, td), .ws-chat .pw-md table > tbody:first-child > tr:first-child > * { border-top: 0; }
-.ws-chat .pw-md th { background: none; color: var(--neu-faint); font-size: 11.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+/* ── Reply text (Markdown, see markdown.css) in the chat ── */
+.ws-chat .md { font-size: 14.5px; color: var(--neu-ink); }
 
 /* ── While a reply is pending ── */
 .msg-thinking { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 13.5px; color: var(--neu-muted); }
@@ -84,15 +64,6 @@
 .msg-build { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 16px; background: var(--neu-surface); box-shadow: var(--neu-raised-sm); }
 .msg-build > b { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; }
 .msg-build__orb { flex: none; width: 20px; height: 20px; border-radius: 50%; background: conic-gradient(from 0deg, #FF5B2E, #FFB23E, #5B4CF5, #FF5B2E); animation: msg-spin 1.4s linear infinite; }
-.msg-build .pw-step { color: var(--neu-muted); }
-.msg-build .pw-step.thinking { color: var(--neu-ink); }
-.msg-build .pw-dot { background: var(--neu-dim); }
-.msg-build .pw-step code { background: var(--neu-surface); box-shadow: var(--neu-inset-sm); color: var(--neu-muted); }
-/* The reasoning step inside the card matches the reply chips */
-.msg-build .pw-thinking { height: 28px; padding: 0 11px; border: 0; background: var(--neu-surface); box-shadow: var(--neu-raised-sm); color: var(--neu-muted); }
-.msg-build .pw-thinking:hover:not(:disabled) { background: var(--neu-surface); color: var(--neu-ink); }
-.msg-build .pw-thinking.active { background: var(--neu-surface); box-shadow: var(--neu-inset-sm); color: var(--neu-ink); }
-.msg-build .pw-thinking svg { color: var(--neu-faint); }
 @keyframes msg-spin { to { transform: rotate(360deg); } }
 
 /* ── Reply "more" menu (portalled) ── */

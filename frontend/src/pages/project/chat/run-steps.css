@@ -1,0 +1,37 @@
+/* A run's steps (chat build card and Details panel), on the neumorphic kit's tokens. */
+
+.run-steps { display: flex; flex-direction: column; gap: 2px; }
+.run-step { display: flex; align-items: center; gap: 10px; min-height: 28px; font-size: 13px; color: var(--neu-muted); }
+.run-step--now { color: var(--neu-ink); }
+.run-step__dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--neu-dim); }
+.run-step__label { flex: none; }
+.run-step code {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 2px 8px; border-radius: 7px; box-shadow: var(--neu-inset-sm);
+  font: 500 11.5px 'JetBrains Mono', ui-monospace, monospace; color: var(--neu-muted);
+}
+
+/* "Thought for Ns" — a chip that opens the reasoning in place */
+.run-thought { display: flex; flex-direction: column; align-items: flex-start; width: 100%; margin: 3px 0; }
+.run-thought__chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border: 0; border-radius: 999px; background: var(--neu-surface); box-shadow: var(--neu-raised-sm);
+  color: var(--neu-muted); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  transition: box-shadow .18s, color .15s;
+}
+.run-thought__chip:hover { color: var(--neu-ink); }
+.run-thought__chip.is-open { color: var(--neu-ink); box-shadow: var(--neu-inset-sm); }
+.run-thought__chev { display: grid; transition: transform .2s; }
+.run-thought__chip.is-open .run-thought__chev { transform: rotate(90deg); }
+.run-thought__chip:focus-visible, .run-thought__head button:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 2px; }
+
+.run-thought__box { width: 100%; margin: 8px 0 6px; border-radius: 14px; box-shadow: var(--neu-inset-sm); overflow: hidden; }
+.run-thought__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 0; font-size: 11.5px; font-weight: 600; letter-spacing: .02em; color: var(--neu-faint); }
+.run-thought__head button {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px;
+  border: 0; border-radius: 8px; background: none; color: var(--neu-faint); font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.run-thought__head button:hover { color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
+.run-thought__body { max-height: 380px; overflow-y: auto; padding: 6px 14px 14px; }
+.run-thought__body .md { font-size: 13px; line-height: 1.7; color: var(--neu-muted); }
+.run-thought__empty { margin: 0; font-size: 12.5px; font-style: italic; color: var(--neu-dim); }

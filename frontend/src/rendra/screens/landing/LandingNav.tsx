@@ -1,11 +1,10 @@
 import { Link } from 'react-router-dom'
+import { AppIcon } from '../../../components/icons'
 import { NeuButton, neuButtonClass } from '../../../components/neu'
-import { ICON } from '../../icons'
-import { Ico } from '../../parts'
 import BrandMark from './BrandMark'
 
 const LINKS = [
-  { label: 'Product', href: '#how' },
+  { label: 'Product', href: '/#how' },
   { label: 'Templates', to: '/templates' },
   { label: 'Pricing', to: '/pricing' },
   { label: 'Docs', href: '#docs' },
@@ -24,7 +23,7 @@ export default function LandingNav({ onStart }: { onStart: () => void }) {
       </div>
       <div className="lp-nav__actions">
         <Link to="/auth" className={neuButtonClass({ size: 'sm', pill: true })}>Log in</Link>
-        <NeuButton variant="primary" size="sm" pill onClick={onStart}>Start building <Ico d={ICON.arrowRight} size={14} sw={2.2} /></NeuButton>
+        <NeuButton variant="primary" size="sm" pill onClick={onStart}>Start building <AppIcon name="arrowRight" /></NeuButton>
       </div>
     </nav>
   )

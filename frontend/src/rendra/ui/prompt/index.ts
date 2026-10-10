@@ -3,5 +3,5 @@ import './prompt.css'
 
 export { default as AttachMenu } from './AttachMenu'
 export { default as AttachmentList } from './AttachmentList'
-export { default as ModeMenu } from './ModeMenu'
+export { default as ModeSwitch } from './ModeSwitch'
 export { MODES, type ModeOption } from './modes'

@@ -1,8 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useDailyUsage } from '../../api/queries'
+import { AppIcon } from '../../components/icons'
 import { cx } from '../../lib/cx'
-import { ICON } from '../icons'
-import ShellIcon from './ShellIcon'
 
 const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
 const NEAR_LIMIT = 90 // percent
@@ -24,7 +23,7 @@ export default function UsageMeter({ onNavigate }: { onNavigate: () => void }) {
       <div className="kap-ws-credits-head">
         <span className="kap-ws-credits-title">Daily AI usage</span>
         <Link to="/settings/billing-and-usage" className="kap-ws-credits-badge" onClick={onNavigate}>
-          {data && !unlimited ? `${percent}% used` : 'Details'} <ShellIcon d={ICON.chevronRight} size={12} />
+          {data && !unlimited ? `${percent}% used` : 'Details'} <AppIcon name="caretRight" />
         </Link>
       </div>
       <div className="kap-ws-progress" role="progressbar" aria-label="Daily AI usage"

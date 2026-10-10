@@ -61,14 +61,17 @@ export function secondsBetween(fromIso: string, toMs: number): number {
 }
 
 /* ── Version history (Figma 18) — every agent run, newest first, with per-run restore ─────────── */
-export const RUN_STATUS_META: Record<string, { label: string; color: string }> = {
-  DONE: { label: 'Complete', color: '#0B6B45' },
-  RUNNING: { label: 'Running', color: '#3D30C9' },
-  QUEUED: { label: 'Queued', color: '#8A6D00' },
-  AWAITING_INPUT: { label: 'Awaiting input', color: '#8A6D00' },
-  FAILED: { label: 'Failed', color: '#B42318' },
-  CANCELLED: { label: 'Cancelled', color: '#6E6B74' },
+/** How a run's status reads: its label and a tone (coloured by the .pv-chip--<tone> styles). */
+export type StatusTone = 'ok' | 'busy' | 'wait' | 'failed' | 'idle'
+export const RUN_STATUS_META: Record<string, { label: string; tone: StatusTone }> = {
+  DONE: { label: 'Complete', tone: 'ok' },
+  RUNNING: { label: 'Running', tone: 'busy' },
+  QUEUED: { label: 'Queued', tone: 'wait' },
+  AWAITING_INPUT: { label: 'Awaiting input', tone: 'wait' },
+  FAILED: { label: 'Failed', tone: 'failed' },
+  CANCELLED: { label: 'Cancelled', tone: 'idle' },
 }
+export const runStatus = (status: string) => RUN_STATUS_META[status] ?? { label: status, tone: 'idle' as StatusTone }
 
 export function runWhen(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })

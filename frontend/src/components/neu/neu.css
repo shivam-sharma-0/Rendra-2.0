@@ -29,6 +29,9 @@
   --neu-raised-sm: 3px 3px 8px var(--neu-lo), -3px -3px 8px var(--neu-hi);
   --neu-inset: inset 3px 3px 7px var(--neu-lo), inset -3px -3px 7px var(--neu-hi);
   --neu-inset-sm: inset 2px 2px 5px var(--neu-lo), inset -2px -2px 5px var(--neu-hi);
+  /* Panels floating over a dimmed backdrop (dialogs, the search palette): a plain drop shadow, since
+     the raised shadow's light half reads as a smudge on the dimmed page. */
+  --neu-float: 0 24px 56px rgba(22, 21, 26, .22), 0 2px 8px rgba(22, 21, 26, .08);
 }
 
 /* Dark: Rendra's brand ink (#16151A), the colour of the light theme's dark buttons. */
@@ -47,6 +50,7 @@
   --neu-primary-bg: #F4F1E9;
   --neu-primary-ink: #16151A;
   --neu-dashed: #2E2C34;
+  --neu-float: 0 24px 56px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .05);
 }
 
 /* Panel: the raised base every other control sits on. */
@@ -102,6 +106,7 @@
 }
 .neu-btn--primary { background: var(--neu-primary-bg); color: var(--neu-primary-ink); }
 .neu-btn--accent { background: var(--neu-accent); color: #FFFFFF; }
+.neu-btn--danger { background: #C63B2B; }
 .neu-btn--primary:hover, .neu-btn--accent:hover { transform: translateY(-1px); }
 .neu-btn--primary:active, .neu-btn--accent:active { transform: translateY(1px); }
 .neu-btn--primary:disabled, .neu-btn--accent:disabled { opacity: .6; cursor: progress; transform: none; outline: none; }
@@ -178,6 +183,26 @@
 }
 .neu-segmented__option[aria-checked="true"] { color: var(--neu-ink); }
 
+/* Folding switch: like the segmented control, but only the selected option shows its name; the
+   raised pill (one element, see useSlidingThumb) slides across as that name unfolds. */
+.neu-fold { position: relative; flex: none; display: inline-flex; align-items: center; gap: 2px; padding: 3px; border-radius: 12px; box-shadow: var(--neu-inset-sm); }
+.neu-fold__thumb { position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; border-radius: 9px; background: var(--neu-surface); box-shadow: var(--neu-raised-sm); }
+.neu-fold__option {
+  position: relative; z-index: 1; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  height: 30px; padding: 0 9px; border: 0; border-radius: 9px; background: none; cursor: pointer;
+  color: var(--neu-faint); font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap;
+  transition: color .15s, box-shadow .18s;
+}
+.neu-fold__option:hover { color: var(--neu-ink); }
+.neu-fold__option[aria-checked="true"] { color: var(--neu-ink); }
+.neu-fold__option[aria-checked="true"] svg { color: var(--neu-accent); }
+.neu-fold__option:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 2px; }
+.neu-fold__label {
+  display: inline-block; max-width: 96px; margin-left: 6px; overflow: hidden; opacity: 1;
+  transition: max-width .32s cubic-bezier(.2, .8, .2, 1), margin-left .32s cubic-bezier(.2, .8, .2, 1), opacity .22s ease;
+}
+.neu-fold__option.is-folded .neu-fold__label { max-width: 0; margin-left: 0; opacity: 0; }
+
 /* Divider: an engraved groove, optionally with a centred label. */
 .neu-divider {
   display: flex; align-items: center; gap: 12px;
@@ -186,6 +211,41 @@
 .neu-divider::before, .neu-divider::after {
   content: ""; flex: 1; height: 3px; border-radius: 3px; box-shadow: var(--neu-inset-sm);
 }
+
+/* Select: a native <select> in an inset well, with its own chevron */
+.neu-select { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+.neu-select select {
+  appearance: none; width: 100%; height: 42px; padding: 0 34px 0 14px; border: 0; border-radius: 12px;
+  background: var(--neu-surface); color: var(--neu-ink); font: inherit; font-size: 13.5px;
+  box-shadow: var(--neu-inset); outline: none; cursor: pointer;
+}
+.neu-select--sm select { height: 34px; padding: 0 30px 0 12px; border-radius: 11px; font-size: 13px; box-shadow: var(--neu-inset-sm); }
+.neu-select select:focus-visible { box-shadow: var(--neu-inset), 0 0 0 2px var(--neu-focus); }
+.neu-select select:disabled { color: var(--neu-faint); cursor: default; }
+.neu-select svg { position: absolute; right: 12px; pointer-events: none; color: var(--neu-faint); }
+
+/* Dialog: a raised panel over a blurred backdrop */
+.neu-dialog-backdrop {
+  position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 24px;
+  background: rgba(22, 21, 26, .18); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  animation: neu-fade .16s ease both;
+}
+.dark .neu-dialog-backdrop { background: rgba(0, 0, 0, .45); }
+.neu-dialog {
+  width: min(480px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column;
+  border-radius: 22px; outline: none; animation: neu-dialog-in .22s cubic-bezier(.2, .8, .2, 1) both;
+}
+.neu-dialog.neu-panel { box-shadow: var(--neu-float); }
+.neu-dialog--sm { width: min(400px, 100%); }
+.neu-dialog--lg { width: min(720px, 100%); }
+.neu-dialog__head { display: flex; align-items: flex-start; gap: 12px; padding: 20px 20px 4px 22px; }
+.neu-dialog__head > div { flex: 1; min-width: 0; }
+.neu-dialog__head h2 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.01em; color: var(--neu-ink); }
+.neu-dialog__head p { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--neu-muted); }
+.neu-dialog__body { min-height: 0; overflow: auto; padding: 14px 22px 18px; display: flex; flex-direction: column; gap: 14px; }
+.neu-dialog__foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 0 22px 20px; }
+@keyframes neu-fade { from { opacity: 0; } }
+@keyframes neu-dialog-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
 
 /* Dropdown menu */
 .neu-menu-anchor { position: relative; }
@@ -230,6 +290,6 @@
 .neu-alert--error { color: var(--neu-danger); }
 
 @media (prefers-reduced-motion: reduce) {
-  .neu-btn, .neu-icon-btn, .neu-input, .neu-segmented__thumb, .neu-panel--interactive, .neu-btn svg { transition: none; }
-  .neu-menu { animation: none; }
+  .neu-btn, .neu-icon-btn, .neu-input, .neu-segmented__thumb, .neu-fold__option, .neu-fold__label, .neu-panel--interactive, .neu-btn svg { transition: none; }
+  .neu-menu, .neu-dialog, .neu-dialog-backdrop { animation: none; }
 }

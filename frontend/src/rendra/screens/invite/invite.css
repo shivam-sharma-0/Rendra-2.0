@@ -1,0 +1,7 @@
+/* Workspace invite (/invite?token=…): the inviter-plus-you faces above the card's title. */
+
+.iv-eyebrow { font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--neu-faint); }
+.iv-faces { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.iv-face { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 50%; background: var(--neu-accent); color: #FFFFFF; font-size: 19px; font-weight: 700; box-shadow: var(--neu-raised-sm); }
+.iv-face--you { background: var(--neu-primary-bg); color: var(--neu-primary-ink); font-size: 13px; }
+.iv-plus { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; box-shadow: var(--neu-inset-sm); color: var(--neu-faint); }

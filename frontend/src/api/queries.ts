@@ -219,6 +219,17 @@ export function useRemoveProjectMember(projectId: string) {
   })
 }
 
+export function useRenameProject(workspaceId: string | null | undefined) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projectId, name }: { projectId: string; name: string }) => projectApi.update(projectId, { name }),
+    onSuccess: (project) => {
+      client.setQueryData(qk.project(project.id), project)
+      if (workspaceId) client.invalidateQueries({ queryKey: ['workspaces', workspaceId, 'projects'] })
+    },
+  })
+}
+
 export function useDeleteProject(workspaceId: string | null | undefined) {
   const client = useQueryClient()
   return useMutation({

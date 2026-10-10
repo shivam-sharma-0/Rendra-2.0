@@ -61,13 +61,18 @@
 .kap .kap-side.collapsed .kap-ws:hover { box-shadow: var(--neu-raised-sm); }
 
 /* Navigation and recents */
+/* Sidebar text: a touch darker than the kit's muted grey (a touch lighter in dark mode) */
+.kap { --kap-side-text: #5C5962; --kap-side-label: #7E7B85; }
+.dark .kap { --kap-side-text: #C2BEC8; --kap-side-label: #9A96A1; }
 .kap .kap-nav { gap: 4px; }
-.kap .kap-nav button, .kap .kap-recent-item > a { border-radius: 10px; color: var(--neu-muted); transition: box-shadow .18s, color .15s; }
+.kap .kap-nav button, .kap .kap-recent-item > a { border-radius: 10px; color: var(--kap-side-text); transition: box-shadow .18s, color .15s; }
+/* 34px rows centre the 16px icons on a whole pixel (33px rows left them half a pixel off, blurred) */
+.kap .kap-nav button, .kap .kap-recent-item > a, .kap .kap-side.collapsed .kap-nav button { height: 34px; }
 .kap .kap-nav button:hover, .kap .kap-recent-item > a:hover { background: transparent; color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
 .kap .kap-nav button.on, .kap .kap-nav button.on:hover,
 .kap .kap-recent-item > a.on, .kap .kap-recent-item > a.on:hover { background: transparent; color: var(--neu-ink); font-weight: 600; box-shadow: var(--neu-inset-sm); }
 .kap .kap-nav .kbd { color: var(--neu-dim); }
-.kap .kap-recents-h { padding: 12px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--neu-faint); }
+.kap .kap-recents-h { padding: 12px 10px 4px; font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--kap-side-label); }
 .kap .kap-recent-dots:hover { background: transparent; color: var(--neu-ink); box-shadow: var(--neu-raised-sm); }
 
 /* Go Pro: a light raised card instead of a dark block */
@@ -91,7 +96,7 @@
 .kap .kap-ws-progress { background: transparent; box-shadow: var(--neu-inset-sm); }
 .kap .kap-ws-progress-fill { background: var(--neu-accent); }
 .kap .kap-ws-divider { height: 3px; margin: 11px 0; border-radius: 3px; background: transparent; box-shadow: var(--neu-inset-sm); }
-.kap .kap-ws-pop-avatar { background: var(--neu-primary-bg); color: var(--neu-primary-ink); box-shadow: var(--neu-raised-sm); }
+.kap .kap-ws-pop-avatar { background: #B4460A; color: #FFFFFF; font-size: 18px; font-weight: 700; box-shadow: var(--neu-raised-sm); }
 .kap .kap-ws-pop-subtitle, .kap .kap-ws-credits-badge { color: var(--neu-faint); }
 .kap .kap-ws-credits-badge:hover { color: var(--neu-ink); }
 .kap .kap-ws-bullet { background: var(--neu-faint); }
@@ -145,3 +150,7 @@
 .kap .kap-main--plain .kap-search-btn { border: 0; background: var(--neu-surface); color: var(--neu-faint); box-shadow: var(--neu-inset-sm); transition: box-shadow .18s, color .15s; }
 .kap .kap-main--plain .kap-search-btn:hover { color: var(--neu-ink); box-shadow: var(--neu-inset); }
 .kap .kap-main--plain .kap-search-btn kbd { border: 0; background: transparent; color: var(--neu-dim); box-shadow: var(--neu-raised-sm); }
+.kap .kap-search-btn > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Delete-project confirmation (DeleteProjectDialog, on the kit's NeuDialog) */
+.kap-delete-text { margin: 0; font-size: 14px; line-height: 1.55; color: var(--neu-muted); }

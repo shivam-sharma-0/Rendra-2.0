@@ -7,6 +7,7 @@ import TopBar from './shell/TopBar'
 import type { NavId, PopoverControl, ShellPopover } from './shell/types'
 import { useEscape } from '../lib/useEscape'
 import { useSidebarState } from './shell/useSidebarState'
+import { ShellMenuContext } from './shell/ShellMenu'
 import '../components/neu' // soft-UI --neu-* tokens used by shell.css
 import './shell/shell.css'
 
@@ -72,7 +73,9 @@ export default function AppShell({ active, surface = 'card', children }: Props) 
 
       <main className={cx('kap-main', surface === 'plain' && 'kap-main--plain')}>
         {!openProjectId && <TopBar active={active} notifications={control('notifications')} onOpenMenu={sidebar.openDrawer} />}
-        {children}
+        <ShellMenuContext.Provider value={{ compact: sidebar.compact, openMenu: sidebar.openDrawer }}>
+          {children}
+        </ShellMenuContext.Provider>
       </main>
     </div>
   )

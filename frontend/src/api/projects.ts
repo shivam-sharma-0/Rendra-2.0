@@ -103,6 +103,8 @@ export const projectApi = {
   previewToken: (id: string, opts?: ReadOpts) =>
     apiGet<{ token: string; url: string; available: boolean; status: PreviewStatus; draft: PreviewDraft | null }>(`/api/projects/${id}/preview-token`, opts),
   uploadAttachments: (id: string, files: File[]) => apiUpload<Attachment[]>(`/api/projects/${id}/attachments`, files),
+  /** Rename (and other small edits) — PATCH /api/projects/{id}. */
+  update: (id: string, body: { name?: string }) => apiSend<Project>('PATCH', `/api/projects/${id}`, body),
   remove: (id: string) => apiSend<void>('DELETE', `/api/projects/${id}`),
   publish: (id: string) => apiSend<Project>('POST', `/api/projects/${id}/publish`),
   unpublish: (id: string) => apiSend<Project>('POST', `/api/projects/${id}/unpublish`),

@@ -1,12 +1,11 @@
 import type { KeyboardEvent, MouseEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../../auth/AuthContext'
+import { AppIcon } from '../../components/icons'
 import { cx } from '../../lib/cx'
-import { ICON } from '../icons'
 import AccountMenu from './AccountMenu'
 import GoProCard from './GoProCard'
 import RecentsList from './RecentsList'
-import ShellIcon from './ShellIcon'
 import SidebarNav from './SidebarNav'
 import type { NavId, PopoverControl } from './types'
 import { useEscape } from '../../lib/useEscape'
@@ -72,18 +71,18 @@ export default function Sidebar(props: Props) {
             <button type="button" className="kap-rail-toggle" onClick={onToggleCollapsed} aria-expanded={false}
               aria-label="Expand sidebar" title="Expand sidebar (Ctrl+B)">
               <span className="kap-brand-orb" aria-hidden><i /></span>
-              <span className="kap-rail-toggle__icon" aria-hidden><ShellIcon d={ICON.sidebar} size={17} /></span>
+              <span className="kap-rail-toggle__icon" aria-hidden><AppIcon name="sidebar" size={16} /></span>
             </button>
           ) : (
             <Link to="/" className="kap-brand"><span className="kap-brand-orb"><i /></span><b>Rendra</b></Link>
           )}
           {compact && (
-            <button type="button" className="kap-side-toggle" aria-label="Close menu" onClick={onCloseDrawer}><ShellIcon d={ICON.close} size={17} /></button>
+            <button type="button" className="kap-side-toggle" aria-label="Close menu" onClick={onCloseDrawer}><AppIcon name="close" size={16} /></button>
           )}
           {docked && !collapsed && (
             <button type="button" className="kap-side-toggle" onClick={onToggleCollapsed} aria-expanded
               aria-label="Collapse sidebar" title="Collapse sidebar (Ctrl+B)">
-              <ShellIcon d={ICON.sidebar} size={17} />
+              <AppIcon name="sidebar" size={16} />
             </button>
           )}
         </div>

@@ -1,0 +1,30 @@
+/* Single centred card on the soft surface, on the kit's --neu-* tokens. */
+
+.cs {
+  min-height: 100vh; display: flex; flex-direction: column; align-items: center; gap: 28px; padding: 22px 16px 28px;
+  background: var(--neu-surface); color: var(--neu-ink); font-family: Geist, system-ui, sans-serif;
+}
+.cs-brand { align-self: flex-start; display: inline-flex; align-items: center; gap: 9px; color: var(--neu-ink); text-decoration: none; font-size: 19px; font-weight: 700; letter-spacing: -.01em; }
+.cs .cs-brand__mark { width: 28px; height: 28px; }
+.cs .cs-brand__mark i { width: 11px; height: 11px; background: var(--neu-surface); }
+
+.cs-card {
+  margin: auto 0; width: 100%; max-width: 460px; display: flex; flex-direction: column; align-items: center; gap: 14px;
+  padding: 34px 32px 30px; text-align: center; animation: cs-in .22s cubic-bezier(.2, .8, .2, 1) both;
+}
+@keyframes cs-in { from { opacity: 0; transform: translateY(8px); } }
+.cs-card h1 { margin: 0; font-size: 26px; font-weight: 700; line-height: 1.2; letter-spacing: -.025em; text-wrap: balance; }
+.cs-card h1 em { font-style: normal; color: var(--neu-accent); white-space: nowrap; }
+.cs-card > p { margin: 0 0 6px; font-size: 14.5px; line-height: 1.5; color: var(--neu-muted); }
+.cs-card .neu-alert { align-self: stretch; text-align: left; }
+.cs-icon { width: 56px; height: 56px; display: grid; place-items: center; border-radius: 18px; box-shadow: var(--neu-inset); color: var(--neu-accent); }
+.cs-loading { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 30px 0; font-size: 14px; color: var(--neu-faint); }
+
+.cs-foot { font-size: 13px; color: var(--neu-faint); text-align: center; }
+.cs-foot b { font-weight: 600; color: var(--neu-muted); }
+.cs-foot button { padding: 0; border: 0; background: none; color: var(--neu-link); font: inherit; cursor: pointer; }
+.cs-foot button:hover { text-decoration: underline; }
+.cs-foot button:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 2px; border-radius: 4px; }
+
+@media (max-width: 480px) { .cs-card { padding: 28px 20px 24px; } .cs-card h1 { font-size: 22px; } }
+@media (prefers-reduced-motion: reduce) { .cs-card { animation: none; } }

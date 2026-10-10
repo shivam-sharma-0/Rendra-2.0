@@ -16,3 +16,15 @@
 .ch-row__body b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; color: var(--neu-ink); }
 .ch-row__body small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--neu-faint); }
 .ch-row__time { flex: none; font-size: 12.5px; color: var(--neu-muted); }
+
+/* The sidebar's Chats dialog (rendra/shell/ChatsDialog) */
+.neu-dialog.ch-dialog { width: min(560px, 100%); }
+.ch-dialog__bar { display: flex; align-items: center; gap: 10px; }
+.ch-dialog__bar .neu-search { flex: 1; min-width: 0; }
+.ch-dialog__bar .neu-btn { flex: none; }
+.ch-dialog__list { padding: 0; }
+.ch-dialog__state { display: grid; place-items: center; margin: 0; padding: 32px 0; font-size: 14px; color: var(--neu-faint); text-align: center; }
+@media (max-width: 480px) {
+  .ch-dialog__bar { flex-direction: column; align-items: stretch; }
+  .ch-dialog .ch-row__time { display: none; }
+}

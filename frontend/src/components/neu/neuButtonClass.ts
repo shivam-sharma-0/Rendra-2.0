@@ -1,8 +1,8 @@
 import { cx } from '../../lib/cx'
 
 export type NeuButtonStyle = {
-  /** `raised` (default) for secondary actions; `primary` (solid ink) and `accent` (brand orange) for the main action. */
-  variant?: 'raised' | 'primary' | 'accent'
+  /** `raised` (default) for secondary actions; `primary` (solid ink) and `accent` (brand orange) for the main action; `danger` (solid red) to confirm a destructive one. */
+  variant?: 'raised' | 'primary' | 'accent' | 'danger'
   /** Height: sm 34 · md 40 (default) · lg 44 · xl 54. */
   size?: 'sm' | 'md' | 'lg' | 'xl'
   /** Fully rounded ends. */
@@ -15,7 +15,7 @@ export type NeuButtonStyle = {
 export function neuButtonClass({ variant = 'raised', size = 'md', pill = false, block = false }: NeuButtonStyle, className?: string) {
   return cx(
     'neu-btn',
-    variant !== 'raised' && `neu-btn--${variant}`,
+    variant === 'danger' ? 'neu-btn--accent neu-btn--danger' : variant !== 'raised' && `neu-btn--${variant}`,
     size !== 'md' && `neu-btn--${size}`,
     pill && 'neu-btn--pill',
     block && 'neu-btn--block',
