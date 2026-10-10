@@ -5,6 +5,7 @@ import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.plan.AgentPlanState;
 import com.code.pal.agent.context.ContextDiagnostics;
 import com.code.pal.agent.context.ContextMessage;
+import com.code.pal.agent.context.ConversationCompactor;
 import com.code.pal.agent.context.ProjectContext;
 import com.code.pal.agent.context.ProjectContextService;
 import com.code.pal.agent.domain.AgentIntent;
@@ -233,6 +234,8 @@ public class AgentRunner implements AgentRuntime {
             List<ToolSpec> specs = available.stream()
                     .map(t -> new ToolSpec(t.name(), t.description(), t.parametersSchema())).toList();
             int specChars = specs.toString().length();
+            ConversationCompactor compactor = props.isCompactContext()
+                    ? new ConversationCompactor(objectMapper, props.getCompactKeepTurns(), props.getCompactMinChars()) : null;
 
             List<LlmMessage> convo = new ArrayList<>();
             convo.add(LlmMessage.system(systemPrompt(run.getMode())));
@@ -283,6 +286,14 @@ public class AgentRunner implements AgentRuntime {
                         runtime.modelCallCount(), selection.provider(), selection.model());
                 events.emit(run, AgentStepType.STATUS, "Model called", Map.of(
                         "iteration", runtime.iteration(), "modelCall", runtime.modelCallCount()));
+                // Old tool results and written file contents are resent with every call: replace them by stubs.
+                if (compactor != null) {
+                    ConversationCompactor.Saved saved = compactor.compact(runtime.messages());
+                    if (saved.total() > 0) {
+                        runtime.recordCompaction(saved.resultChars(), saved.argumentChars());
+                        log.debug("context_compacted runId={} resultChars={} argumentChars={}", run.getId(), saved.resultChars(), saved.argumentChars());
+                    }
+                }
                 LlmResult res;
                 // The call's worst case is set aside first, so this and the user's other running calls cannot
                 // jointly cross the daily quota; it is released once the real usage is saved.
@@ -992,7 +1003,8 @@ public class AgentRunner implements AgentRuntime {
                 "toolCalls", runtime.toolCallCount(),
                 "phase", runtime.phase().name(),
                 "contextChars", runtime.contextChars(),
-                "remainingContextChars", runtime.remainingContextChars());
+                "remainingContextChars", runtime.remainingContextChars(),
+                "compactedChars", runtime.compactedChars());
     }
 
     private static Map<String, Object> safeCounters(AgentRuntimeContext runtime) {

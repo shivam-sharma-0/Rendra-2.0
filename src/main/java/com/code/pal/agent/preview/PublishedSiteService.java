@@ -3,6 +3,7 @@ package com.code.pal.agent.preview;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.ProjectPaths;
 import com.code.pal.agent.workspace.SandboxPort;
+import com.code.pal.project.brief.ProjectBriefFile;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -45,6 +46,7 @@ public class PublishedSiteService {
         }
         String id = UUID.randomUUID().toString();
         sandbox.copyTree(projectId, source, PUBLISHED + "/" + id);
+        sandbox.removeTree(projectId, PUBLISHED + "/" + id + "/" + ProjectBriefFile.NAME);   // the brief is not published
         String previous = publishedSite(projectId);
         files.writeText(projectId, PUBLISHED, LIVE, id);
         Set<String> keep = new HashSet<>(List.of(id));

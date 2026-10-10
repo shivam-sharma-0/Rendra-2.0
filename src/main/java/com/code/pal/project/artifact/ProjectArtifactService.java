@@ -3,6 +3,7 @@ package com.code.pal.project.artifact;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.ProjectPaths;
+import com.code.pal.project.brief.ProjectBriefFile;
 import com.code.pal.project.domain.RequirementQuestion;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -37,6 +38,16 @@ public class ProjectArtifactService {
         }).toList();
         writeJson(projectId, "requirements.json", Map.of(
                 "kind", "requirements", "sessionId", sessionId.toString(), "updatedAt", Instant.now(), "answers", answers));
+    }
+
+    /**
+     * Writes the project brief ({@code RENDRA.md}, at the project root) unless the project already has one,
+     * so a brief the user or the agent edited is never overwritten. Returns whether it was written.
+     */
+    public boolean writeBriefIfAbsent(UUID projectId, String content) {
+        if (files.regularFile(projectId, ".", ProjectBriefFile.NAME)) return false;
+        files.writeText(projectId, ".", ProjectBriefFile.NAME, content);
+        return true;
     }
 
     public void writeBuild(AgentRun run, String outcome, List<String> changedPaths) {

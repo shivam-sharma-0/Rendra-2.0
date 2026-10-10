@@ -51,9 +51,10 @@ class RequirementServiceImplTest {
     private Runnable duringModelCall = () -> { };
     private final List<String> prompts = new ArrayList<>();
     private final MessageService messages = mock(MessageService.class);
+    private final ProjectArtifactService artifacts = mock(ProjectArtifactService.class);
 
     private final RequirementServiceImpl service = new RequirementServiceImpl(projects, sessions, questions, model(),
-            new AgentProperties(), new ObjectMapper(), mock(ProjectArtifactService.class), messages,
+            new AgentProperties(), new ObjectMapper(), artifacts, messages,
             new FakeTransactions());
 
     RequirementServiceImplTest() {
@@ -101,6 +102,10 @@ class RequirementServiceImplTest {
         var posted = org.mockito.ArgumentCaptor.forClass(com.code.pal.message.dto.CreateMessageRequest.class);
         org.mockito.Mockito.verify(messages).post(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq(projectId), posted.capture());
         assertEquals(images, posted.getValue().attachments(), "the build reads and can use the images");
+
+        var brief = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(artifacts).writeBriefIfAbsent(org.mockito.ArgumentMatchers.eq(projectId), brief.capture());
+        assertTrue(brief.getValue().contains("A coffee shop site") && brief.getValue().contains("## Requirements"), brief.getValue());
     }
 
     @Test

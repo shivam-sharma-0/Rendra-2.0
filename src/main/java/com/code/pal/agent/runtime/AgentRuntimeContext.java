@@ -19,6 +19,7 @@ public final class AgentRuntimeContext {
     private int modelCallCount;
     private final int maxContextChars;
     private int contextChars;
+    private int compactedChars;
     private AgentRuntimeStatus status = AgentRuntimeStatus.CREATED;
     private AgentPhase phase = AgentPhase.UNDERSTAND;
     private final AgentPlanState plan;
@@ -66,6 +67,18 @@ public final class AgentRuntimeContext {
     public void recordToolCalls(int count) { toolCallCount += count; }
     public void transitionTo(AgentRuntimeStatus next) { status = next; }
     public void transitionPhase(AgentPhase next) { phase = next; }
+
+    /**
+     * Records a compaction: {@code budgetChars} (tool results, which count against the context budget) are
+     * given back; {@code otherChars} (call arguments, never budgeted) are only counted.
+     */
+    public void recordCompaction(int budgetChars, int otherChars) {
+        contextChars = Math.max(0, contextChars - Math.max(0, budgetChars));
+        compactedChars += Math.max(0, budgetChars) + Math.max(0, otherChars);
+    }
+
+    /** Characters removed by compaction during the run. */
+    public int compactedChars() { return compactedChars; }
 
     public boolean reserveContext(int chars) {
         int requested = Math.max(0, chars);

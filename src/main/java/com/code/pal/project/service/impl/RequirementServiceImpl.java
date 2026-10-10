@@ -9,6 +9,7 @@ import com.code.pal.agent.llm.LlmClient.LlmRequest;
 import com.code.pal.agent.llm.LlmClient.LlmResult;
 import com.code.pal.message.dto.CreateMessageRequest;
 import com.code.pal.message.service.MessageService;
+import com.code.pal.project.brief.ProjectBriefFile;
 import com.code.pal.project.domain.*;
 import com.code.pal.project.dto.RequirementDtos;
 import com.code.pal.project.artifact.ProjectArtifactService;
@@ -196,7 +197,7 @@ public class RequirementServiceImpl implements RequirementService {
     @Override
     @Transactional
     public RequirementDtos.Session approve(Long userId, UUID projectId) {
-        projects.requireCanEdit(userId, projectId);
+        Project project = projects.requireCanEdit(userId, projectId);
         RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
         if (session.getStatus() == RequirementStatus.APPROVED) return view(session);
         if (!complete(session)) throw new WorkflowStageException("Answer all required requirement questions first");
@@ -214,6 +215,10 @@ public class RequirementServiceImpl implements RequirementService {
                 "req_" + suffix.substring(0, 27), approvedBuildPrompt(answered), ProjectType.BUILD,
                 "ai_" + UUID.randomUUID().toString().replace("-", "").substring(0, 27), attachments.isEmpty() ? null : attachments));
         artifacts.writeRequirements(projectId, session.getId(), answered);
+        // The brief keeps the approved requirements in every later run's context, however long the chat gets.
+        artifacts.writeBriefIfAbsent(projectId, ProjectBriefFile.initial(project.getName(), project.getInitialPrompt(),
+                answered.stream().map(q -> new ProjectBriefFile.Requirement(q.getPrompt(), answerLabel(q))).toList(),
+                java.time.LocalDate.now(java.time.ZoneOffset.UTC)));
         return view(session);
     }
 

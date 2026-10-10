@@ -6,6 +6,7 @@ import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.ProjectPaths;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.domain.MessageRole;
+import com.code.pal.project.brief.ProjectBriefFile;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 
@@ -41,7 +42,8 @@ public class ProjectContextService {
             "tar", "jar", "class", "woff", "woff2", "ttf", "eot", "mp3", "mp4", "mov", "webm",
             "exe", "dll", "so", "dylib", "bin", "lock");
     private static final Set<String> INSTRUCTION_PATHS = Set.of(
-            "AGENTS.md", "CLAUDE.md", "CODEPAL.md", ".github/copilot-instructions.md");
+            ProjectBriefFile.NAME, "AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md");
+    private static final int DIGEST_LINE_CHARS = 160;
     private static final Pattern EXPLICIT_PATH = Pattern.compile(
             "(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.@-]+[/\\\\])+[A-Za-z0-9_.@-]+\\.[A-Za-z0-9]+|[A-Za-z0-9_.@-]+\\.(?:tsx?|jsx?|json|css|scss|md|java|kt|py|go|rs|ya?ml))(?![A-Za-z0-9_.-])");
     private static final Pattern JS_IMPORT = Pattern.compile(
@@ -164,7 +166,9 @@ public class ProjectContextService {
         Map<String, String> dependencies = paths.contains("package.json") ? packageDependencies(sources) : Map.of();
         List<String> frameworks = detectFrameworks(dependencies, paths);
         List<String> configs = paths.stream().filter(ProjectContextService::isConfiguration).limit(100).toList();
-        List<String> instructions = paths.stream().filter(INSTRUCTION_PATHS::contains).toList();
+        // The project brief first, so it is the last to be cut when the context budget runs out.
+        List<String> instructions = paths.stream().filter(INSTRUCTION_PATHS::contains)
+                .sorted(Comparator.comparing((String path) -> !path.equals(ProjectBriefFile.NAME))).toList();
         List<String> routes = discoverRoutes(sources, paths);
         List<String> modules = discoverModules(paths);
         List<String> directories = discoverImportantDirectories(paths);
@@ -277,11 +281,46 @@ public class ProjectContextService {
             retained.put(index, content);
             used += content.length();
         }
-        List<ContextMessage> result = retained.entrySet().stream().sorted(Map.Entry.comparingByKey())
+        List<ContextMessage> result = new ArrayList<>();
+        String digest = digest(candidates, retained.keySet(), properties.getConversationDigestChars());
+        if (!digest.isEmpty()) result.add(new ContextMessage("user", digest));
+        retained.entrySet().stream().sorted(Map.Entry.comparingByKey())
                 .map(entry -> new ContextMessage(candidates.get(entry.getKey()).getRole().name().toLowerCase(Locale.ROOT),
                         entry.getValue()))
-                .toList();
-        return new ConversationSelection(List.copyOf(result), candidates.size() - result.size());
+                .forEach(result::add);
+        return new ConversationSelection(List.copyOf(result), candidates.size() - retained.size());
+    }
+
+    /**
+     * One line per earlier user request that did not fit the conversation budget, oldest first, so the
+     * model still knows what was asked before. Built by code (no model call); the newest lines win when
+     * it is over {@code maxChars}. Empty when nothing was left out or the digest is switched off.
+     */
+    static String digest(List<Message> candidates, Set<Integer> retained, int maxChars) {
+        if (maxChars <= 0) return "";
+        List<String> lines = new ArrayList<>();
+        for (int index = 0; index < candidates.size(); index++) {
+            Message message = candidates.get(index);
+            if (retained.contains(index) || message.getRole() != MessageRole.USER) continue;
+            String line = message.getContent().replaceAll("\\s+", " ").strip();
+            if (line.length() > DIGEST_LINE_CHARS) line = line.substring(0, DIGEST_LINE_CHARS).strip() + "…";
+            lines.add("- " + line + "\n");
+        }
+        if (lines.isEmpty()) return "";
+        String head = "<earlier_conversation>\nEarlier requests in this project, oldest first, one line each "
+                + "(the full messages are not included; the project brief holds the decisions):\n";
+        String tail = "</earlier_conversation>";
+        int room = maxChars - head.length() - tail.length();
+        int total = lines.stream().mapToInt(String::length).sum();
+        if (total > room) room -= 40;   // the "(N older requests not listed)" line
+        int first = lines.size();
+        int used = 0;
+        while (first > 0 && used + lines.get(first - 1).length() <= room) used += lines.get(--first).length();
+        if (first == lines.size()) return "";
+        StringBuilder text = new StringBuilder(head);
+        if (first > 0) text.append("- (").append(first).append(first == 1 ? " older request" : " older requests").append(" not listed)\n");
+        for (int index = first; index < lines.size(); index++) text.append(lines.get(index));
+        return text.append(tail).toString();
     }
 
     private static int conversationRank(Message message, int index, int total, Set<String> requestTerms) {

@@ -63,8 +63,18 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     private int maxToolCalls = 100;
     /** Approximate character budget for prompt context plus accumulated tool results. */
     private int contextBudgetChars = 80_000;
+    /**
+     * Before each model call, tool results and written file contents older than the last
+     * {@code compactKeepTurns} model turns are replaced by short stubs (see ConversationCompactor).
+     */
+    private boolean compactContext = true;
+    private int compactKeepTurns = 2;
+    /** Parts smaller than this are left as they are. */
+    private int compactMinChars = 800;
     private int projectMapBudgetChars = 18_000;
     private int conversationBudgetChars = 20_000;
+    /** Earlier requests left out of the conversation budget, one line each (0 = off). */
+    private int conversationDigestChars = 1_500;
     private int projectScanMaxFiles = 5_000;
     private int projectScanMaxDepth = 12;
     private int projectInstructionMaxChars = 4_000;

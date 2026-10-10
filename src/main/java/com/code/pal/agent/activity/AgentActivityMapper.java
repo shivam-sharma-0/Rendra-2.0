@@ -28,7 +28,7 @@ public class AgentActivityMapper {
     private static final Set<String> CHECK_TOOLS = Set.of("runTypeCheck", "runBuild", "runTests", "validateChanges", "getDiagnostics");
     /** Run telemetry that stays out of what the UI receives. */
     private static final Set<String> INTERNAL_KEYS = Set.of("iteration", "iterations", "modelCall", "modelCalls", "toolCalls",
-            "toolCallCount", "contextChars", "remainingContextChars", "phase", "provider", "model", "retryable", "argumentNames");
+            "toolCallCount", "contextChars", "remainingContextChars", "compactedChars", "phase", "provider", "model", "retryable", "argumentNames");
 
     private final ObjectMapper objectMapper;
 

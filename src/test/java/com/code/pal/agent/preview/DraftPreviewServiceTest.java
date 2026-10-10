@@ -93,13 +93,15 @@ class DraftPreviewServiceTest {
 
     @Test
     void aStaticSiteDraftIsItsOwnFilesFromTheEntryFolder() throws Exception {
-        project.write(STAGED + "/client/index.html", "<h1>static draft</h1>").write(STAGED + "/client/app.js", "go()");
+        project.write(STAGED + "/client/index.html", "<h1>static draft</h1>").write(STAGED + "/client/app.js", "go()")
+                .write(STAGED + "/client/RENDRA.md", "# brief");
 
         drafts.changed(project.projectId, runId, STAGED);
         String site = awaitDraft();
 
         assertEquals("<h1>static draft</h1>", text(preview.serveSite(project.projectId, site, "")));
         assertEquals("go()", text(preview.serveSite(project.projectId, site, "app.js")));
+        assertFalse(project.exists(site + "/RENDRA.md"), "the project brief is not part of a served site");
         assertEquals(0, builds.get(), "nothing to compile");
     }
 

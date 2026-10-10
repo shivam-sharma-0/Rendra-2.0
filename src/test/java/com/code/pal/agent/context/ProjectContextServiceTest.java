@@ -30,6 +30,61 @@ class ProjectContextServiceTest {
     }
 
     @Test
+    void theProjectBriefIsTheFirstInstructionFile() throws Exception {
+        Files.writeString(workspace.resolve("AGENTS.md"), "Agent notes.");
+        Files.writeString(workspace.resolve("RENDRA.md"), "# Game\n\n## Decisions\n- Purple accent");
+        Files.writeString(workspace.resolve("index.html"), "<h1>Game</h1>");
+        ProjectContextService service = new ProjectContextService(new AgentProperties(), new ObjectMapper());
+
+        String message = service.build(project.files, project.projectId, ".", "Make it bigger", List.of(), List.of()).projectContextMessage();
+
+        int brief = message.indexOf("--- RENDRA.md ---");
+        assertTrue(brief >= 0 && brief < message.indexOf("--- AGENTS.md ---"), message);
+        assertTrue(message.contains("Purple accent"));
+    }
+
+    @Test
+    void requestsLeftOutOfTheBudgetAreListedOneLineEach() {
+        AgentProperties properties = new AgentProperties();
+        properties.setConversationBudgetChars(1_200);
+        ProjectContextService service = new ProjectContextService(properties, new ObjectMapper());
+        List<Message> history = new ArrayList<>();
+        for (int index = 0; index < 20; index++) {
+            history.add(message("old-" + index, "Request number " + index + "\n" + "detail ".repeat(60), index));
+        }
+        history.add(message("current", "Make the header blue", 100));
+
+        ProjectContext context = service.build(project.files, project.projectId, ".", "Make the header blue", history, List.of());
+
+        String digest = context.conversation().getFirst().content();
+        assertTrue(digest.startsWith("<earlier_conversation>") && digest.endsWith("</earlier_conversation>"), digest);
+        assertTrue(digest.contains("- Request number 12 detail") && digest.contains("older requests not listed)"), digest);
+        assertFalse(digest.contains("Request number 19 "), "requests kept in full are not listed again");
+        assertFalse(digest.contains("\nRequest number"), "each request stays on one line");
+        assertTrue(digest.length() <= properties.getConversationDigestChars());
+        assertTrue(context.conversation().getLast().content().contains("Make the header blue"));
+    }
+
+    @Test
+    void theDigestKeepsTheNewestRequestsAndSkipsReplies() {
+        List<Message> candidates = new ArrayList<>();
+        for (int index = 0; index < 30; index++) candidates.add(message("u" + index, "Add feature " + index, index));
+        Message reply = Message.assistantPlaceholder(UUID.randomUUID(), "a", "u0", ProjectType.CHAT);
+        reply.setContent("I added the feature.");
+        candidates.add(reply);
+
+        String digest = ProjectContextService.digest(candidates, java.util.Set.of(29), 400);
+
+        assertTrue(digest.length() <= 400, digest);
+        assertTrue(digest.contains("- Add feature 28\n") && !digest.contains("Add feature 29"), digest);
+        assertTrue(digest.contains("older requests not listed)"), digest);
+        assertFalse(digest.contains("- Add feature 0\n"));
+        assertFalse(digest.contains("I added the feature"));
+        assertEquals("", ProjectContextService.digest(candidates, java.util.Set.of(29), 0), "0 switches it off");
+        assertEquals("", ProjectContextService.digest(candidates.subList(0, 1), java.util.Set.of(0), 400), "nothing left out");
+    }
+
+    @Test
     void buildsCompactReactMapAndPrioritizesTheCurrentFeature() throws Exception {
         Files.createDirectories(workspace.resolve("src/features/auth"));
         Files.createDirectories(workspace.resolve("src/features/catalog"));

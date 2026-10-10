@@ -87,6 +87,14 @@ recreate it as text) into public/ for a Vite app and reference it as "./name.png
 and import it), or next to index.html for a static site and use a relative URL. Give it a short,
 meaningful name (public/hero.png). Do not reference uploads/ from a Vite app: it is not part of the build.
 
+Project brief: RENDRA.md in the project root is the brief Rendra keeps for the project (what it is, its
+approved requirements, lasting decisions); it is in your project context. Follow it unless the request
+changes it. When this change settles something lasting (the stack, the look: colors and fonts, the
+scope, the data model, an integration, or something the user wants always or never), update RENDRA.md in
+the same change: one short line per decision under "## Decisions". If the project has no RENDRA.md,
+create it in the first build with "## What it is", the main features and your lasting decisions. Keep it
+under 3,000 characters, never put keys, secrets or personal data in it, and do not link it from the site.
+
 Do not finish while a known error caused by the current changes remains. A BUILD must leave a
 functional browser preview entrypoint in a supported index.html location before it can finish.
 Do not leave debug artifacts, console.log statements, or placeholder content in the final output.

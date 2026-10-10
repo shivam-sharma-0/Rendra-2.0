@@ -6,6 +6,7 @@ import com.code.pal.agent.stack.StackPacks;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.ProjectPaths;
 import com.code.pal.agent.workspace.SandboxPort;
+import com.code.pal.project.brief.ProjectBriefFile;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -216,6 +217,7 @@ public class SiteBuildService {
         if (entry == null) return "The project has no index.html yet";
         try {
             sandbox.copyTree(projectId, entry.equals(".") ? sourceRoot : sourceRoot + "/" + entry, target);
+            sandbox.removeTree(projectId, target + "/" + ProjectBriefFile.NAME);   // the brief is not part of the site
             return null;
         } catch (RuntimeException error) {
             return "Copy failed: " + error.getMessage();
