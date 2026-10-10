@@ -241,6 +241,16 @@ public class AgentRunner implements AgentRuntime {
             int planningReminders = 0;
             int implementationReminders = 0;
             int previewReminders = 0;
+            // One review turn per build, once the change validates: weak models stop at the first
+            // version that runs, and the checklist brings back what they skipped.
+            boolean polished = !props.isPolishTurn();
+            // The answer from before the review, and the revision it described: when the review changes
+            // nothing, its reply is talk about the review, not an answer for the user.
+            String firstSummary = null;
+            int reviewedRevision = -1;
+            // One model for the whole run (the first available in priority order); another one only for
+            // the calls made while it is failing, and back to it once its cooldown is over.
+            AgentProperties.ModelSelection preferred = props.preferredModel(run.getMode());
             for (int i = 0; i < props.getMaxIterations(); i++) {
                 requireBeforeDeadline(deadlineNanos);
                 requireNotCancelled(run);
@@ -251,7 +261,7 @@ public class AgentRunner implements AgentRuntime {
                 runtime.recordModelCall();
                 boolean finalRepairReportCall = run.getMode() == ProjectType.BUILD
                         && changeSets.validationProgress(ctx).repairLimitExhausted();
-                AgentProperties.ModelSelection selection = props.modelFor(run.getMode());
+                AgentProperties.ModelSelection selection = props.available(preferred) ? preferred : props.modelFor(run.getMode());
                 log.info("model_called runId={} iteration={} modelCall={} provider={} model={}", run.getId(),
                         runtime.iteration(),
                         runtime.modelCallCount(), selection.provider(), selection.model());
@@ -259,9 +269,16 @@ public class AgentRunner implements AgentRuntime {
                         "iteration", runtime.iteration(), "modelCall", runtime.modelCallCount()));
                 LlmResult res;
                 try {
+                    // A build's reply is its final summary: what the model says between tool calls is
+                    // narration for the timeline, not part of the answer.
+                    // A build cannot finish before it has a plan and has changed files, so until then the
+                    // model must call a tool (weak models otherwise answer in prose and stop).
+                    boolean mustAct = run.getMode() == ProjectType.BUILD
+                            && (!ctx.plan().exists() || changeSets.view(ctx).touchedPaths().isEmpty());
                     res = llm.chatStreaming(new LlmRequest(
                             selection.provider(), selection.model(), runtime.messages(), specs,
-                            props.getLlm().getTemperature(), callBudget(deadlineNanos)), stream::append);
+                            props.getLlm().getTemperature(), callBudget(deadlineNanos), mustAct ? "required" : null),
+                            run.getMode() == ProjectType.BUILD ? delta -> { } : stream::append);
                 } catch (LlmException providerFailure) {
                     // Keep the conversation intact when a provider rejects a request before it
                     // publishes output. The next round-robin model can support a different tool
@@ -281,10 +298,16 @@ public class AgentRunner implements AgentRuntime {
                 accountTokens(run, res);
 
                 boolean hasReasoning = res.reasoning() != null && !res.reasoning().isBlank();
-                if (hasReasoning || (res.hasToolCalls() && res.content() != null && !res.content().isBlank())) {
-                    events.emit(run, AgentStepType.THINKING, "Model reasoning", hasReasoning
-                            ? Map.of("reasoning", res.reasoning())
-                            : Map.of("toolCallCount", res.toolCalls().size()));
+                // In a build every message is kept for the timeline: with tools it is narration, without
+                // them it is either the final answer or a reply a gate will send back.
+                boolean narrated = res.content() != null && !res.content().isBlank()
+                        && (res.hasToolCalls() || run.getMode() == ProjectType.BUILD);
+                if (hasReasoning || narrated) {
+                    Map<String, Object> thinking = new java.util.HashMap<>();
+                    if (hasReasoning) thinking.put("reasoning", res.reasoning());
+                    if (narrated) thinking.put("narration", truncateNarration(res.content()));
+                    thinking.put("toolCallCount", res.toolCalls().size());
+                    events.emit(run, AgentStepType.THINKING, "Model reasoning", thinking);
                 }
 
                 if (finalRepairReportCall) {
@@ -340,12 +363,28 @@ public class AgentRunner implements AgentRuntime {
                                             + "or a supported dist/build index.html, then finish the build."));
                             continue;
                         }
+                        if (!polished) {
+                            polished = true;
+                            firstSummary = res.content();
+                            reviewedRevision = changeSets.view(ctx).revision();
+                            runtime.messages().add(LlmMessage.assistant(res.content() == null || res.content().isBlank()
+                                    ? "The first version is built and validated." : res.content()));
+                            runtime.messages().add(LlmMessage.user(polishPrompt(userRequest)));
+                            events.emit(run, AgentStepType.STATUS, "Polish check", null);
+                            continue;
+                        }
+                        // Before the commit: committing closes the change set, and with it its revision.
+                        String answer = reviewedRevision >= 0 && changeSets.view(ctx).revision() == reviewedRevision
+                                ? firstSummary : res.content();
+                        String summary = answer == null ? "" : answer.strip();
                         ChangeSetService.CommitResult committed = changeSets.commit(ctx, run);
                         if (committed.changedPaths().isEmpty()) {
                             throw new AgentValidationFailedException(
                                     "The staged build produced no committed file changes");
                         }
-                        stream.append("\n\nChanged files:\n" + committed.changedPaths().stream()
+                        ctx.plan().completeRemaining();   // committed: whatever the model did not tick off is done
+                        stream.append((summary.isEmpty() ? "The changes are built and validated." : summary)
+                                + "\n\nChanged files:\n" + committed.changedPaths().stream()
                                 .map(path -> "- " + path).collect(java.util.stream.Collectors.joining("\n")));
                         events.emit(run, AgentStepType.STATUS, "Change set committed", Map.of(
                                 "changedFiles", committed.changedPaths(), "snapshotRef", committed.snapshotRef()));
@@ -588,6 +627,31 @@ public class AgentRunner implements AgentRuntime {
         }
         if (wrote && drafts != null && ctx.mode() == ProjectType.BUILD) drafts.changed(run.getProjectId(), run.getId(), ctx.root());
         return results.stream().map(this::toModelToolResult).toList();
+    }
+
+    /** The review turn: the request again, and the quality checklist from the build prompt as questions. */
+    static String polishPrompt(String userRequest) {
+        return """
+                POLISH CHECK. The first version validates. Before it is shown to the user, review it against the
+                request and improve it in this turn if anything is missing or rough:
+                - Is every part of the request implemented and visible in the UI? Add what is missing.
+                - Is the obvious scope complete (for a game: score, both choices, result, replay/reset; for lists:
+                  add, complete, edit, delete, filter, persistence; for forms: validation and confirmation)?
+                - Does it look finished: Tailwind styling, a clear layout, an accent color, hover/focus states,
+                  transitions, and does it work at 375px wide?
+                - Are empty, loading and error states handled, with real content (no placeholders)?
+                Re-read files with readFile before patching them. If something needs improving, change the files
+                now. If everything is already done, reply with the final summary for the user without calling tools.
+                The request was:
+                <request>
+                %s
+                </request>
+                """.formatted(userRequest == null ? "" : userRequest.strip());
+    }
+
+    private static String truncateNarration(String text) {
+        String trimmed = text.strip();
+        return trimmed.length() <= 2_000 ? trimmed : trimmed.substring(0, 2_000) + "...";
     }
 
     private static void recordPhase(AgentRuntimeContext runtime, String toolName) {

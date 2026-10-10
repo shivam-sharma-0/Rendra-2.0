@@ -23,7 +23,8 @@ class DeletedProjectCleanupTest {
     private final ProjectService projects = mock(ProjectService.class);
     private final AgentRunRepository runs = mock(AgentRunRepository.class);
     private final AgentJobQueue queue = mock(AgentJobQueue.class);
-    private final DeletedProjectCleanup cleanup = new DeletedProjectCleanup(projects, runs, queue, deleted.sandbox, deleted.storage);
+    private final DeletedProjectCleanup cleanup = new DeletedProjectCleanup(projects, runs, queue, deleted.sandbox, deleted.storage,
+            mock(com.code.pal.project.database.GeneratedDatabaseService.class));
 
     DeletedProjectCleanupTest() throws Exception {
         deleted.write("src/App.tsx", "export {};\n").write(".codepal/deps/abc/node_modules/react/index.js", "x");

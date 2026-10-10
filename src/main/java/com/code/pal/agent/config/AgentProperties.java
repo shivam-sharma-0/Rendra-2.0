@@ -24,7 +24,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 @ConfigurationProperties(prefix = "app.agent")
 @Getter
 @Setter
-public class AgentProperties {
+public class AgentProperties implements org.springframework.context.EnvironmentAware {
+
+    /**
+     * Where the master key is read from: the OS environment and the gitignored secrets file, so the keys
+     * work however the backend is started (an IDE that predates the environment variable included).
+     */
+    @lombok.Getter(lombok.AccessLevel.NONE)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    private org.springframework.core.env.Environment environment;
+
+    @Override
+    public void setEnvironment(org.springframework.core.env.Environment environment) {
+        this.environment = environment;
+    }
 
     private final Llm llm = new Llm();
     private final Models models = new Models();
@@ -74,6 +87,8 @@ public class AgentProperties {
     private long queuedRecoveryMs = 60_000;
     /** A live worker renews its run's heartbeat + project lock at this interval. */
     private long heartbeatIntervalMs = 15_000;
+    /** After a build first validates, one more turn reviews it against the request and a quality checklist. */
+    private boolean polishTurn = true;
     /** Restore the pre-commit archive when a worker dies while committing a BUILD run. */
     private boolean rollbackOnFailure = true;
     /** Maximum fix/validate cycles after the first failed validation. */
@@ -92,7 +107,7 @@ public class AgentProperties {
 
     @PostConstruct
     void decryptKeys() {
-        String masterKey = System.getenv("GATEWAY_MASTER_KEY");
+        String masterKey = environment != null ? environment.getProperty("GATEWAY_MASTER_KEY") : System.getenv("GATEWAY_MASTER_KEY");
         if (masterKey == null || masterKey.isBlank()) {
             int cleared = 0;
             for (Provider p : providers.values()) {
@@ -206,6 +221,11 @@ public class AgentProperties {
         private String baseUrl;
         private String apiKey;
         private List<String> apiKeys = new ArrayList<>();
+        /**
+         * Sent as reasoning_effort (e.g. "low") when set: thinking models spend far less time per call, which
+         * matters in an agent loop of many short calls.
+         */
+        private String reasoningEffort;
 
         public List<String> resolvedKeys() {
             if (!apiKeys.isEmpty()) {
@@ -278,6 +298,30 @@ public class AgentProperties {
          * stopped writing for this long; 0 turns drafts off.
          */
         private long draftPreviewQuietMs = 3_000;
+        /**
+         * App servers (a MERN project's Express API) run on this internal Docker network: no route out,
+         * reachable only through the gateway.
+         */
+        private String appsNetwork = "codepal-apps";
+        /** The gateway listens on this loopback port of the Docker host; the backend proxies through it. */
+        private int gatewayPort = 55400;
+        /** Host the backend uses to reach the gateway (loopback: same machine, or WSL's mirrored network). */
+        private String gatewayHost = "127.0.0.1";
+        /**
+         * App servers get their own MongoDB, a container on the apps network with authentication on, never
+         * the platform's database. The backend reaches it through the gateway on this loopback port.
+         */
+        private String appsDatabaseImage = "mongo:7";
+        private int appsDatabasePort = 55417;
+        private int appsDatabaseMemoryMb = 384;
+        /** Root password of the apps' MongoDB; empty: generated once and kept in the workspace base. */
+        private String appsDatabasePassword = "";
+        /** Without Docker (local development only): the MongoDB app servers and the backend use directly. */
+        private String localAppsDatabaseUri = "mongodb://127.0.0.1:27017/?directConnection=true";
+        private String gatewayImage = "codepal-gateway";
+        private int serverMemoryMb = 256;
+        /** An app server nobody has called for this long is stopped; the next request starts it again. */
+        private long serverIdleStopMs = 900_000;
         /** Building the browser image downloads Chromium once. */
         private long browserImageBuildTimeoutMs = 900_000;
     }
@@ -323,13 +367,36 @@ public class AgentProperties {
      */
     public ModelSelection modelFor(ProjectType mode) {
         ModelSelection first = null;
+        // A model may be listed twice (two turns in the rotation), so meeting the first one again does not
+        // mean the list was exhausted: probe a bounded number of entries instead.
         for (int probe = 0; probe < MAX_ROUTING_PROBES; probe++) {
             ModelSelection candidate = nextModelFor(mode);
             if (first == null) first = candidate;
-            else if (candidate.equals(first)) break;        // went once around the list
             if (!coolingDown(candidate)) return candidate;
         }
         return first;
+    }
+
+    /**
+     * The model a run sticks to: the first one listed for {@code mode} that is not cooling down (lists are
+     * in priority order), else the first listed. One model per run keeps one line of reasoning and one
+     * code style; {@link #modelFor} picks another only while this one is failing.
+     */
+    public ModelSelection preferredModel(ProjectType mode) {
+        List<String> configured = switch (mode) {
+            case CHAT -> billingMode == BillingMode.FREE ? models.getFreeChat() : models.getChat();
+            case PLAN -> billingMode == BillingMode.FREE ? models.getFreePlan() : models.getPlan();
+            case BUILD -> billingMode == BillingMode.FREE ? models.getFreeBuild() : models.getBuild();
+        };
+        List<ModelSelection> all = configured == null ? List.of()
+                : configured.stream().filter(entry -> entry != null && !entry.isBlank()).map(this::selection).toList();
+        if (all.isEmpty()) return modelFor(mode);
+        return all.stream().filter(this::available).findFirst().orElse(all.getFirst());
+    }
+
+    /** False while the model is cooling down after a failure. */
+    public boolean available(ModelSelection selection) {
+        return !coolingDown(selection);
     }
 
     /** A provider/model that just failed is skipped for {@code llm.providerCooldownMs}. */
@@ -390,8 +457,8 @@ public class AgentProperties {
 
     private String defaultProvider() {
         List<String> priority = billingMode == BillingMode.FREE
-                ? List.of("mistral", "groq", "nvidia", "openrouter")
-                : List.of("nvidia", "openrouter", "mistral", "groq");
+                ? List.of("mistral", "nvidia", "openrouter")
+                : List.of("mistral", "nvidia", "openrouter");
         for (String name : priority) {
             Provider p = providers.get(name);
             if (p != null && !p.resolvedKeys().isEmpty()) return name;

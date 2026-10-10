@@ -455,32 +455,35 @@ public class DockerProjectEnvironment implements SandboxPort {
      */
     private synchronized String browserImage() {
         if (browserImageTag != null) return browserImageTag;
+        return browserImageTag = classpathImage("browser", List.of("Dockerfile", "probe.mjs"), properties.getSandbox().getBrowserImage(), BROWSER_CONTEXT);
+    }
+
+    /** An image built from {@code sandbox/<resource>/} on the classpath, tagged by its content. */
+    private synchronized String classpathImage(String resource, List<String> fileNames, String repository, String contextDirectory) {
         Map<String, byte[]> context = new java.util.LinkedHashMap<>();
-        for (String file : List.of("Dockerfile", "probe.mjs")) {
-            try (var input = getClass().getResourceAsStream("/sandbox/browser/" + file)) {
-                if (input == null) throw new IllegalStateException("Missing classpath resource sandbox/browser/" + file);
+        for (String file : fileNames) {
+            try (var input = getClass().getResourceAsStream("/sandbox/" + resource + "/" + file)) {
+                if (input == null) throw new IllegalStateException("Missing classpath resource sandbox/" + resource + "/" + file);
                 context.put(file, input.readAllBytes());
             } catch (IOException error) {
-                throw new IllegalStateException("Cannot read the browser probe: " + error.getMessage(), error);
+                throw new IllegalStateException("Cannot read sandbox/" + resource + ": " + error.getMessage(), error);
             }
         }
-        String tag = properties.getSandbox().getBrowserImage() + ":" + contentHash(context.values());
-        if (run(List.of("image", "inspect", "--format", "{{.Id}}", tag), Duration.ofSeconds(20), null).success()) {
-            return browserImageTag = tag;
-        }
-        Path directory = storage.base().resolve(BROWSER_CONTEXT);
+        String tag = repository + ":" + contentHash(context.values());
+        if (run(List.of("image", "inspect", "--format", "{{.Id}}", tag), Duration.ofSeconds(20), null).success()) return tag;
+        Path directory = storage.base().resolve(contextDirectory);
         try {
             Files.createDirectories(directory);
             for (Map.Entry<String, byte[]> file : context.entrySet()) Files.write(directory.resolve(file.getKey()), file.getValue());
         } catch (IOException error) {
-            throw new IllegalStateException("Cannot write the browser image context: " + error.getMessage(), error);
+            throw new IllegalStateException("Cannot write the image build context: " + error.getMessage(), error);
         }
-        log.info("browser_image_build_started tag={}", tag);
-        CommandResult built = run(List.of("build", "-q", "-t", tag, dockerBase() + "/" + BROWSER_CONTEXT),
+        log.info("image_build_started tag={}", tag);
+        CommandResult built = run(List.of("build", "-q", "-t", tag, dockerBase() + "/" + contextDirectory),
                 Duration.ofMillis(Math.max(60_000, properties.getSandbox().getBrowserImageBuildTimeoutMs())), null);
         if (!built.success()) throw new IllegalStateException("docker build failed: " + tail(built.stdout() + built.error()));
-        log.info("browser_image_build_done tag={}", tag);
-        return browserImageTag = tag;
+        log.info("image_build_done tag={}", tag);
+        return tag;
     }
 
     private static String contentHash(java.util.Collection<byte[]> parts) {
@@ -563,6 +566,7 @@ public class DockerProjectEnvironment implements SandboxPort {
                 if (!emptied.success()) log.warn("sandbox_destroy_partial projectId={} exit={} error={} output={}", projectId, emptied.exitCode(), emptied.error(), emptied.stdout());
             }
             run(List.of("rm", "-f", container), Duration.ofSeconds(30), null);
+            removeAppServers(projectId);
             storage.delete(projectId);   // the (now empty) folder itself, or whatever the container left
         } finally {
             lock.unlock();
@@ -570,6 +574,210 @@ public class DockerProjectEnvironment implements SandboxPort {
         if (java.nio.file.Files.exists(folder)) throw new IllegalStateException("Could not remove " + folder);
         projectLocks.remove(projectId);
         log.info("sandbox_destroyed projectId={}", projectId);
+    }
+
+    // ---- App servers (MERN APIs): internal network + trusted gateway --------------------------------
+
+    private static final String APP_LABEL = "com.codepal.app=true";
+    private static final String GATEWAY_CONTEXT = ".gateway-image";
+    private static final java.net.http.HttpClient GATEWAY_CLIENT = java.net.http.HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(2)).build();
+    private volatile AppsNetwork appsNetwork;
+
+    private static final String APPS_DATABASE = "codepal-apps-mongo";
+
+    /** The internal network's subnet and the apps' database container's address on it. */
+    private record AppsNetwork(String subnet, String database) {}
+
+    @Override
+    public String databaseAddress() {
+        readyGateway();
+        return APPS_DATABASE + ":27017";
+    }
+
+    @Override
+    public String databaseAdminUri() {
+        readyGateway();
+        return "mongodb://root:" + appsDatabasePassword() + "@" + properties.getSandbox().getGatewayHost() + ":"
+                + properties.getSandbox().getAppsDatabasePort() + "/?authSource=admin&directConnection=true";
+    }
+
+    /** The apps' MongoDB on the internal network: authentication on, data in its own volume. Returns its IP. */
+    private String readyAppsDatabase() {
+        String format = "{{.State.Running}} {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}";
+        CommandResult state = run(List.of("container", "inspect", "-f", format, APPS_DATABASE), Duration.ofSeconds(20), null);
+        if (!state.success()) {
+            String image = properties.getSandbox().getAppsDatabaseImage();
+            if (!run(List.of("image", "inspect", "--format", "{{.Id}}", image), Duration.ofSeconds(20), null).success()) {
+                log.info("apps_database_image_pull image={}", image);
+                CommandResult pulled = run(List.of("pull", "-q", image), Duration.ofMinutes(15), null);
+                if (!pulled.success()) throw new IllegalStateException("Could not download the apps database image " + image
+                        + ": " + tail(pulled.error().isBlank() ? pulled.stdout() : pulled.error()));
+            }
+            log.info("apps_database_creating image={}", image);
+            run(List.of("run", "-d", "--name", APPS_DATABASE, "--restart", "unless-stopped",
+                    "--network", properties.getSandbox().getAppsNetwork(), "--label", "com.codepal.apps-database=true",
+                    "--memory", Math.max(256, properties.getSandbox().getAppsDatabaseMemoryMb()) + "m",
+                    "--mount", "type=volume,source=codepal-apps-mongo-data,target=/data/db",
+                    "-e", "MONGO_INITDB_ROOT_USERNAME=root", "-e", "MONGO_INITDB_ROOT_PASSWORD=" + appsDatabasePassword(),
+                    properties.getSandbox().getAppsDatabaseImage(), "--wiredTigerCacheSizeGB", "0.25"),
+                    Duration.ofMinutes(10), null).requireSuccess();
+        } else if (!state.stdout().trim().startsWith("true")) {
+            run(List.of("start", APPS_DATABASE), Duration.ofSeconds(30), null).requireSuccess();
+        }
+        String[] parts = run(List.of("container", "inspect", "-f", format, APPS_DATABASE), Duration.ofSeconds(20), null)
+                .requireSuccess().stdout().trim().split("\\s+");
+        if (parts.length < 2 || parts[1].isBlank()) throw new IllegalStateException("The apps database has no address");
+        return parts[1];
+    }
+
+    /** Generated once and kept next to the projects (the backend's view of the workspace base). */
+    private synchronized String appsDatabasePassword() {
+        String configured = properties.getSandbox().getAppsDatabasePassword();
+        if (configured != null && !configured.isBlank()) return configured.trim();
+        Path secret = storage.base().resolve(".apps-database-secret");
+        try {
+            if (Files.exists(secret)) return Files.readString(secret).trim();
+            byte[] random = new byte[24];
+            new java.security.SecureRandom().nextBytes(random);
+            String password = java.util.HexFormat.of().formatHex(random);
+            Files.createDirectories(secret.getParent());
+            Files.writeString(secret, password);
+            return password;
+        } catch (IOException error) {
+            throw new IllegalStateException("Cannot read or create the apps database password: " + error.getMessage(), error);
+        }
+    }
+
+    @Override
+    public ServerEndpoint startServer(UUID projectId, String name, String relativeRoot, List<String> command,
+                                      Map<String, String> variables, int port) {
+        readyGateway();
+        Environment env = environment(projectId);
+        String container = appContainer(projectId, name);
+        run(List.of("rm", "-f", container), Duration.ofSeconds(30), null);
+        List<String> args = new ArrayList<>(List.of("run", "-d", "--name", container,
+                "--label", APP_LABEL, "--label", "com.codepal.project=" + projectId, "--label", "com.codepal.port=" + port,
+                "--network", properties.getSandbox().getAppsNetwork(), "--user", user(),
+                "--cpus", Double.toString(Math.max(0.25, properties.getSandbox().getCpus())),
+                "--memory", Math.max(128, properties.getSandbox().getServerMemoryMb()) + "m", "--pids-limit", "256",
+                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,size=64m",
+                "--mount", "type=bind,source=" + env.hostPath() + ",target=" + env.workspacePath() + ",readonly",
+                "--workdir", rootPath(relativeRoot), "-e", "HOME=/tmp", "-e", "PORT=" + port));
+        variables.forEach((key, value) -> { args.add("-e"); args.add(key + "=" + value); });
+        args.add(properties.getSandbox().getImage());
+        args.addAll(command);
+        run(args, Duration.ofSeconds(60), null).requireSuccess();
+        ServerEndpoint endpoint = server(projectId, name);
+        if (endpoint == null) throw new IllegalStateException("The app server exited at once: " + tail(serverLogs(projectId, name, 40)));
+        log.info("app_server_started projectId={} name={}", projectId, name);
+        return endpoint;
+    }
+
+    @Override
+    public ServerEndpoint server(UUID projectId, String name) {
+        // No quotes in the format: they do not survive the Windows command line on the way to wsl.exe.
+        CommandResult inspected = run(List.of("container", "inspect", "-f",
+                "{{.State.Running}} {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}} {{json .Config.Labels}}",
+                appContainer(projectId, name)), Duration.ofSeconds(20), null);
+        if (!inspected.success()) return null;
+        String[] parts = inspected.stdout().trim().split("\\s+", 3);
+        String port = parts.length < 3 ? null : label(parts[2], "com.codepal.port");
+        if (port == null || !"true".equals(parts[0]) || parts[1].isBlank()) return null;
+        readyGateway();
+        return new ServerEndpoint("http://" + properties.getSandbox().getGatewayHost() + ":" + properties.getSandbox().getGatewayPort(),
+                Map.of("x-codepal-upstream", parts[1] + ":" + port));
+    }
+
+    @Override
+    public void stopServer(UUID projectId, String name) {
+        run(List.of("rm", "-f", appContainer(projectId, name)), Duration.ofSeconds(30), null);
+    }
+
+    @Override
+    public String serverLogs(UUID projectId, String name, int lines) {
+        CommandResult logs = run(List.of("logs", "--tail", Integer.toString(Math.max(1, lines)), appContainer(projectId, name)),
+                Duration.ofSeconds(20), null);
+        return (logs.stdout() + (logs.error().isBlank() ? "" : "\n" + logs.error())).strip();
+    }
+
+    private void removeAppServers(UUID projectId) {
+        CommandResult listed = run(List.of("ps", "-aq", "--filter", "label=" + APP_LABEL, "--filter", "label=com.codepal.project=" + projectId),
+                Duration.ofSeconds(20), null);
+        if (!listed.success()) return;
+        for (String id : listed.stdout().split("\\R")) if (!id.isBlank()) run(List.of("rm", "-f", id.trim()), Duration.ofSeconds(30), null);
+    }
+
+    private static String appContainer(UUID projectId, String name) {
+        if (!name.matches("[a-z0-9-]{1,40}")) throw new IllegalArgumentException("Invalid server name");
+        return "codepal-app-" + projectId + "-" + name;
+    }
+
+    /**
+     * The internal network and the gateway on the host network, created when missing and recreated when
+     * the gateway's image or configuration changed. The gateway is checked over HTTP before use.
+     */
+    private synchronized AppsNetwork readyGateway() {
+        AppsNetwork network = appsNetwork;
+        if (network != null && gatewayHealthy()) return network;
+        String name = properties.getSandbox().getAppsNetwork();
+        String format = "{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}";
+        CommandResult inspected = run(List.of("network", "inspect", "-f", format, name), Duration.ofSeconds(20), null);
+        if (!inspected.success()) {
+            run(List.of("network", "create", "--internal", "--label", "com.codepal.apps=true", name), Duration.ofSeconds(30), null).requireSuccess();
+            inspected = run(List.of("network", "inspect", "-f", format, name), Duration.ofSeconds(20), null).requireSuccess();
+        }
+        String[] parts = inspected.stdout().trim().split("\\s+");
+        if (parts.length < 2) throw new IllegalStateException("The apps network has no IPv4 subnet: " + inspected.stdout());
+        network = new AppsNetwork(parts[0], readyAppsDatabase());
+        String image = classpathImage("gateway", List.of("Dockerfile", "gateway.mjs"), properties.getSandbox().getGatewayImage(), GATEWAY_CONTEXT);
+        String config = contentHash(List.of((image + "|" + network + "|" + properties.getSandbox().getGatewayPort() + "|"
+                + properties.getSandbox().getAppsDatabasePort()).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        CommandResult current = run(List.of("container", "inspect", "-f", "{{.State.Running}} {{json .Config.Labels}}", "codepal-gateway"),
+                Duration.ofSeconds(20), null);
+        String[] state = current.stdout().trim().split("\\s+", 2);
+        boolean matches = current.success() && state.length == 2 && "true".equals(state[0])
+                && config.equals(label(state[1], "com.codepal.gateway.config"));
+        if (!matches) {
+            run(List.of("rm", "-f", "codepal-gateway"), Duration.ofSeconds(30), null);
+            run(List.of("run", "-d", "--name", "codepal-gateway", "--restart", "unless-stopped", "--network", "host",
+                    "--label", "com.codepal.gateway.config=" + config, "--memory", "96m", "--cap-drop", "ALL",
+                    "--security-opt", "no-new-privileges",
+                    "-e", "GATEWAY_PORT=" + properties.getSandbox().getGatewayPort(), "-e", "APPS_SUBNET=" + network.subnet(),
+                    "-e", "MONGO_TARGET=" + network.database() + ":27017",
+                    "-e", "MONGO_LISTEN=127.0.0.1:" + properties.getSandbox().getAppsDatabasePort(),
+                    image), Duration.ofSeconds(60), null).requireSuccess();
+            log.info("gateway_started subnet={} database={}", network.subnet(), network.database());
+        }
+        for (int attempt = 0; attempt < 50 && !gatewayHealthy(); attempt++) {
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        if (!gatewayHealthy()) throw new IllegalStateException("The gateway did not become reachable on port " + properties.getSandbox().getGatewayPort());
+        return appsNetwork = network;
+    }
+
+    /** A label's value from {@code {{json .Config.Labels}}} output, or null. */
+    private static String label(String json, String key) {
+        java.util.regex.Matcher match = java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote(key) + "\":\"([^\"]*)\"").matcher(json);
+        return match.find() ? match.group(1) : null;
+    }
+
+    private boolean gatewayHealthy() {
+        try {
+            var request = java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://" + properties.getSandbox().getGatewayHost() + ":"
+                    + properties.getSandbox().getGatewayPort() + "/__gateway/health")).timeout(Duration.ofSeconds(2)).GET().build();
+            return GATEWAY_CLIENT.send(request, java.net.http.HttpResponse.BodyHandlers.discarding()).statusCode() == 200;
+        } catch (IOException | RuntimeException unreachable) {
+            return false;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private String rootPath(String relativeRoot) {

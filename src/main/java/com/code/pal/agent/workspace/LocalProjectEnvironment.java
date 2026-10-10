@@ -280,8 +280,78 @@ public class LocalProjectEnvironment implements SandboxPort {
         }
     }
 
+    // ---- App servers: a local process on a free loopback port (development and tests only) ----------
+
+    private final Map<String, LocalServer> servers = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private record LocalServer(Process process, int port, Path log) {}
+
+    @Override
+    public String databaseAddress() {
+        return java.net.URI.create(properties.getSandbox().getLocalAppsDatabaseUri()).getAuthority();
+    }
+
+    @Override
+    public String databaseAdminUri() {
+        return properties.getSandbox().getLocalAppsDatabaseUri();
+    }
+
+    @Override
+    public ServerEndpoint startServer(UUID projectId, String name, String relativeRoot, List<String> command,
+                                      Map<String, String> variables, int port) {
+        stopServer(projectId, name);
+        int localPort;
+        try (java.net.ServerSocket probe = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())) {
+            localPort = probe.getLocalPort();
+        } catch (IOException error) {
+            throw new UncheckedIOException(error);
+        }
+        try {
+            Path log = Files.createTempFile("codepal-server-", ".log");
+            ProcessBuilder builder = new ProcessBuilder(command).directory(root(projectId, relativeRoot).toFile())
+                    .redirectErrorStream(true).redirectOutput(log.toFile());
+            builder.environment().putAll(variables);
+            builder.environment().put("PORT", Integer.toString(localPort));
+            servers.put(serverKey(projectId, name), new LocalServer(builder.start(), localPort, log));
+        } catch (IOException error) {
+            throw new IllegalStateException("Could not start the app server: " + error.getMessage(), error);
+        }
+        return server(projectId, name);
+    }
+
+    @Override
+    public ServerEndpoint server(UUID projectId, String name) {
+        LocalServer server = servers.get(serverKey(projectId, name));
+        if (server == null || !server.process().isAlive()) return null;
+        return new ServerEndpoint("http://127.0.0.1:" + server.port(), Map.of());
+    }
+
+    @Override
+    public void stopServer(UUID projectId, String name) {
+        LocalServer server = servers.remove(serverKey(projectId, name));
+        if (server != null) server.process().destroyForcibly();
+    }
+
+    @Override
+    public String serverLogs(UUID projectId, String name, int lines) {
+        LocalServer server = servers.get(serverKey(projectId, name));
+        if (server == null) return "";
+        try {
+            List<String> all = Files.readAllLines(server.log(), StandardCharsets.UTF_8);
+            return String.join("\n", all.subList(Math.max(0, all.size() - lines), all.size()));
+        } catch (IOException unreadable) {
+            return "";
+        }
+    }
+
+    private static String serverKey(UUID projectId, String name) {
+        return projectId + "/" + name;
+    }
+
     @Override
     public void destroy(UUID projectId) {
+        servers.keySet().stream().filter(key -> key.startsWith(projectId + "/")).toList()
+                .forEach(key -> stopServer(projectId, key.substring(key.indexOf('/') + 1)));
         Path project = storage.projectDir(projectId);
         deleteTree(project);
         if (Files.exists(project, LinkOption.NOFOLLOW_LINKS)) throw new IllegalStateException("Could not remove " + project);

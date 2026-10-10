@@ -38,6 +38,7 @@ public class SiteHostFilter extends OncePerRequestFilter {
     private final ProjectService projects;
     private final PreviewService preview;
     private final DraftPreviewService drafts;
+    private final com.code.pal.agent.runtime.AppServerService servers;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
@@ -52,6 +53,20 @@ public class SiteHostFilter extends OncePerRequestFilter {
         response.setHeader("Content-Security-Policy", policy.header());
         response.setHeader("X-Content-Type-Options", "nosniff");
         response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+        // A MERN project's API: every method, forwarded to its server.
+        if (isApi(request.getRequestURI())) {
+            UUID projectId;
+            try {
+                projectId = project(label);
+            } catch (RuntimeException notFound) {
+                response.setStatus(HttpStatus.NOT_FOUND.value());
+                return;
+            }
+            if (servers.hasServer(projectId)) {
+                servers.proxy(projectId, request, response);
+                return;
+            }
+        }
         if (!"GET".equals(request.getMethod()) && !"HEAD".equals(request.getMethod())) {
             response.setStatus(HttpStatus.METHOD_NOT_ALLOWED.value());
             return;
@@ -83,6 +98,16 @@ public class SiteHostFilter extends OncePerRequestFilter {
             return preview.serveSite(projectId, site, path);
         }
         return preview.servePublished(projects.resolvePublishedProject(label), path);
+    }
+
+    private UUID project(String label) {
+        if (label.startsWith(SitesOrigin.PREVIEW_LABEL)) return projects.resolvePreviewKey(label.substring(SitesOrigin.PREVIEW_LABEL.length()));
+        if (label.startsWith(SitesOrigin.DRAFT_LABEL)) return projects.resolvePreviewKey(label.substring(SitesOrigin.DRAFT_LABEL.length()));
+        return projects.resolvePublishedProject(label);
+    }
+
+    private static boolean isApi(String uri) {
+        return uri.equals("/api") || uri.startsWith("/api/");
     }
 
     private static String path(HttpServletRequest request) {

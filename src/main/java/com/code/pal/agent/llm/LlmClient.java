@@ -21,8 +21,16 @@ public interface LlmClient {
      *               out the call fails so the caller can fall back. {@code null} means only the
      *               per-attempt request timeout applies.
      */
+    /**
+     * @param toolChoice OpenAI tool_choice: null for "auto"; "required" when the turn must call a tool
+     */
     record LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools,
-                      double temperature, Duration budget) {
+                      double temperature, Duration budget, String toolChoice) {
+        public LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools,
+                          double temperature, Duration budget) {
+            this(provider, model, messages, tools, temperature, budget, null);
+        }
+
         public LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools, double temperature) {
             this(provider, model, messages, tools, temperature, null);
         }
@@ -50,7 +58,15 @@ public interface LlmClient {
 
     record ToolSpec(String name, String description, Map<String, Object> parameters) {}
 
-    record ToolCall(String id, String name, String arguments) {}
+    /**
+     * {@code extraContent}: provider data that must travel back with the call on the next request, e.g.
+     * Gemini's thought_signature ({@code extra_content.google.thought_signature}); null for most providers.
+     */
+    record ToolCall(String id, String name, String arguments, java.util.Map<String, Object> extraContent) {
+        public ToolCall(String id, String name, String arguments) {
+            this(id, name, arguments, null);
+        }
+    }
 
     record LlmResult(String content, String reasoning, List<ToolCall> toolCalls, Usage usage, String finishReason) {
         public boolean hasToolCalls() { return toolCalls != null && !toolCalls.isEmpty(); }

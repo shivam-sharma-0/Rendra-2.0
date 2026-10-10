@@ -41,6 +41,8 @@ public class SiteBuildService {
     private final DependencyService dependencies;
     private final BuildVariables variables;
     private final PreviewListener listener;
+    /** Builds and restarts a MERN project's API server next to the site; null in focused tests. */
+    private final com.code.pal.agent.runtime.AppServerService servers;
     /** The latest build state per project, for viewers who open the preview between events. */
     private final Map<UUID, PreviewStatus> statuses = new ConcurrentHashMap<>();
     private final Map<UUID, ReentrantLock> locks = new ConcurrentHashMap<>();
@@ -48,7 +50,8 @@ public class SiteBuildService {
 
     @org.springframework.beans.factory.annotation.Autowired
     public SiteBuildService(StackPacks stacks, ProjectFiles files, SandboxPort sandbox, DependencyService dependencies,
-                            BuildVariables variables, PreviewListener listener) {
+                            BuildVariables variables, PreviewListener listener, com.code.pal.agent.runtime.AppServerService servers) {
+        this.servers = servers;
         this.stacks = stacks;
         this.files = files;
         this.sandbox = sandbox;
@@ -60,7 +63,13 @@ public class SiteBuildService {
     /** For tests: no listener. */
     public SiteBuildService(StackPacks stacks, ProjectFiles files, SandboxPort sandbox, DependencyService dependencies,
                             BuildVariables variables) {
-        this(stacks, files, sandbox, dependencies, variables, PreviewListener.NONE);
+        this(stacks, files, sandbox, dependencies, variables, PreviewListener.NONE, null);
+    }
+
+    /** For tests: no server runtime. */
+    public SiteBuildService(StackPacks stacks, ProjectFiles files, SandboxPort sandbox, DependencyService dependencies,
+                            BuildVariables variables, PreviewListener listener) {
+        this(stacks, files, sandbox, dependencies, variables, listener, null);
     }
 
     /** For tests: no build variables. */
@@ -112,6 +121,8 @@ public class SiteBuildService {
                     ? new PreviewStatus(PreviewStatus.State.FAILED, served, result.error())
                     // A static project has no site id: its files changed, so its content is new anyway.
                     : new PreviewStatus(PreviewStatus.State.READY, result.built() ? version(projectId) : UUID.randomUUID().toString(), null));
+            // The files changed: a MERN project's server follows, in the background (it may take a while).
+            if (servers != null) servers.deployLater(projectId);
             return result;
         } finally {
             lock.unlock();

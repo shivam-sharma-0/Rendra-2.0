@@ -40,6 +40,17 @@ public final class AgentPlanState {
         return snapshot();
     }
 
+    /**
+     * Marks every step not completed or skipped as completed: the build was committed, so the model does
+     * not need a call per step just to tick them off.
+     */
+    public synchronized Snapshot completeRemaining() {
+        steps = steps.stream().map(step -> step.status() == StepStatus.COMPLETED || step.status() == StepStatus.SKIPPED ? step
+                : new PlanStep(step.id(), step.description(), StepStatus.COMPLETED, step.note())).toList();
+        updatedAt = Instant.now();
+        return snapshot();
+    }
+
     public synchronized boolean exists() { return version > 0 && !steps.isEmpty(); }
     public synchronized Snapshot snapshot() { return new Snapshot(version, revisionReason, updatedAt, steps); }
 

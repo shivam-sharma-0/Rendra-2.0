@@ -348,7 +348,17 @@ public class RequirementServiceImpl implements RequirementService {
         return content.trim().replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "");
     }
 
+    /** The fallback questions when the model cannot write them: the to-do set only for a to-do request. */
     private List<QuestionDraft> defaults(String prompt) {
+        String request = prompt == null ? "" : prompt.toLowerCase(java.util.Locale.ROOT);
+        if (!request.matches("(?s).*\\b(to-?do|todos?|tasks?|checklist)\\b.*")) {
+            return List.of(
+                    q("audience", "Who will use it?", true, "just_me", List.of(o("just_me", "Just for me", "A personal tool or a game for yourself"), o("public", "Friends or customers", "Other people will use it, so it should be polished and self-explanatory"), o("learning_demo", "Learning/demo project", "Exploring what the product can do"), o("other", "Write your own...", "Describe who will use it and why"))),
+                    q("scope", "How complete should the first version be?", true, "standard", List.of(o("core", "Simple core", "Only the main feature, done well"), o("standard", "Standard", "The main feature plus the obvious extras users expect"), o("full_featured", "Full-featured", "Everything that makes it feel like a finished product"), o("other", "Write your own...", "Describe the features you need"))),
+                    q("storage", "Should it remember anything between visits?", true, "device_only", List.of(o("nothing", "No", "Nothing needs to be saved"), o("device_only", "This device only", "Saved in the browser; simple, no account"), o("saved_database", "Saved database (Cloud)", "Persists across devices; supports logins later"), o("other", "Write your own...", "Describe what should be saved"))),
+                    q("visual_direction", "What visual style should it have?", true, "clean_minimal", List.of(o("clean_minimal", "Clean & minimal", "Light, airy, generous whitespace"), o("calm_warm", "Calm & warm", "Soothing colors, soft shapes, friendly tone"), o("bold_colorful", "Bold & colorful", "Vivid colors and big, playful elements"), o("dark_moody", "Dark & moody", "Dark background with vibrant accents"), o("other", "Write your own...", "Describe the visual style")))
+            );
+        }
         return List.of(
                 q("audience", "Who will use this to-do app, and for what kind of tasks?", true, "just_me", List.of(o("just_me", "Just for me", "You use it alone to track daily tasks"), o("shared_accounts", "Shared with accounts", "Multiple people sign in and each manages their own tasks"), o("learning_demo", "Learning/demo project", "Exploring what the product can do"), o("other", "Write your own...", "Describe who will use it and why"))),
                 q("features", "Beyond adding and completing tasks, which features matter?", true, "bare_minimum", List.of(o("bare_minimum", "Bare minimum", "Add, check off, delete - nothing else"), o("standard", "Standard", "Due dates, priorities, and categories/projects"), o("full_featured", "Full-featured", "Due dates, priorities, subtasks, search, and filters"), o("other", "Write your own...", "Describe the features you need"))),

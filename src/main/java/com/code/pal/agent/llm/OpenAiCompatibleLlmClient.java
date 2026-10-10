@@ -43,6 +43,8 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private final HttpClient http;
     private final ObjectMapper objectMapper;
     private final Map<String, EndpointPool> endpointPools;
+    /** Per provider: the reasoning_effort to send, when configured. */
+    private final Map<String, String> reasoningEfforts = new HashMap<>();
     private final double defaultTemperature;
     private final int maxAttempts;
     private final long initialBackoffMs;
@@ -69,6 +71,9 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                             .map(k -> new Endpoint(provider.getBaseUrl(), k))
                             .toList();
                     configured.put(name.toLowerCase(java.util.Locale.ROOT), new EndpointPool(eps));
+                    if (provider.getReasoningEffort() != null && !provider.getReasoningEffort().isBlank()) {
+                        reasoningEfforts.put(name.toLowerCase(java.util.Locale.ROOT), provider.getReasoningEffort().trim());
+                    }
                 }
             });
         }
@@ -323,6 +328,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                     JsonNode function = tool.path("function");
                     if (!function.path("name").isMissingNode()) target.name = function.path("name").asText(target.name);
                     if (!function.path("arguments").isMissingNode()) target.arguments.append(function.path("arguments").asText(""));
+                    if (tool.path("extra_content").isObject()) target.extraContent = objectMapper.convertValue(tool.path("extra_content"), Map.class);
                 }
             }
         } catch (RuntimeException e) {
@@ -339,8 +345,10 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         body.put("messages", request.messages().stream().map(this::messageToMap).toList());
         if (request.tools() != null && !request.tools().isEmpty()) {
             body.put("tools", request.tools().stream().map(this::toolToMap).toList());
-            body.put("tool_choice", "auto");
+            body.put("tool_choice", request.toolChoice() == null ? "auto" : request.toolChoice());
         }
+        String effort = request.provider() == null ? null : reasoningEfforts.get(request.provider().toLowerCase(java.util.Locale.ROOT));
+        if (effort != null) body.put("reasoning_effort", effort);
         return body;
     }
 
@@ -360,8 +368,12 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         if (m.toolCalls() != null && !m.toolCalls().isEmpty()) {
             List<Map<String, Object>> calls = new ArrayList<>();
             for (ToolCall c : m.toolCalls()) {
-                calls.add(Map.of("id", c.id(), "type", "function",
-                        "function", Map.of("name", c.name(), "arguments", c.arguments())));
+                Map<String, Object> call = new LinkedHashMap<>();
+                call.put("id", c.id());
+                call.put("type", "function");
+                call.put("function", Map.of("name", c.name(), "arguments", c.arguments()));
+                if (c.extraContent() != null) call.put("extra_content", c.extraContent());
+                calls.add(call);
             }
             map.put("tool_calls", calls);
         }
@@ -413,8 +425,10 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         private String id;
         private String name;
         private final StringBuilder arguments = new StringBuilder();
+        private Map<String, Object> extraContent;
+        @SuppressWarnings("unchecked")
         private ToolCall build(int index) {
-            return new ToolCall(id == null ? "tool-" + index : id, name == null ? "unknown" : name, arguments.toString());
+            return new ToolCall(id == null ? "tool-" + index : id, name == null ? "unknown" : name, arguments.toString(), extraContent);
         }
     }
 

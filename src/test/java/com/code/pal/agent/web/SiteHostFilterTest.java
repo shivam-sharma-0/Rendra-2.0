@@ -28,8 +28,9 @@ class SiteHostFilterTest {
     private final PreviewService preview = mock(PreviewService.class);
     private final DraftPreviewService drafts = mock(DraftPreviewService.class);
     private final FilterChain chain = mock(FilterChain.class);
+    private final com.code.pal.agent.runtime.AppServerService servers = mock(com.code.pal.agent.runtime.AppServerService.class);
     private final SiteHostFilter filter = new SiteHostFilter(sites,
-            new SiteContentPolicy(List.of("http://localhost:5173"), ""), projects, preview, drafts);
+            new SiteContentPolicy(List.of("http://localhost:5173"), ""), projects, preview, drafts, servers);
 
     SiteHostFilterTest() {
         when(projects.resolvePreviewKey("abc123")).thenReturn(projectId);

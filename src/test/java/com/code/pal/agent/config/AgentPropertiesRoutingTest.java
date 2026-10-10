@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class AgentPropertiesRoutingTest {
@@ -44,6 +45,25 @@ class AgentPropertiesRoutingTest {
         Thread.sleep(10);
 
         assertEquals(List.of("a", "b"), next(props, 2));
+    }
+
+    @Test
+    void aModelListedTwiceThatFailedStillFallsBackToTheOthers() {
+        AgentProperties props = props(List.of("a", "a", "b"));
+        props.markModelUnavailable(selection(props, "a"));
+
+        assertEquals(List.of("b", "b", "b"), next(props, 3), "the second listing of a cooling model is not the end of the list");
+    }
+
+    @Test
+    void aRunPrefersTheFirstListedModelAndSkipsItOnlyWhileItFails() {
+        AgentProperties props = props(List.of("a", "b", "c"));
+        assertEquals("a", props.preferredModel(ProjectType.CHAT).model());
+        assertEquals("a", props.preferredModel(ProjectType.CHAT).model(), "not rotated between runs");
+
+        props.markModelUnavailable(selection(props, "a"));
+        assertEquals("b", props.preferredModel(ProjectType.CHAT).model());
+        assertFalse(props.available(selection(props, "a")));
     }
 
     @Test

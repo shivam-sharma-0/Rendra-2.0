@@ -41,6 +41,7 @@ public class DeletedProjectCleanup {
     private final AgentJobQueue queue;
     private final SandboxPort sandbox;
     private final WorkspaceStorage storage;
+    private final com.code.pal.project.database.GeneratedDatabaseService databases;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onDeleted(ProjectDeleted event) {
@@ -59,6 +60,7 @@ public class DeletedProjectCleanup {
             }
             try {
                 sandbox.destroy(projectId);
+                databases.dropAll(projectId);
                 log.info("deleted_project_cleaned projectId={}", projectId);
             } catch (RuntimeException failure) {
                 log.warn("deleted_project_cleanup_failed projectId={} reason={}", projectId, failure.getMessage());

@@ -13,7 +13,8 @@ import java.util.Map;
 @Component
 public class UpdatePlanStepTool implements AgentTool {
     @Override public String name() { return "updatePlanStep"; }
-    @Override public String description() { return "Update a plan step as work progresses; revise the full plan with setPlan when assumptions change."; }
+    @Override public String description() { return "Optional: mark a plan step SKIPPED or attach a note. Never call it just to tick steps off: every call costs a "
+            + "turn and the plan is completed automatically when the build is committed. Revise the plan with setPlan when assumptions change."; }
     @Override public boolean parallelSafe() { return false; }
     @Override public Map<String, Object> parametersSchema() {
         return Map.of("type", "object", "properties", Map.of(

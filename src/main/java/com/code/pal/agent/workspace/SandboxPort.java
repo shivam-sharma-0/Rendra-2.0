@@ -77,6 +77,32 @@ public interface SandboxPort {
      */
     void destroy(UUID projectId);
 
+    /** Where an app server reaches its database server (host:port), as seen from inside its container. */
+    String databaseAddress();
+
+    /** An administrator connection string to the app servers' database server, as the backend reaches it. */
+    String databaseAdminUri();
+
+    /**
+     * Starts one of the project's app servers (a MERN project's API; {@code name} tells several apart,
+     * e.g. "app" and a validation check), replacing one already running under that name. {@code command}
+     * runs in {@code relativeRoot} with {@code environment}, the project read-only and no internet; the
+     * server listens on {@code port}. Returns how to reach it; it may still be starting.
+     */
+    ServerEndpoint startServer(UUID projectId, String name, String relativeRoot, List<String> command,
+                               java.util.Map<String, String> environment, int port);
+
+    /** How to reach the named server while it runs, or null. */
+    ServerEndpoint server(UUID projectId, String name);
+
+    void stopServer(UUID projectId, String name);
+
+    /** The last lines the server wrote (stdout and stderr), for diagnosing a crash. */
+    String serverLogs(UUID projectId, String name, int lines);
+
+    /** {@code baseUrl} plus the headers that route a request to the server (through the gateway, if any). */
+    record ServerEndpoint(String baseUrl, java.util.Map<String, String> headers) {}
+
     record CommandResult(boolean success, int exitCode, String stdout, String error) {
         public static final String NOT_STARTED = "Command could not be started";
         public static final String TIMED_OUT = "Command timed out";

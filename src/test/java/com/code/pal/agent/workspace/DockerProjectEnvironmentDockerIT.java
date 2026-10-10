@@ -220,6 +220,32 @@ class DockerProjectEnvironmentDockerIT {
     }
 
     @Test
+    void aViteAppStyledWithTailwindInstallsWithoutScriptsAndBuildsOffline() throws Exception {
+        DockerProjectEnvironment sandbox = new DockerProjectEnvironment(properties);
+        HostProjectFiles files = new HostProjectFiles(new WorkspaceStorage(properties));
+        var stacks = new com.code.pal.agent.stack.StackPacks(new tools.jackson.databind.ObjectMapper());
+        var dependencies = new com.code.pal.agent.stack.DependencyService(stacks, files, sandbox, properties);
+        UUID projectId = newProject();
+        sandbox.ensure(projectId);
+        files.writeText(projectId, "package.json", """
+                {"name":"tw","private":true,"type":"module","devDependencies":{"vite":"7.1.7","tailwindcss":"4.1.14","@tailwindcss/vite":"4.1.14"}}
+                """);
+        files.writeText(projectId, "vite.config.js", "import { defineConfig } from 'vite';\nimport tailwindcss from '@tailwindcss/vite';\nexport default defineConfig({ plugins: [tailwindcss()] });\n");
+        files.writeText(projectId, "index.html", "<!doctype html><html><body><h1 class=\"text-3xl font-bold text-indigo-600\">Hi</h1><script type=\"module\" src=\"/src/main.js\"></script></body></html>");
+        files.writeText(projectId, "src/main.js", "import './style.css';\n");
+        files.writeText(projectId, "src/style.css", "@import \"tailwindcss\";\n");
+
+        var installed = dependencies.prepare(projectId, ".");
+        assertTrue(installed.installed(), String.valueOf(installed.error()));
+        var build = stacks.detect(files, projectId, ".").previewBuild(files, projectId, ".");
+        SandboxPort.CommandResult built = sandbox.exec(projectId, ".", build.command());
+
+        assertEquals(0, built.exitCode(), built.stdout() + built.error());
+        String css = sandbox.exec(projectId, List.of("sh", "-c", "cat dist/assets/*.css")).stdout();
+        assertTrue(css.contains("text-indigo-600") && css.contains("font-weight"), "Tailwind generated the used utilities offline");
+    }
+
+    @Test
     void restoringFromAMissingArchiveLeavesTheProjectUntouched() throws Exception {
         DockerProjectEnvironment sandbox = new DockerProjectEnvironment(properties);
         HostProjectFiles files = new HostProjectFiles(new WorkspaceStorage(properties));
