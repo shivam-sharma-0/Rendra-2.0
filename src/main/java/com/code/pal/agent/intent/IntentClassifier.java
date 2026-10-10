@@ -1,6 +1,8 @@
 package com.code.pal.agent.intent;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.llm.CallPurpose;
+import com.code.pal.agent.llm.LlmCallContext;
 import com.code.pal.agent.domain.AgentIntent;
 import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.prompt.PromptLoader;
@@ -73,9 +75,13 @@ public class IntentClassifier {
         try {
             String system = PromptLoader.load(Prompt.INTENT_CLASSIFIER);
             AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
-            LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
-                    List.of(LlmMessage.system(system), LlmMessage.user(userRequest)), List.of(), 0.0,
-                    CLASSIFICATION_BUDGET));
+            LlmResult result;
+            // Not part of the run's totals: the call ledger counts it (and the quota reserves it).
+            try (LlmCallContext.Scope intent = LlmCallContext.purpose(CallPurpose.INTENT, false)) {
+                result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
+                        List.of(LlmMessage.system(system), LlmMessage.user(userRequest)), List.of(), 0.0,
+                        CLASSIFICATION_BUDGET).withMaxTokens(props.getLlm().getIntentMaxOutputTokens()));
+            }
             String answer = result.content() == null ? "" : result.content().trim().toUpperCase(Locale.ROOT);
             return answer.startsWith("CONVERSATIONAL") ? AgentIntent.CONVERSATIONAL : AgentIntent.TASK;
         } catch (RuntimeException e) {

@@ -106,6 +106,8 @@ public interface SandboxPort {
     record CommandResult(boolean success, int exitCode, String stdout, String error) {
         public static final String NOT_STARTED = "Command could not be started";
         public static final String TIMED_OUT = "Command timed out";
+        /** The run was stopped; the command was not started or was killed. */
+        public static final String CANCELLED = "Command cancelled";
 
         public CommandResult requireSuccess() {
             if (!success) throw new IllegalStateException(error.isBlank() ? stdout : error);
@@ -115,6 +117,10 @@ public interface SandboxPort {
         /** False when the command never ran (the sandbox tooling itself failed to start). */
         public boolean started() {
             return !error.startsWith(NOT_STARTED);
+        }
+
+        public boolean cancelled() {
+            return CANCELLED.equals(error);
         }
 
         public boolean timedOut() {

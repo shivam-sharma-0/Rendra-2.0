@@ -1,6 +1,7 @@
 package com.code.pal.agent.workspace;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.runtime.RunCancellation;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -256,7 +257,9 @@ public class DockerProjectEnvironment implements SandboxPort {
             Lock lock = lockFor(projectId).readLock();
             CommandResult result;
             lock.lock();
-            try {
+            // Killing the docker CLI does not stop the command inside the container, so a Stop also kills
+            // the container's processes. One run works on a project at a time, so they all belong to it.
+            try (RunCancellation.Registration ignored = RunCancellation.current().onCancel(() -> killContainerProcesses(environment.container()))) {
                 // Idle cleanup may have stopped the container between ensure() and this lock.
                 if (!ready.contains(projectId) && round < MAX_EXEC_ROUNDS) continue;
                 result = run(args, timeout, stdin, outputLimit);
@@ -408,8 +411,8 @@ public class DockerProjectEnvironment implements SandboxPort {
         args.addAll(command);
         CommandResult result = run(args, Duration.ofMillis(Math.max(10_000, properties.getSandbox().getInstallTimeoutMs())),
                 null, outputLimit());
-        // Killing the docker CLI on timeout leaves the container running.
-        if (result.timedOut()) run(List.of("rm", "-f", name), Duration.ofSeconds(30), null);
+        // Killing the docker CLI on timeout or Stop leaves the container running.
+        if (result.timedOut() || result.cancelled()) removeContainerQuietly(name);
         return result;
     }
 
@@ -445,7 +448,7 @@ public class DockerProjectEnvironment implements SandboxPort {
                 "--mount", "type=bind,source=" + site + ",target=/site,readonly", image, "/site");
         CommandResult result = run(args, Duration.ofMillis(Math.max(10_000, properties.getSandbox().getBrowserTimeoutMs())),
                 null, outputLimit());
-        if (result.timedOut()) run(List.of("rm", "-f", name), Duration.ofSeconds(30), null);
+        if (result.timedOut() || result.cancelled()) removeContainerQuietly(name);
         return result;
     }
 
@@ -804,6 +807,9 @@ public class DockerProjectEnvironment implements SandboxPort {
     }
 
     private CommandResult runProcess(List<String> args, Duration timeout, byte[] stdin, int outputLimit) {
+        // A stopped run starts nothing new; a running command stops being waited for (see execInContainer for the
+        // processes it left inside the container).
+        if (RunCancellation.current().isCancelled()) return new CommandResult(false, -1, "", CommandResult.CANCELLED);
         List<String> command = new ArrayList<>();
         command.add(properties.getSandbox().getDockerCommand());
         String configuredArgs = properties.getSandbox().getDockerCommandArgs();
@@ -821,11 +827,12 @@ public class DockerProjectEnvironment implements SandboxPort {
                 try { process.getInputStream().transferTo(new BoundedOutputStream(captured, outputLimit)); }
                 catch (IOException ignored) { }
             });
-            boolean finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            if (!finished) {
+            ProcessWaiter.Outcome outcome = ProcessWaiter.await(process, timeout);
+            if (outcome != ProcessWaiter.Outcome.FINISHED) {
                 process.destroyForcibly();
                 reader.join(1_000);
-                return new CommandResult(false, -1, captured.toString(StandardCharsets.UTF_8), CommandResult.TIMED_OUT);
+                return new CommandResult(false, -1, captured.toString(StandardCharsets.UTF_8),
+                        outcome == ProcessWaiter.Outcome.CANCELLED ? CommandResult.CANCELLED : CommandResult.TIMED_OUT);
             }
             reader.join(1_000);
             return new CommandResult(process.exitValue() == 0, process.exitValue(), captured.toString(StandardCharsets.UTF_8), "");
@@ -834,6 +841,24 @@ public class DockerProjectEnvironment implements SandboxPort {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return new CommandResult(false, -1, "", "Sandbox command interrupted");
+        }
+    }
+
+    /**
+     * Kills every process the sandbox user runs in {@code container} except its init process (the
+     * container stays up). Runs on the cancelling thread, outside the stopped run, so it is not itself
+     * refused as cancelled.
+     */
+    private void killContainerProcesses(String container) {
+        try (RunCancellation.Registration ignored = RunCancellation.bind(RunCancellation.NONE)) {
+            CommandResult killed = run(List.of("exec", container, "sh", "-c", "kill -KILL -1 2>/dev/null; true"), Duration.ofSeconds(10), null);
+            log.info("sandbox_processes_killed container={} success={}", container, killed.success());
+        }
+    }
+
+    private void removeContainerQuietly(String name) {
+        try (RunCancellation.Registration ignored = RunCancellation.bind(RunCancellation.NONE)) {
+            run(List.of("rm", "-f", name), Duration.ofSeconds(30), null);
         }
     }
 

@@ -1,6 +1,7 @@
 package com.code.pal.agent.workspace;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.runtime.RunCancellation;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -16,6 +17,7 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -115,6 +117,7 @@ public class LocalProjectEnvironment implements SandboxPort {
 
     private CommandResult run(UUID projectId, String relativeRoot, List<String> command, long timeoutMs) {
         if (command == null || command.isEmpty()) throw new IllegalArgumentException("Sandbox command is empty");
+        if (RunCancellation.current().isCancelled()) return new CommandResult(false, -1, "", CommandResult.CANCELLED);
         Path directory = root(projectId, relativeRoot);
         ProcessBuilder builder = new ProcessBuilder(platformCommand(command)).directory(directory.toFile())
                 .redirectErrorStream(true);
@@ -129,13 +132,15 @@ public class LocalProjectEnvironment implements SandboxPort {
         int limit = Math.max(1_000, properties.getSandbox().getOutputMaxChars());
         Thread reader = Thread.ofVirtual().start(() -> drain(process.getInputStream(), captured, limit));
         try {
-            boolean finished = process.waitFor(Math.max(1_000, timeoutMs), TimeUnit.MILLISECONDS);
+            ProcessWaiter.Outcome outcome = ProcessWaiter.await(process, Duration.ofMillis(Math.max(1_000, timeoutMs)));
+            boolean finished = outcome == ProcessWaiter.Outcome.FINISHED;
             if (!finished) {
                 process.descendants().forEach(ProcessHandle::destroyForcibly);
                 process.destroyForcibly();
             }
             reader.join(1_000);
             String output = captured.toString(StandardCharsets.UTF_8);
+            if (outcome == ProcessWaiter.Outcome.CANCELLED) return new CommandResult(false, -1, output, CommandResult.CANCELLED);
             if (!finished) return new CommandResult(false, -1, output, CommandResult.TIMED_OUT);
             return new CommandResult(process.exitValue() == 0, process.exitValue(), output, "");
         } catch (InterruptedException error) {

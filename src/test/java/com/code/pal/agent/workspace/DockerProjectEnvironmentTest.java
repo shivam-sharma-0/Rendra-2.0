@@ -205,6 +205,46 @@ class DockerProjectEnvironmentTest {
         }
     }
 
+    private static final String KILL_ALL = "kill -KILL -1 2>/dev/null; true";
+
+    @Test
+    void stopKillsTheCommandInsideTheContainer() throws Exception {
+        FakeDocker docker = new FakeDocker();
+        DockerProjectEnvironment sandbox = sandbox(docker, new MutableClock());
+        UUID projectId = UUID.randomUUID();
+        sandbox.ensure(projectId);
+
+        docker.blockExec = new CountDownLatch(1);
+        com.code.pal.agent.runtime.RunCancellation run = new com.code.pal.agent.runtime.RunCancellation(UUID.randomUUID());
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<CommandResult> running = pool.submit(() -> {
+                try (var bound = com.code.pal.agent.runtime.RunCancellation.bind(run)) {
+                    return sandbox.exec(projectId, List.of("npm", "run", "build"));
+                }
+            });
+            assertTrue(docker.execStarted.await(5, TimeUnit.SECONDS));
+            run.cancel();
+            assertTrue(docker.calls.stream().anyMatch(call -> call.get(0).equals("exec") && call.contains(KILL_ALL)),
+                    "a Stop must kill the processes inside the container");
+            docker.blockExec.countDown();
+            running.get(5, TimeUnit.SECONDS);
+        } finally {
+            docker.blockExec.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void aCommandOutsideARunRegistersNoKill() {
+        FakeDocker docker = new FakeDocker();
+        DockerProjectEnvironment sandbox = sandbox(docker, new MutableClock());
+        UUID projectId = UUID.randomUUID();
+        sandbox.ensure(projectId);
+        assertTrue(sandbox.exec(projectId, List.of("echo", "hi")).success());
+        assertTrue(docker.calls.stream().noneMatch(call -> call.contains(KILL_ALL)));
+    }
+
     private static DockerProjectEnvironment sandbox(FakeDocker docker, Clock clock) {
         AgentProperties properties = new AgentProperties();
         properties.getSandbox().setRequired(true);    // cleanup only runs for a required sandbox
@@ -299,6 +339,7 @@ class DockerProjectEnvironmentTest {
                             : "Error response from daemon: No such container: x");
                 }
                 if (args.contains("mkdir")) return ok("");
+                if (args.contains(KILL_ALL)) return ok("");
                 execStarted.countDown();
                 CountDownLatch block = blockExec;
                 if (block != null) {

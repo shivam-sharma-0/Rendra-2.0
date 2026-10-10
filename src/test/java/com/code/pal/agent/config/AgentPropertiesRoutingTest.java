@@ -10,6 +10,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentPropertiesRoutingTest {
 
@@ -75,6 +76,27 @@ class AgentPropertiesRoutingTest {
         ModelSelection chosen = props.modelFor(ProjectType.CHAT);
 
         assertNotNull(chosen.model(), "routing must still try a model rather than fail without a call");
+    }
+
+    @Test
+    void modesWithoutAnyModelAreReported() {
+        AgentProperties props = new AgentProperties();
+        props.setBillingMode(AgentProperties.BillingMode.FREE);
+        props.getModels().setFreeBuild(new ArrayList<>(List.of("mistral:codestral-latest")));
+        props.getModels().setFreeChat(new ArrayList<>(List.of(" ")));
+        props.getModels().setVision(new ArrayList<>(List.of("nvidia:vision")));
+        assertEquals(List.of("CHAT", "PLAN"), props.modesWithoutModels());
+    }
+
+    @Test
+    void aModelTheAccountCannotUseIsSkippedForTheLongCooldown() throws Exception {
+        AgentProperties props = props(List.of("a", "b"));
+        ModelSelection a = selection(props, "a");
+        props.markModelUnavailable(a, 60_000);
+        assertFalse(props.available(a));
+        props.markModelUnavailable(a, 1);
+        Thread.sleep(5);
+        assertTrue(props.available(a), "a short cooldown ends");
     }
 
     private static AgentProperties props(List<String> chatModels) {

@@ -1,6 +1,7 @@
 package com.code.pal.agent.llm;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.runtime.RunCancellation;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
@@ -25,6 +26,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.function.Consumer;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -50,6 +54,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private final long initialBackoffMs;
     private final long maxBackoffMs;
     private final Duration requestTimeout;
+    private final Duration rejectedKeyCooldown;
     private final long streamIdleTimeoutNanos;
 
     public OpenAiCompatibleLlmClient(AgentProperties props, ObjectMapper objectMapper) {
@@ -60,6 +65,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         this.initialBackoffMs = Math.max(50, llm.getRetryInitialBackoffMs());
         this.maxBackoffMs = Math.max(initialBackoffMs, llm.getRetryMaxBackoffMs());
         this.requestTimeout = Duration.ofMillis(Math.max(1_000, llm.getRequestTimeoutMs()));
+        this.rejectedKeyCooldown = Duration.ofMillis(Math.max(1_000, llm.getRejectedKeyCooldownMs()));
         this.streamIdleTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(100, llm.getStreamIdleTimeoutMs()));
         Map<String, EndpointPool> configured = new HashMap<>();
         if (props.getProviders() != null) {
@@ -105,16 +111,28 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         //    caller can fall back to another model instead of waiting on this one.
         long deadline = request.budget() == null ? Long.MAX_VALUE
                 : System.nanoTime() + request.budget().toNanos();
+        // The run's Stop signal (bound to the calling thread by the agent): it aborts the wait for the
+        // response, the stream and the back-off between attempts.
+        RunCancellation cancellation = RunCancellation.current();
         int maxRateLimited = maxAttempts * pool.size();
         int rateLimited = 0;
         int transientFailures = 0;
         int keysTriedInRound = 0;
         long backoffMs = initialBackoffMs;
         while (true) {
+            if (cancellation.isCancelled()) throw new LlmCancelledException();
             Duration attemptTimeout = attemptTimeout(deadline, provider);
             Endpoint endpoint = pool.next();
+            if (endpoint == null) {
+                throw new LlmHttpException(401, "LLM call failed: HTTP 401 - every API key of '" + provider + "' was rejected recently");
+            }
             try {
-                return streamOnce(endpoint, request, onTextDelta, attemptTimeout, deadline);
+                return streamOnce(endpoint, request, onTextDelta, attemptTimeout, deadline, cancellation);
+            } catch (KeyRejectedException rejected) {
+                // A revoked or mistyped key: set it aside and go on at once with the provider's other keys.
+                pool.disable(endpoint, rejectedKeyCooldown);
+                log.warn("API key {} of {} for '{}' was rejected (HTTP 401); skipping it for {} min",
+                        pool.indexOf(endpoint) + 1, pool.size(), provider, rejectedKeyCooldown.toMinutes());
             } catch (RetryableLlmException e) {
                 if (e.rateLimited()) {
                     if (++rateLimited >= maxRateLimited) throw e;
@@ -132,7 +150,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                     throw new LlmException("LLM time budget exhausted for '" + provider + "' after: " + e.getMessage(), e);
                 }
                 log.warn("LLM request to '{}' failed ({}); retrying in {} ms", provider, e.getMessage(), delay);
-                sleep(delay);
+                sleep(delay, cancellation);
                 backoffMs = Math.min(maxBackoffMs, backoffMs * 2);
             }
         }
@@ -154,7 +172,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     }
 
     private LlmResult streamOnce(Endpoint endpoint, LlmRequest request, Consumer<String> onTextDelta,
-                                 Duration attemptTimeout, long deadline) {
+                                 Duration attemptTimeout, long deadline, RunCancellation cancellation) {
         HttpRequest httpRequest;
         try {
             httpRequest = HttpRequest.newBuilder(endpoint.completionsUri())
@@ -171,7 +189,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         AtomicBoolean published = new AtomicBoolean(false);
         StreamWatchdog watchdog = null;
         try {
-            HttpResponse<InputStream> response = http.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
+            HttpResponse<InputStream> response = awaitResponse(httpRequest, cancellation);
             int status = response.statusCode();
             if (status == 429) {
                 closeQuietly(response.body());
@@ -181,17 +199,22 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                 closeQuietly(response.body());
                 throw new RetryableLlmException("HTTP " + status, retryAfterMs(response));
             }
+            if (status == 401) {
+                closeQuietly(response.body());
+                throw new KeyRejectedException();
+            }
             if (status < 200 || status >= 300) {
                 String detail = readAtMost(response.body(), 1_000);
-                throw new LlmException("LLM call failed: HTTP " + status + (detail.isBlank() ? "" : " - " + detail));
+                throw new LlmHttpException(status, "LLM call failed: HTTP " + status + (detail.isBlank() ? "" : " - " + detail));
             }
             // The request timeout stops at the response headers; the body needs its own guard.
-            watchdog = new StreamWatchdog(response.body(), streamIdleTimeoutNanos, deadline);
+            watchdog = new StreamWatchdog(response.body(), streamIdleTimeoutNanos, deadline, cancellation);
             return readSse(watchdog.stream(), token -> {
                 published.set(true);
                 onTextDelta.accept(token);
             });
         } catch (IOException e) {
+            if (cancellation.isCancelled()) throw new LlmCancelledException();
             String reason = watchdog != null && watchdog.fired() != null
                     ? watchdog.fired() : "network error: " + e.getMessage();
             // A reconnect after visible output would duplicate text and can produce a different tool call.
@@ -206,9 +229,36 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         }
     }
 
+    /** Polls step while waiting for the response headers, so a Stop does not wait for the request timeout. */
+    private static final long CANCEL_POLL_MS = 100;
+
+    /**
+     * Sends the request and waits for the response headers, aborting the request when the run is
+     * cancelled. Transport failures surface as IOException, as with a blocking send.
+     */
+    private HttpResponse<InputStream> awaitResponse(HttpRequest httpRequest, RunCancellation cancellation)
+            throws IOException, InterruptedException {
+        CompletableFuture<HttpResponse<InputStream>> pending = http.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
+        while (true) {
+            try {
+                return pending.get(CANCEL_POLL_MS, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException waiting) {
+                if (cancellation.isCancelled()) {
+                    pending.cancel(true);
+                    throw new LlmCancelledException();
+                }
+            } catch (ExecutionException failed) {
+                Throwable cause = failed.getCause();
+                if (cause instanceof IOException io) throw io;
+                if (cause instanceof RuntimeException runtime) throw runtime;
+                throw new IOException(cause);
+            }
+        }
+    }
+
     /**
      * Closes a response body that has gone silent for {@code idleNanos}, or that outlives the call's
-     * deadline. Closing unblocks the reader with an IOException, which the caller turns into a
+     * deadline, or whose run was cancelled. Closing unblocks the reader with an IOException, which the caller turns into a
      * retry (no output yet) or a failure (output already published).
      */
     private static final class StreamWatchdog {
@@ -221,7 +271,10 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         private volatile boolean stopped;
         private volatile String fired;
 
-        StreamWatchdog(InputStream source, long idleNanos, long deadline) {
+        private final RunCancellation cancellation;
+
+        StreamWatchdog(InputStream source, long idleNanos, long deadline, RunCancellation cancellation) {
+            this.cancellation = cancellation;
             this.source = source;
             this.tracked = new java.io.FilterInputStream(source) {
                 @Override public int read() throws IOException {
@@ -241,6 +294,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         private void watch(long idleNanos, long deadline) {
             while (!stopped) {
                 long now = System.nanoTime();
+                if (cancellation.isCancelled()) { fire("cancelled"); return; }
                 if (now - lastActivity.get() >= idleNanos) { fire("stream stalled"); return; }
                 if (deadline != Long.MAX_VALUE && now >= deadline) { fire("time budget exhausted mid-stream"); return; }
                 try { Thread.sleep(CHECK_INTERVAL_MS); } catch (InterruptedException e) { return; }
@@ -347,6 +401,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
             body.put("tools", request.tools().stream().map(this::toolToMap).toList());
             body.put("tool_choice", request.toolChoice() == null ? "auto" : request.toolChoice());
         }
+        if (request.maxTokens() != null && request.maxTokens() > 0) body.put("max_tokens", request.maxTokens());
         String effort = request.provider() == null ? null : reasoningEfforts.get(request.provider().toLowerCase(java.util.Locale.ROOT));
         if (effort != null) body.put("reasoning_effort", effort);
         return body;
@@ -414,8 +469,15 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         return half + ThreadLocalRandom.current().nextLong(half + 1);
     }
 
-    private static void sleep(long delayMs) {
-        try { Thread.sleep(delayMs); } catch (InterruptedException e) {
+    /** Back-off between attempts that ends early when the run is cancelled. */
+    private static void sleep(long delayMs, RunCancellation cancellation) {
+        long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(delayMs);
+        try {
+            while (System.nanoTime() < until) {
+                if (cancellation.isCancelled()) throw new LlmCancelledException();
+                Thread.sleep(Math.min(CANCEL_POLL_MS, Math.max(1, TimeUnit.NANOSECONDS.toMillis(until - System.nanoTime()))));
+            }
+        } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new LlmException("LLM retry interrupted", e);
         }
@@ -434,12 +496,32 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 
     private static final class UsageBuilder { private int promptTokens; private int completionTokens; }
 
+    /** HTTP 401 for one key; the call goes on with the provider's other keys. */
+    private static final class KeyRejectedException extends LlmException {
+        KeyRejectedException() { super("HTTP 401"); }
+    }
+
     private static final class EndpointPool {
         private final List<Endpoint> endpoints;
         private final java.util.concurrent.atomic.AtomicInteger index = new java.util.concurrent.atomic.AtomicInteger();
+        /** Keys the provider rejected, until when (nanoTime). */
+        private final Map<Endpoint, Long> disabledUntil = new java.util.concurrent.ConcurrentHashMap<>();
 
         EndpointPool(List<Endpoint> endpoints) { this.endpoints = List.copyOf(endpoints); }
-        Endpoint next() { return endpoints.get(Math.floorMod(index.getAndIncrement(), endpoints.size())); }
+
+        /** The next key in rotation that is not set aside, or null when every key is. */
+        Endpoint next() {
+            for (int i = 0; i < endpoints.size(); i++) {
+                Endpoint candidate = endpoints.get(Math.floorMod(index.getAndIncrement(), endpoints.size()));
+                Long until = disabledUntil.get(candidate);
+                if (until == null) return candidate;
+                if (System.nanoTime() - until >= 0) { disabledUntil.remove(candidate, until); return candidate; }
+            }
+            return null;
+        }
+
+        void disable(Endpoint endpoint, Duration duration) { disabledUntil.put(endpoint, System.nanoTime() + duration.toNanos()); }
+        int indexOf(Endpoint endpoint) { return endpoints.indexOf(endpoint); }
         int size() { return endpoints.size(); }
         boolean isConfigured() { return !endpoints.isEmpty() && endpoints.stream().anyMatch(e -> !e.apiKey().isBlank()); }
     }

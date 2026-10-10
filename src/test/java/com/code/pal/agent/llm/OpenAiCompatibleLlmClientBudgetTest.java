@@ -133,6 +133,39 @@ class OpenAiCompatibleLlmClientBudgetTest {
         assertTrue(elapsedMs(started) < 4_000, "took " + elapsedMs(started) + " ms");
     }
 
+    @Test
+    void aRejectedKeyIsSetAsideAndTheProvidersOtherKeysGoOn() throws Exception {
+        start(exchange -> {
+            if ("Bearer key-bad".equals(exchange.getRequestHeaders().getFirst("Authorization"))) status(exchange, 401);
+            else ok(exchange);
+        });
+        OpenAiCompatibleLlmClient client = client(List.of("key-bad", "key-good"), 3, 1, 60_000);
+
+        assertEquals("ok", client.chatStreaming(request(Duration.ofSeconds(10)), token -> { }).content());
+        assertEquals("ok", client.chatStreaming(request(Duration.ofSeconds(10)), token -> { }).content());
+        assertEquals(1, keysSeen.stream().filter("Bearer key-bad"::equals).count(), "the rejected key is not tried again");
+    }
+
+    @Test
+    void everyKeyRejectedFailsAtOnce() throws Exception {
+        start(exchange -> status(exchange, 401));
+        OpenAiCompatibleLlmClient client = client(List.of("key-a", "key-b"), 3, 1, 60_000);
+
+        LlmHttpException failure = assertThrows(LlmHttpException.class, () -> client.chatStreaming(request(Duration.ofSeconds(10)), token -> { }));
+        assertEquals(401, failure.status());
+        assertEquals(2, attempts.get(), "each key once, no back-off rounds");
+    }
+
+    @Test
+    void aForbiddenModelIsReportedAsUnavailableForTheAccount() throws Exception {
+        start(exchange -> status(exchange, 403));
+        OpenAiCompatibleLlmClient client = client(List.of("key-a", "key-b"), 3, 1, 60_000);
+
+        LlmHttpException failure = assertThrows(LlmHttpException.class, () -> client.chatStreaming(request(Duration.ofSeconds(10)), token -> { }));
+        assertTrue(failure.modelUnavailable());
+        assertEquals(1, attempts.get(), "a model the account cannot use is not retried with other keys");
+    }
+
     private void start(HttpHandler behaviour) throws IOException {
         server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
         server.setExecutor(Executors.newCachedThreadPool());

@@ -1,6 +1,11 @@
 package com.code.pal.agent.vision;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.llm.CallPurpose;
+import com.code.pal.agent.llm.LlmCallContext;
+import com.code.pal.agent.llm.LlmCancelledException;
+import com.code.pal.agent.llm.LlmQuotaExceededException;
+import com.code.pal.agent.runtime.RunCancellation;
 import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.llm.LlmClient.LlmMessage;
 import com.code.pal.agent.llm.LlmClient.LlmRequest;
@@ -69,13 +74,26 @@ public class VisionService {
 
     public List<Brief> describe(UUID projectId, List<String> paths, String userRequest) {
         if (paths.isEmpty()) return List.of();
+        // Images are read on their own threads: carry the run's Stop signal and call context over to them.
+        RunCancellation cancellation = RunCancellation.current();
+        LlmCallContext context = LlmCallContext.current();
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<Brief>> pending = new ArrayList<>();
-            for (String path : paths) pending.add(pool.submit(() -> describeOne(projectId, path, userRequest)));
+            for (String path : paths) {
+                pending.add(pool.submit(() -> {
+                    try (RunCancellation.Registration stop = RunCancellation.bind(cancellation);
+                         LlmCallContext.Scope call = LlmCallContext.bind(context)) {
+                        return describeOne(projectId, path, userRequest);
+                    }
+                }));
+            }
             List<Brief> briefs = new ArrayList<>();
             for (int i = 0; i < pending.size(); i++) {
                 try {
                     briefs.add(pending.get(i).get());
+                } catch (java.util.concurrent.ExecutionException error) {
+                    if (error.getCause() instanceof LlmCancelledException stopped) throw stopped;
+                    briefs.add(new Brief(paths.get(i), null, "could not be read: " + error.getCause().getMessage()));
                 } catch (Exception error) {
                     briefs.add(new Brief(paths.get(i), null, "could not be read: " + error.getMessage()));
                 }
@@ -110,17 +128,28 @@ public class VisionService {
         String prompt = PROMPT.formatted(userRequest == null ? "" : userRequest.strip());
         for (AgentProperties.ModelSelection model : properties.visionModels()) {
             long started = System.nanoTime();
-            try {
+            // Not part of the run's totals: the call ledger counts it (and the quota reserves it).
+            try (LlmCallContext.Scope vision = LlmCallContext.purpose(CallPurpose.VISION, false)) {
                 LlmClient.LlmResult result = llm.chat(new LlmRequest(model.provider(), model.model(),
-                        List.of(LlmMessage.userWithImages(prompt, List.of(image))), List.of(), 0.2, CALL_BUDGET));
+                        List.of(LlmMessage.userWithImages(prompt, List.of(image))), List.of(), 0.2, CALL_BUDGET)
+                        .withMaxTokens(properties.getLlm().getVisionMaxOutputTokens()));
                 if (result.content() != null && !result.content().isBlank()) {
                     properties.markModelAvailable(model);
                     log.info("vision_brief path={} model={} chars={} elapsedMs={}", path, model.model(),
                             result.content().length(), (System.nanoTime() - started) / 1_000_000);
                     return new Brief(path, result.content(), null);
                 }
+            } catch (LlmCancelledException stopped) {
+                throw stopped;   // the run was stopped: not this model's fault
+            } catch (LlmQuotaExceededException quota) {
+                return new Brief(path, null, "could not be read: " + quota.getMessage());
             } catch (RuntimeException failure) {
                 log.warn("vision_model_failed model={} reason={}", model.model(), failure.getMessage());
+                // A model this account cannot use is set aside for long, not just a moment.
+                if (failure instanceof com.code.pal.agent.llm.LlmHttpException http && http.modelUnavailable()) {
+                    properties.markModelUnavailable(model, properties.getLlm().getModelUnavailableCooldownMs());
+                    continue;
+                }
             }
             properties.markModelUnavailable(model);
         }

@@ -124,6 +124,7 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
                         + "Set the env var and restart.", cleared);
             }
             sanitizeModelLists();
+            reportRouting();
             return;
         }
         int count = 0;
@@ -151,6 +152,7 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
         }
         if (count > 0) log.info("Decrypted {} API key(s)", count);
         sanitizeModelLists();
+        reportRouting();
     }
 
     private void sanitizeModelLists() {
@@ -177,6 +179,30 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
         return filtered;
     }
 
+    /**
+     * The modes (for the active billing mode) and vision with no usable model left after unconfigured
+     * providers were removed; such a mode cannot run. Logged as an error at startup.
+     */
+    public List<String> modesWithoutModels() {
+        boolean free = billingMode == BillingMode.FREE;
+        Map<String, List<String>> lists = new LinkedHashMap<>();
+        lists.put("BUILD", free ? models.getFreeBuild() : models.getBuild());
+        lists.put("CHAT", free ? models.getFreeChat() : models.getChat());
+        lists.put("PLAN", free ? models.getFreePlan() : models.getPlan());
+        lists.put("VISION", models.getVision());
+        return lists.entrySet().stream()
+                .filter(entry -> entry.getValue() == null || entry.getValue().stream().noneMatch(m -> m != null && !m.isBlank()))
+                .map(Map.Entry::getKey).toList();
+    }
+
+    private void reportRouting() {
+        List<String> missing = modesWithoutModels();
+        if (!missing.isEmpty()) {
+            log.error("No usable model for {} (billing mode {}): check agent.models and the providers' API keys; "
+                    + "requests in that mode will fail until one is configured", missing, billingMode);
+        }
+    }
+
     @Getter
     @Setter
     public static class Llm {
@@ -197,10 +223,28 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
         private long callBudgetMs = 90_000;
         /** A model whose call failed is skipped by routing for this long while others are available. */
         private long providerCooldownMs = 60_000;
+        /**
+         * A model the account cannot use (HTTP 403 / 404 / 410: e.g. not served on the free tier, or unknown)
+         * is skipped this long, so runs do not keep trying it.
+         */
+        private long modelUnavailableCooldownMs = 1_800_000;
+        /** An API key the provider rejected (HTTP 401) is skipped this long; the provider's other keys go on. */
+        private long rejectedKeyCooldownMs = 1_800_000;
         /** Initial request plus this many retry attempts are bounded by maxAttempts. */
         private int maxAttempts = 3;
         private long retryInitialBackoffMs = 500;
         private long retryMaxBackoffMs = 5_000;
+        /**
+         * Output cap ({@code max_tokens}) for agent and requirements calls; it bounds what one call can cost,
+         * which the daily quota reserves before the call. Reasoning models count their reasoning in it.
+         */
+        private int maxOutputTokens = 8_192;
+        /** Output cap for a small-talk reply. */
+        private int smallTalkMaxOutputTokens = 1_024;
+        /** Output cap for reading attached images (the vision models reason before they answer). */
+        private int visionMaxOutputTokens = 4_096;
+        /** Output cap for the one-word intent answer. */
+        private int intentMaxOutputTokens = 32;
     }
 
     /** Per-user guards that stop one account from exhausting the shared (often free-tier) LLM quota. */
@@ -401,7 +445,12 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
 
     /** A provider/model that just failed is skipped for {@code llm.providerCooldownMs}. */
     public void markModelUnavailable(ModelSelection selection) {
-        long cooldown = Math.max(0, llm.getProviderCooldownMs());
+        markModelUnavailable(selection, llm.getProviderCooldownMs());
+    }
+
+    /** As {@link #markModelUnavailable(ModelSelection)}, for a failure that says how long it lasts. */
+    public void markModelUnavailable(ModelSelection selection, long cooldownMs) {
+        long cooldown = Math.max(0, cooldownMs);
         if (selection == null || cooldown == 0) return;
         unavailableUntil.put(routingKey(selection), System.nanoTime() + cooldown * 1_000_000);
     }

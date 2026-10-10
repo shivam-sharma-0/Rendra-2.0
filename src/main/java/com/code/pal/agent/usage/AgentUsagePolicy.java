@@ -21,7 +21,9 @@ import java.util.List;
  * <ul>
  *   <li>turns per minute (Redis fixed window; fails open, like the auth limiter, if Redis is down),</li>
  *   <li>runs queued or running at once (database),</li>
- *   <li>prompt + completion tokens per UTC day (database).</li>
+ *   <li>prompt + completion tokens per UTC day (database: run totals plus ledger calls outside any run
+ *       total — intent, vision, requirements), with each model call's worst case reserved
+ *       before the call ({@link #reserve}) so concurrent calls cannot jointly cross the quota.</li>
  * </ul>
  * The active-run count only sees runs already created, so two posts in the same instant can both pass
  * it; the per-minute window is what stops a burst.
@@ -37,17 +39,32 @@ public class AgentUsagePolicy implements AgentTurnAdmission {
     private final AgentRunRepository runs;
     private final StringRedisTemplate redis;
     private final Clock clock;
+    private final TokenReservations reservations;
+    /** Model calls outside any run total; null in focused tests (only run totals count then). */
+    private final ModelCallRepository calls;
 
     @Autowired
-    public AgentUsagePolicy(AgentProperties properties, AgentRunRepository runs, StringRedisTemplate redis) {
-        this(properties, runs, redis, Clock.systemUTC());
+    public AgentUsagePolicy(AgentProperties properties, AgentRunRepository runs, StringRedisTemplate redis, ModelCallRepository calls) {
+        this(properties, runs, redis, Clock.systemUTC(), new RedisTokenReservations(redis, Clock.systemUTC()), calls);
     }
 
     AgentUsagePolicy(AgentProperties properties, AgentRunRepository runs, StringRedisTemplate redis, Clock clock) {
+        this(properties, runs, redis, clock, new RedisTokenReservations(redis, clock));
+    }
+
+    AgentUsagePolicy(AgentProperties properties, AgentRunRepository runs, StringRedisTemplate redis, Clock clock,
+                     TokenReservations reservations) {
+        this(properties, runs, redis, clock, reservations, null);
+    }
+
+    AgentUsagePolicy(AgentProperties properties, AgentRunRepository runs, StringRedisTemplate redis, Clock clock,
+                     TokenReservations reservations, ModelCallRepository calls) {
+        this.calls = calls;
         this.properties = properties;
         this.runs = runs;
         this.redis = redis;
         this.clock = clock;
+        this.reservations = reservations;
     }
 
     @Override
@@ -74,16 +91,75 @@ public class AgentUsagePolicy implements AgentTurnAdmission {
     }
 
     public static final String QUOTA_MESSAGE = "You have used today's AI quota. It resets at 00:00 UTC.";
+    /** When the quota is not used up but cannot cover the next model call's worst case. */
+    public static final String QUOTA_LOW_MESSAGE = "Not enough of today's AI quota is left for this request. It resets at 00:00 UTC.";
 
-    /** Tokens the user's runs have consumed since 00:00 UTC today. */
+    /**
+     * Sets aside {@code estimatedTokens} (the call's input estimate plus its output cap) for a model call,
+     * counting every other call of the user still running. Refused when today's use plus everything
+     * reserved would cross the quota. Release it once the call's real usage is saved.
+     */
+    public Reservation reserve(Long userId, long estimatedTokens) {
+        long quota = dailyTokenQuota();
+        if (quota <= 0) return Reservation.UNLIMITED;
+        long used = tokensUsedToday(userId);
+        if (used >= quota) return Reservation.refused(QUOTA_MESSAGE);
+        long tokens = Math.max(1, estimatedTokens);
+        String id = java.util.UUID.randomUUID().toString();
+        long reserved;
+        try {
+            reserved = reservations.add(userId, id, tokens, reservationTimeToLive());
+        } catch (RuntimeException unavailable) {
+            // Without Redis the call is still checked on its own, as before reservations existed.
+            log.warn("usage_reservation_unavailable userId={} reason={}", userId, unavailable.getMessage());
+            return used + tokens > quota ? Reservation.refused(QUOTA_LOW_MESSAGE) : new Reservation(userId, null, tokens, true, null);
+        }
+        if (used + reserved > quota) {
+            release(new Reservation(userId, id, tokens, true, null));
+            log.info("usage_limit userId={} limit=daily_tokens_reserved used={} reserved={} quota={}", userId, used, reserved, quota);
+            return Reservation.refused(QUOTA_LOW_MESSAGE);
+        }
+        return new Reservation(userId, id, tokens, true, null);
+    }
+
+    /** Ends a reservation (safe for refused, unlimited or already released ones). */
+    public void release(Reservation reservation) {
+        if (reservation == null || reservation.id() == null) return;
+        try {
+            reservations.remove(reservation.userId(), reservation.id());
+        } catch (RuntimeException unavailable) {
+            log.debug("usage_reservation_release_failed userId={} reason={}", reservation.userId(), unavailable.getMessage());
+        }
+    }
+
+    /** A reservation outlives the longest model call, so one left by a crash stops counting soon after. */
+    private Duration reservationTimeToLive() {
+        return Duration.ofMillis(Math.max(10_000, properties.getLlm().getCallBudgetMs()) + 60_000);
+    }
+
+    /** A model call's share of the daily quota; {@code granted} false carries the message to show. */
+    public record Reservation(Long userId, String id, long tokens, boolean granted, String refusal) {
+        public static final Reservation UNLIMITED = new Reservation(null, null, 0, true, null);
+
+        public static Reservation refused(String message) {
+            return new Reservation(null, null, 0, false, message);
+        }
+    }
+
+    /** Tokens the user has consumed since 00:00 UTC today: their runs, plus model calls outside any run total. */
     public long tokensUsedToday(Long userId) {
-        return runs.sumTokensByUserIdSince(userId, startOfToday());
+        return usedSince(userId, startOfToday());
+    }
+
+    private long usedSince(Long userId, Instant since) {
+        long inRuns = runs.sumTokensByUserIdSince(userId, since);
+        return calls == null ? inRuns : inRuns + calls.sumUncountedTokensByUserIdSince(userId, since);
     }
 
     /** Today's token use against the daily quota, and when the count resets (next 00:00 UTC). */
     public DailyUsage dailyUsage(Long userId) {
         Instant startOfDay = startOfToday();
-        return new DailyUsage(runs.sumTokensByUserIdSince(userId, startOfDay), dailyTokenQuota(),
+        return new DailyUsage(usedSince(userId, startOfDay), dailyTokenQuota(),
                 startOfDay.plus(1, ChronoUnit.DAYS));
     }
 

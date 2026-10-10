@@ -47,6 +47,28 @@ class OpenAiCompatibleLlmClientTest {
         assertEquals("{\"path\":\"a.txt\"}", result.toolCalls().getFirst().arguments());
     }
 
+    @Test
+    void sendsTheOutputCapOnlyWhenSet() throws Exception {
+        List<String> bodies = new java.util.concurrent.CopyOnWriteArrayList<>();
+        server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            respond(exchange, 2);
+        });
+        server.start();
+        AgentProperties props = new AgentProperties();
+        props.getLlm().setBaseUrl("http://localhost:" + server.getAddress().getPort());
+        props.getLlm().setApiKey("test");
+        OpenAiCompatibleLlmClient client = new OpenAiCompatibleLlmClient(props, new ObjectMapper());
+        LlmClient.LlmRequest request = new LlmClient.LlmRequest("test", List.of(LlmClient.LlmMessage.user("hi")), List.of(), 0.2);
+
+        client.chat(request.withMaxTokens(77));
+        client.chat(request);
+
+        assertEquals(true, bodies.get(0).contains("\"max_tokens\":77"), bodies.get(0));
+        assertEquals(false, bodies.get(1).contains("max_tokens"), bodies.get(1));
+    }
+
     private static void respond(HttpExchange exchange, int attempt) throws IOException {
         if (attempt == 1) {
             exchange.getResponseHeaders().add("Retry-After", "0");

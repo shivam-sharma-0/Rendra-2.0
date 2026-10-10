@@ -1,5 +1,6 @@
 package com.code.pal.agent.web;
 
+import com.code.pal.agent.AgentCancellations;
 import com.code.pal.agent.AgentEvents;
 import com.code.pal.agent.activity.AgentActivityMapper;
 import com.code.pal.agent.change.FileChangeRepository;
@@ -43,6 +44,7 @@ public class AgentRunController {
     private final ChangeSetService changeSets;
     private final SiteBuildService sites;
     private final AgentActivityMapper activities;
+    private final AgentCancellations cancellations;
 
     @GetMapping
     public List<AgentRunResponse> list(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId) {
@@ -98,7 +100,7 @@ public class AgentRunController {
         events.emit(run, AgentStepType.STATUS, "Workspace restored to the snapshot before this run.", null);
     }
 
-    /** Request cancellation of a queued/running agent turn. The worker stops at its next checkpoint. */
+    /** Request cancellation of a queued/running agent turn; it stops at once, without committing. */
     @PostMapping("/{runId}/cancel")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void cancel(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId, @PathVariable UUID runId) {
@@ -108,9 +110,10 @@ public class AgentRunController {
         if (status == RunStatus.DONE || status == RunStatus.FAILED || status == RunStatus.CANCELLED) {
             throw new AgentRunConflictException("This run has already finished");
         }
-        // The runner checks this flag before every step (and right after it starts), so a queued run is
-        // cancelled the moment it begins and a running one stops at its next iteration.
+        // The flag reaches the run wherever it executes (a queued run stops the moment it begins); a run in this
+        // process also stops at once, mid model call or sandbox command (other instances poll within ~250 ms).
         queue.requestCancel(runId);
+        cancellations.cancelLocal(runId);
     }
 
     private AgentRun requireRun(UUID projectId, UUID runId) {

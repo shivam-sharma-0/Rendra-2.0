@@ -1,6 +1,8 @@
 package com.code.pal.project.service.impl;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.llm.CallPurpose;
+import com.code.pal.agent.llm.LlmCallContext;
 import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.llm.LlmClient.LlmMessage;
 import com.code.pal.agent.llm.LlmClient.LlmRequest;
@@ -85,7 +87,10 @@ public class RequirementServiceImpl implements RequirementService {
             return questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty()
                     ? ProjectBrief.of(project, messages.openingAttachments(projectId)) : null;
         });
-        List<QuestionDraft> generated = needsQuestions == null ? List.of() : generate(needsQuestions);
+        List<QuestionDraft> generated;
+        try (LlmCallContext.Scope call = LlmCallContext.bind(new LlmCallContext(userId, projectId, null, CallPurpose.REQUIREMENTS, false))) {
+            generated = needsQuestions == null ? List.of() : generate(needsQuestions);
+        }
         // The attached images decide the look; asking about it anyway would contradict them.
         List<QuestionDraft> withoutLook = needsQuestions == null || needsQuestions.attachments().isEmpty() ? generated
                 : generated.stream().filter(draft -> !isAboutTheLook(draft)).toList();
@@ -122,7 +127,7 @@ public class RequirementServiceImpl implements RequirementService {
         if (recorded.view() != null) return recorded.view();
 
         Assessment assessment;
-        try {
+        try (LlmCallContext.Scope call = LlmCallContext.bind(new LlmCallContext(userId, projectId, null, CallPurpose.REQUIREMENTS, false))) {
             assessment = assess(recorded.project(), recorded.summary());
         } catch (RuntimeException error) {
             // The user can still review the complete answer set when the assessment provider is unavailable.
@@ -181,7 +186,8 @@ public class RequirementServiceImpl implements RequirementService {
                 """.formatted(project.initialPrompt(), summary);
         AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
         LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
-                List.of(LlmMessage.system("You are a strict product requirements reviewer."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET));
+                List.of(LlmMessage.system("You are a strict product requirements reviewer."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET)
+                .withMaxTokens(properties.getLlm().getMaxOutputTokens()));
         JsonNode root = objectMapper.readTree(stripJsonFence(result.content()));
         if (!root.isObject()) throw new IllegalArgumentException("Requirement assessment was not an object");
         return new Assessment(root.path("requirementsClear").asBoolean(false), parseQuestionDrafts(root.path("questions")));
@@ -308,7 +314,8 @@ public class RequirementServiceImpl implements RequirementService {
                     Do not ask questions already answered clearly by the user prompt. User prompt: %s
                     """.formatted(project.initialPrompt()) + attachmentNote(project.attachments());
             LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
-                    List.of(LlmMessage.system("You are a product requirements analyst."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET));
+                    List.of(LlmMessage.system("You are a product requirements analyst."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET)
+                    .withMaxTokens(properties.getLlm().getMaxOutputTokens()));
             List<QuestionDraft> parsed = parseQuestions(result.content());
             if (!parsed.isEmpty()) return parsed.stream().limit(8).toList();
         } catch (RuntimeException error) {

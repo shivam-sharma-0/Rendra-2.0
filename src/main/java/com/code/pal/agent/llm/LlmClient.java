@@ -17,18 +17,27 @@ public interface LlmClient {
     }
 
     /**
-     * @param budget wall-clock limit for the whole call, retries and streaming included; when it runs
-     *               out the call fails so the caller can fall back. {@code null} means only the
-     *               per-attempt request timeout applies.
-     */
-    /**
+     * @param budget     wall-clock limit for the whole call, retries and streaming included; when it runs
+     *                   out the call fails so the caller can fall back. {@code null} means only the
+     *                   per-attempt request timeout applies.
      * @param toolChoice OpenAI tool_choice: null for "auto"; "required" when the turn must call a tool
+     * @param maxTokens  cap on the generated tokens ({@code max_tokens}); null leaves the provider's default.
+     *                   It also bounds what a call can cost, which the daily quota reserves in advance.
      */
     record LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools,
-                      double temperature, Duration budget, String toolChoice) {
+                      double temperature, Duration budget, String toolChoice, Integer maxTokens) {
+        public LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools,
+                          double temperature, Duration budget, String toolChoice) {
+            this(provider, model, messages, tools, temperature, budget, toolChoice, null);
+        }
+
         public LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools,
                           double temperature, Duration budget) {
             this(provider, model, messages, tools, temperature, budget, null);
+        }
+
+        public LlmRequest withMaxTokens(Integer cap) {
+            return new LlmRequest(provider, model, messages, tools, temperature, budget, toolChoice, cap);
         }
 
         public LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools, double temperature) {

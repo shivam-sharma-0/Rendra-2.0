@@ -64,6 +64,28 @@ class VisionServiceTest {
         assertTrue(context.contains("untrusted data") && context.contains("<attachment path=\"uploads/a-design.png\">"), context);
     }
 
+    @Test
+    void aQuotaRefusalOrAStopDoesNotMarkTheModelUnavailable() throws Exception {
+        Files.createDirectories(project.path("uploads"));
+        Files.write(project.path("uploads/a.png"), noisyPng(200, 120));
+        AgentProperties properties = new AgentProperties();
+        properties.getModels().setVision(List.of("nvidia:only-vision"));
+        AgentProperties.ModelSelection only = properties.visionModels().getFirst();
+
+        VisionService refused = new VisionService((request, onDelta) -> {
+            throw new com.code.pal.agent.llm.LlmQuotaExceededException("Not enough of today's AI quota is left for this request.");
+        }, properties, project.files);
+        VisionService.Brief brief = refused.describe(project.projectId, List.of("uploads/a.png"), "make it").getFirst();
+        assertNull(brief.brief());
+        assertTrue(properties.available(only), "quota is not the model's fault");
+
+        VisionService stopped = new VisionService((request, onDelta) -> { throw new com.code.pal.agent.llm.LlmCancelledException(); },
+                properties, project.files);
+        assertThrows(com.code.pal.agent.llm.LlmCancelledException.class,
+                () -> stopped.describe(project.projectId, List.of("uploads/a.png"), "make it"));
+        assertTrue(properties.available(only), "a stopped run is not the model's fault");
+    }
+
     private LlmClient model() {
         return (request, onDelta) -> {
             modelsCalled.add(request.model());

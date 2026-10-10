@@ -20,6 +20,10 @@ import com.code.pal.agent.llm.LlmClient.LlmRequest;
 import com.code.pal.agent.llm.LlmClient.LlmResult;
 import com.code.pal.agent.llm.LlmClient.ToolCall;
 import com.code.pal.agent.llm.LlmClient.ToolSpec;
+import com.code.pal.agent.llm.CallPurpose;
+import com.code.pal.agent.llm.LlmCallContext;
+import com.code.pal.agent.llm.LlmCancelledException;
+import com.code.pal.agent.llm.TokenEstimate;
 import com.code.pal.agent.llm.LlmException;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
@@ -28,6 +32,7 @@ import com.code.pal.agent.runtime.AgentRuntime;
 import com.code.pal.agent.runtime.AgentRuntimeContext;
 import com.code.pal.agent.runtime.AgentRuntimeStatus;
 import com.code.pal.agent.runtime.AgentPhase;
+import com.code.pal.agent.runtime.RunCancellation;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.tool.AgentProjectMetadata;
 import com.code.pal.agent.tool.AgentTool;
@@ -117,6 +122,8 @@ public class AgentRunner implements AgentRuntime {
     private final AgentUsagePolicy usage;
     /** Draft previews of staged changes while a BUILD run works; null in focused tests. */
     private final DraftPreviewService drafts;
+    /** Immediate Stop signals for this process's runs; null in focused tests (the queue's flag is checked instead). */
+    private final AgentCancellations cancellations;
 
     @Autowired
     public AgentRunner(LlmClient llm, IntentClassifier intentClassifier, ToolRegistry tools,
@@ -127,8 +134,10 @@ public class AgentRunner implements AgentRuntime {
             ObjectMapper objectMapper, ChangeSetService changeSets,
             ProjectValidationService validation, NotificationService notifications,
             ProjectArtifactService artifacts, GeneratedDatabaseService databases,
-            SiteBuildService sites, VisionService vision, AgentUsagePolicy usage, DraftPreviewService drafts) {
+            SiteBuildService sites, VisionService vision, AgentUsagePolicy usage, DraftPreviewService drafts,
+            AgentCancellations cancellations) {
         this.drafts = drafts;
+        this.cancellations = cancellations;
         this.sites = sites;
         this.vision = vision;
         this.usage = usage;
@@ -167,7 +176,7 @@ public class AgentRunner implements AgentRuntime {
             ProjectValidationService validation, NotificationService notifications) {
         this(llm, intentClassifier, tools, toolExecutor, events, props, projectContexts, runRepository, projects,
                 messageRepository, realtime, files, heartbeat, queue, objectMapper, changeSets, validation,
-                notifications, null, null, null, null, null, null);
+                notifications, null, null, null, null, null, null, null);
     }
 
     /**
@@ -181,6 +190,12 @@ public class AgentRunner implements AgentRuntime {
         AgentRuntimeContext runtime = null;
         ProjectContext projectContext = null;
         AgentContext ctx = null;
+        // The run's Stop signal, bound to this thread so model calls and sandbox commands made for the run
+        // stop the moment it is cancelled (not only between iterations).
+        RunCancellation cancellation = cancellations == null ? new RunCancellation(run.getId()) : cancellations.register(run.getId());
+        RunCancellation.Registration boundCancellation = RunCancellation.bind(cancellation);
+        // Who the run's model calls are for, for the call ledger; the loop's own calls are counted in the run's totals.
+        LlmCallContext.Scope callContext = LlmCallContext.bind(new LlmCallContext(run.getUserId(), run.getProjectId(), run.getId(), CallPurpose.AGENT, true));
         try {
             long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(props.getRunTimeoutMs());
             run.setHeartbeatAt(Instant.now());
@@ -217,6 +232,7 @@ public class AgentRunner implements AgentRuntime {
             List<AgentTool> available = toolsForRun(run.getMode());
             List<ToolSpec> specs = available.stream()
                     .map(t -> new ToolSpec(t.name(), t.description(), t.parametersSchema())).toList();
+            int specChars = specs.toString().length();
 
             List<LlmMessage> convo = new ArrayList<>();
             convo.add(LlmMessage.system(systemPrompt(run.getMode())));
@@ -268,34 +284,46 @@ public class AgentRunner implements AgentRuntime {
                 events.emit(run, AgentStepType.STATUS, "Model called", Map.of(
                         "iteration", runtime.iteration(), "modelCall", runtime.modelCallCount()));
                 LlmResult res;
+                // The call's worst case is set aside first, so this and the user's other running calls cannot
+                // jointly cross the daily quota; it is released once the real usage is saved.
+                AgentUsagePolicy.Reservation reservation = reserveModelCall(run, runtime.messages(), specChars,
+                        props.getLlm().getMaxOutputTokens());
                 try {
-                    // A build's reply is its final summary: what the model says between tool calls is
-                    // narration for the timeline, not part of the answer.
-                    // A build cannot finish before it has a plan and has changed files, so until then the
-                    // model must call a tool (weak models otherwise answer in prose and stop).
-                    boolean mustAct = run.getMode() == ProjectType.BUILD
-                            && (!ctx.plan().exists() || changeSets.view(ctx).touchedPaths().isEmpty());
-                    res = llm.chatStreaming(new LlmRequest(
-                            selection.provider(), selection.model(), runtime.messages(), specs,
-                            props.getLlm().getTemperature(), callBudget(deadlineNanos), mustAct ? "required" : null),
-                            run.getMode() == ProjectType.BUILD ? delta -> { } : stream::append);
-                } catch (LlmException providerFailure) {
-                    // Keep the conversation intact when a provider rejects a request before it
-                    // publishes output. The next round-robin model can support a different tool
-                    // schema or have independent rate limits; the model-call cap still bounds cost.
-                    if (isPartialOutputFailure(providerFailure)) throw providerFailure;
-                    props.markModelUnavailable(selection);
-                    log.warn(
-                            "llm_provider_unavailable runId={} provider={} model={} reason={}; trying next configured model",
-                            run.getId(), selection.provider(), selection.model(), providerFailure.getMessage());
-                    events.emit(run, AgentStepType.STATUS, "LLM provider unavailable", Map.of(
-                            "provider", selection.provider(), "model", selection.model(),
-                            "retryable", providerFailure instanceof com.code.pal.agent.llm.RetryableLlmException));
-                    continue;
+                    try {
+                        // A build's reply is its final summary: what the model says between tool calls is
+                        // narration for the timeline, not part of the answer.
+                        // A build cannot finish before it has a plan and has changed files, so until then the
+                        // model must call a tool (weak models otherwise answer in prose and stop).
+                        boolean mustAct = run.getMode() == ProjectType.BUILD
+                                && (!ctx.plan().exists() || changeSets.view(ctx).touchedPaths().isEmpty());
+                        res = llm.chatStreaming(new LlmRequest(
+                                selection.provider(), selection.model(), runtime.messages(), specs,
+                                props.getLlm().getTemperature(), callBudget(deadlineNanos), mustAct ? "required" : null,
+                                props.getLlm().getMaxOutputTokens()),
+                                run.getMode() == ProjectType.BUILD ? delta -> { } : stream::append);
+                    } catch (LlmException providerFailure) {
+                        // A stopped run is not a provider failure: no fallback, no cooldown.
+                        if (providerFailure instanceof LlmCancelledException) throw new AgentCancelledException();
+                        requireNotCancelled(run);
+                        // Keep the conversation intact when a provider rejects a request before it
+                        // publishes output. The next round-robin model can support a different tool
+                        // schema or have independent rate limits; the model-call cap still bounds cost.
+                        if (isPartialOutputFailure(providerFailure)) throw providerFailure;
+                        markUnavailable(selection, providerFailure);
+                        log.warn(
+                                "llm_provider_unavailable runId={} provider={} model={} reason={}; trying next configured model",
+                                run.getId(), selection.provider(), selection.model(), providerFailure.getMessage());
+                        events.emit(run, AgentStepType.STATUS, "LLM provider unavailable", Map.of(
+                                "provider", selection.provider(), "model", selection.model(),
+                                "retryable", providerFailure instanceof com.code.pal.agent.llm.RetryableLlmException));
+                        continue;
+                    }
+                    props.markModelAvailable(selection);
+                    stream.flush();
+                    accountTokens(run, res);
+                } finally {
+                    releaseReservation(reservation);
                 }
-                props.markModelAvailable(selection);
-                stream.flush();
-                accountTokens(run, res);
 
                 boolean hasReasoning = res.reasoning() != null && !res.reasoning().isBlank();
                 // In a build every message is kept for the timeline: with tools it is narration, without
@@ -482,6 +510,9 @@ public class AgentRunner implements AgentRuntime {
             emitContextUsage(run, projectContext, runtime);
             return result(run, runtime, "Something went wrong while running the agent.", run.getError());
         } finally {
+            callContext.close();
+            boundCancellation.close();
+            if (cancellations != null) cancellations.unregister(run.getId());
             if (drafts != null) drafts.finish(run.getId());
             changeSets.discard(run.getId());
             validation.clear(run.getId());
@@ -529,30 +560,41 @@ public class AgentRunner implements AgentRuntime {
 
         LlmResult res = null;
         LlmException lastFailure = null;
-        // Small talk gets the same fallback as the main loop: a provider that is down or out of
-        // budget hands over to the next configured chat model instead of failing the reply.
-        for (int attempt = 1; attempt <= CONVERSATIONAL_MODEL_ATTEMPTS && res == null; attempt++) {
-            requireBeforeDeadline(deadlineNanos);
-            requireNotCancelled(run);
-            requireWithinDailyQuota(run, tokensBeforeRun);
-            AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
-            log.info("model_called runId={} conversational=true attempt={} provider={} model={}", run.getId(), attempt,
-                    selection.provider(), selection.model());
-            try {
-                res = llm.chatStreaming(new LlmRequest(selection.provider(), selection.model(), convo, List.of(),
-                        props.getLlm().getTemperature(), callBudget(deadlineNanos)), stream::append);
-                props.markModelAvailable(selection);
-            } catch (LlmException providerFailure) {
-                if (isPartialOutputFailure(providerFailure)) throw providerFailure;
-                props.markModelUnavailable(selection);
-                lastFailure = providerFailure;
-                log.warn("llm_provider_unavailable runId={} conversational=true provider={} model={} reason={}; trying next configured model",
-                        run.getId(), selection.provider(), selection.model(), providerFailure.getMessage());
+        AgentUsagePolicy.Reservation reservation = null;
+        try (LlmCallContext.Scope smallTalk = LlmCallContext.purpose(CallPurpose.SMALL_TALK, true)) {
+            // Small talk gets the same fallback as the main loop: a provider that is down or out of
+            // budget hands over to the next configured chat model instead of failing the reply.
+            for (int attempt = 1; attempt <= CONVERSATIONAL_MODEL_ATTEMPTS && res == null; attempt++) {
+                requireBeforeDeadline(deadlineNanos);
+                requireNotCancelled(run);
+                requireWithinDailyQuota(run, tokensBeforeRun);
+                AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
+                log.info("model_called runId={} conversational=true attempt={} provider={} model={}", run.getId(), attempt,
+                        selection.provider(), selection.model());
+                reservation = reserveModelCall(run, convo, 0, props.getLlm().getSmallTalkMaxOutputTokens());
+                try {
+                    res = llm.chatStreaming(new LlmRequest(selection.provider(), selection.model(), convo, List.of(),
+                            props.getLlm().getTemperature(), callBudget(deadlineNanos))
+                            .withMaxTokens(props.getLlm().getSmallTalkMaxOutputTokens()), stream::append);
+                    props.markModelAvailable(selection);
+                } catch (LlmException providerFailure) {
+                    releaseReservation(reservation);
+                    reservation = null;
+                    if (providerFailure instanceof LlmCancelledException) throw new AgentCancelledException();
+                    requireNotCancelled(run);
+                    if (isPartialOutputFailure(providerFailure)) throw providerFailure;
+                    markUnavailable(selection, providerFailure);
+                    lastFailure = providerFailure;
+                    log.warn("llm_provider_unavailable runId={} conversational=true provider={} model={} reason={}; trying next configured model",
+                            run.getId(), selection.provider(), selection.model(), providerFailure.getMessage());
+                }
             }
+            if (res == null) throw lastFailure;
+            stream.flush();
+            accountTokens(run, res);
+        } finally {
+            releaseReservation(reservation);
         }
-        if (res == null) throw lastFailure;
-        stream.flush();
-        accountTokens(run, res);
         if (res.reasoning() != null && !res.reasoning().isBlank()) {
             events.emit(run, AgentStepType.THINKING, "Model reasoning", Map.of("reasoning", res.reasoning()));
         }
@@ -565,8 +607,9 @@ public class AgentRunner implements AgentRuntime {
         return new AgentRunResult(run.getId(), run.getStatus(), stream.content(), null, 1, 1, 0);
     }
 
+    /** Stops the run at a checkpoint when Stop was requested (local signal first, the queue's flag as a fallback). */
     private void requireNotCancelled(AgentRun run) {
-        if (queue.isCancelRequested(run.getId()))
+        if (RunCancellation.current().isCancelled() || queue.isCancelRequested(run.getId()))
             throw new AgentCancelledException();
     }
 
@@ -609,6 +652,7 @@ public class AgentRunner implements AgentRuntime {
             results = new ArrayList<>(prepared.size());
             for (PreparedToolCall item : prepared) {
                 requireBeforeDeadline(deadlineNanos);
+                requireNotCancelled(run);
                 results.add(toolExecutor.execute(item.call.name(), allowedNames, item.args, ctx));
             }
         }
@@ -683,6 +727,16 @@ public class AgentRunner implements AgentRuntime {
         return java.time.Duration.ofNanos(Math.min(remaining, budget));
     }
 
+    /** Routes around a failed model: briefly for a passing failure, for long when the account cannot use it. */
+    private void markUnavailable(AgentProperties.ModelSelection selection, LlmException failure) {
+        if (failure instanceof com.code.pal.agent.llm.LlmHttpException http && http.modelUnavailable()) {
+            props.markModelUnavailable(selection, props.getLlm().getModelUnavailableCooldownMs());
+            log.warn("model_unavailable_for_account provider={} model={} status={}", selection.provider(), selection.model(), http.status());
+        } else {
+            props.markModelUnavailable(selection);
+        }
+    }
+
     /** Text already reached the user, so retrying on another model would duplicate or contradict it. */
     private static boolean isPartialOutputFailure(LlmException failure) {
         return failure.getMessage() != null && failure.getMessage().contains("after partial output");
@@ -704,6 +758,25 @@ public class AgentRunner implements AgentRuntime {
         private AgentQuotaExceededException(String message) {
             super(message);
         }
+    }
+
+    /**
+     * Reserves a model call's worst case (estimated input + output cap) in the user's daily quota; null
+     * when no quota policy applies. Refused reservations stop the run with the quota message.
+     */
+    private AgentUsagePolicy.Reservation reserveModelCall(AgentRun run, List<LlmMessage> messages, int specChars, int maxOutputTokens) {
+        if (usage == null) return null;
+        AgentUsagePolicy.Reservation reservation = usage.reserve(run.getUserId(), estimateInputTokens(messages, specChars) + maxOutputTokens);
+        if (reservation != null && !reservation.granted()) throw new AgentQuotaExceededException(reservation.refusal());
+        return reservation;
+    }
+
+    private void releaseReservation(AgentUsagePolicy.Reservation reservation) {
+        if (usage != null && reservation != null) usage.release(reservation);
+    }
+
+    static long estimateInputTokens(List<LlmMessage> messages, int specChars) {
+        return TokenEstimate.input(messages, specChars);
     }
 
     private void requireWithinDailyQuota(AgentRun run, long tokensBeforeRun) {

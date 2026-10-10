@@ -169,12 +169,111 @@ class AgentRunnerLlmFallbackTest {
         assertEquals(0, model.models.size());
     }
 
+    /** Like the real client: waits on the run's Stop signal, then fails the call as cancelled. */
+    private static String waitForStop(LlmClient.LlmRequest request) {
+        com.code.pal.agent.runtime.RunCancellation cancellation = com.code.pal.agent.runtime.RunCancellation.current();
+        long until = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        while (!cancellation.isCancelled() && System.nanoTime() < until) {
+            try { Thread.sleep(20); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
+        throw new com.code.pal.agent.llm.LlmCancelledException();
+    }
+
+    private static long stopAfter(Fixture fixture, long delayMs) {
+        java.util.concurrent.ScheduledExecutorService timer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        timer.schedule(() -> fixture.cancellations.cancelLocal(fixture.run.getId()), delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        timer.shutdown();
+        return System.nanoTime();
+    }
+
+    @Test
+    void aStopDuringATaskModelCallCancelsAtOnceWithoutFallback() throws Exception {
+        ScriptedModel model = new ScriptedModel(AgentRunnerLlmFallbackTest::waitForStop, request -> "never reached");
+        Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.");
+
+        long start = stopAfter(fixture, 200);
+        AgentRunResult result = fixture.runner.run(fixture.run);
+        long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+        assertEquals(RunStatus.CANCELLED, result.status());
+        assertEquals(1, model.models.size(), "a stopped call must not fall back to another model");
+        assertTrue(elapsedMs < 2_000, "took " + elapsedMs + " ms");
+        fixture.cancellations.shutdown();
+    }
+
+    @Test
+    void aStopDuringASmallTalkReplyCancelsWithoutFallback() throws Exception {
+        ScriptedModel model = new ScriptedModel(AgentRunnerLlmFallbackTest::waitForStop, request -> "never reached");
+        Fixture fixture = new Fixture(model, AgentIntent.CONVERSATIONAL, "hello");
+
+        stopAfter(fixture, 200);
+        AgentRunResult result = fixture.runner.run(fixture.run);
+
+        assertEquals(RunStatus.CANCELLED, result.status());
+        assertEquals(1, model.models.size());
+        fixture.cancellations.shutdown();
+    }
+
+    @Test
+    void aRefusedReservationStopsTheRunBeforeAnyModelCall() throws Exception {
+        ScriptedModel model = new ScriptedModel(request -> "never reached");
+        AgentUsagePolicy usage = mock(AgentUsagePolicy.class);
+        when(usage.dailyTokenQuota()).thenReturn(1_000_000L);
+        when(usage.reserve(eq(7L), org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn(AgentUsagePolicy.Reservation.refused(AgentUsagePolicy.QUOTA_LOW_MESSAGE));
+        Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.", List.of("chat-a"), usage);
+
+        AgentRunResult result = fixture.runner.run(fixture.run);
+
+        assertEquals(RunStatus.FAILED, result.status());
+        assertEquals(AgentUsagePolicy.QUOTA_LOW_MESSAGE, result.response());
+        assertEquals(0, model.models.size());
+        fixture.cancellations.shutdown();
+    }
+
+    @Test
+    void everyModelCallIsCappedAndItsReservationReleased() throws Exception {
+        ScriptedModel model = new ScriptedModel(request -> ScriptedModel.LIST_FILES, request -> "The project has no files yet.");
+        AgentUsagePolicy usage = mock(AgentUsagePolicy.class);
+        when(usage.dailyTokenQuota()).thenReturn(1_000_000L);
+        AgentUsagePolicy.Reservation granted = new AgentUsagePolicy.Reservation(7L, "r-1", 9_000, true, null);
+        when(usage.reserve(eq(7L), org.mockito.ArgumentMatchers.anyLong())).thenReturn(granted);
+        Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.", List.of("chat-a"), usage);
+
+        AgentRunResult result = fixture.runner.run(fixture.run);
+
+        assertEquals(RunStatus.DONE, result.status());
+        assertEquals(List.of(8_192, 8_192), model.maxTokens);
+        org.mockito.Mockito.verify(usage, org.mockito.Mockito.times(2)).reserve(eq(7L), org.mockito.ArgumentMatchers.longThat(t -> t > 8_192));
+        org.mockito.Mockito.verify(usage, org.mockito.Mockito.times(2)).release(granted);
+        fixture.cancellations.shutdown();
+    }
+
+    @Test
+    void smallTalkUsesTheSmallOutputCap() throws Exception {
+        ScriptedModel model = new ScriptedModel(request -> "Hi!");
+        Fixture fixture = new Fixture(model, AgentIntent.CONVERSATIONAL, "hello");
+        fixture.runner.run(fixture.run);
+        assertEquals(List.of(1_024), model.maxTokens);
+        fixture.cancellations.shutdown();
+    }
+
+    @Test
+    void inputEstimateCountsMessagesToolCallsAndSpecs() {
+        List<LlmClient.LlmMessage> messages = List.of(
+                LlmClient.LlmMessage.system("x".repeat(400)),
+                new LlmClient.LlmMessage("assistant", null, List.of(new LlmClient.ToolCall("c", "readFile", "{\"path\":\"a\"}")), null));
+        long estimate = AgentRunner.estimateInputTokens(messages, 400);
+        assertTrue(estimate >= 200 && estimate <= 220, "estimate " + estimate);
+    }
+
     /** Answers each call with the next scripted step: throw, request a listFiles call, or return final text. */
     private static final class ScriptedModel implements LlmClient {
         static final String LIST_FILES = "<call listFiles>";
         private final List<java.util.function.Function<LlmRequest, String>> steps;
         final List<String> models = new CopyOnWriteArrayList<>();
         final List<Duration> budgets = new CopyOnWriteArrayList<>();
+        final List<Integer> maxTokens = new CopyOnWriteArrayList<>();
 
         @SafeVarargs
         ScriptedModel(java.util.function.Function<LlmRequest, String>... steps) { this.steps = List.of(steps); }
@@ -184,6 +283,7 @@ class AgentRunnerLlmFallbackTest {
             int index = models.size();
             models.add(request.model());
             budgets.add(request.budget());
+            maxTokens.add(request.maxTokens());
             String answer = steps.get(index).apply(request);
             if (LIST_FILES.equals(answer)) {
                 return new LlmResult("", null, List.of(new ToolCall("list-1", "listFiles", "{}")), new Usage(1, 1), "tool_calls");
@@ -196,6 +296,7 @@ class AgentRunnerLlmFallbackTest {
     private static final class Fixture {
         final AgentRun run;
         final AgentRunner runner;
+        final AgentCancellations cancellations;
 
         Fixture(LlmClient model, AgentIntent intent, String prompt) throws Exception {
             this(model, intent, prompt, List.of("chat-a", "chat-b", "chat-c"));
@@ -236,15 +337,17 @@ class AgentRunnerLlmFallbackTest {
             IntentClassifier classifier = mock(IntentClassifier.class);
             when(classifier.classify(any())).thenReturn(intent);
 
+            AgentJobQueue queue = mock(AgentJobQueue.class);
+            cancellations = new AgentCancellations(queue);
             AgentToolExecutor tools = mock(AgentToolExecutor.class);
             when(tools.execute(eq("listFiles"), anyCollection(), anyMap(), any()))
                     .thenReturn(ToolExecutionResult.success(List.of()));
             runner = new AgentRunner(model, classifier, new ToolRegistry(List.of(new ListFilesTool())),
                     tools, mock(AgentEvents.class), properties,
                     new ProjectContextService(properties, new ObjectMapper()), runs, projects, messages,
-                    mock(RealtimeService.class), workspace.files, heartbeat, mock(AgentJobQueue.class), new ObjectMapper(),
+                    mock(RealtimeService.class), workspace.files, heartbeat, queue, new ObjectMapper(),
                     mock(ChangeSetService.class), mock(ProjectValidationService.class), mock(NotificationService.class),
-                    null, null, null, null, usage, null);
+                    null, null, null, null, usage, null, cancellations);
         }
     }
 }
