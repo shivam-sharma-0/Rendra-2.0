@@ -1,6 +1,7 @@
 package com.code.pal.agent.web;
 
 import com.code.pal.agent.AgentEvents;
+import com.code.pal.agent.activity.AgentActivityMapper;
 import com.code.pal.agent.change.FileChangeRepository;
 import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.domain.AgentRun;
@@ -41,6 +42,7 @@ public class AgentRunController {
     private final FileChangeRepository fileChanges;
     private final ChangeSetService changeSets;
     private final SiteBuildService sites;
+    private final AgentActivityMapper activities;
 
     @GetMapping
     public List<AgentRunResponse> list(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId) {
@@ -48,13 +50,14 @@ public class AgentRunController {
         return runs.findTop100ByProjectIdOrderByCreatedAtDesc(projectId).stream().map(AgentRunResponse::from).toList();
     }
 
+    /** The run's user-facing steps after {@code afterSeq} (internal ones — model calls, counters — are left out). */
     @GetMapping("/{runId}/steps")
     public List<AgentStepResponse> replay(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId,
                                           @PathVariable UUID runId, @RequestParam(defaultValue = "-1") int afterSeq) {
         projects.requireAccessible(principal.userId(), projectId);
         requireRun(projectId, runId);
         return steps.findByRunIdAndSeqGreaterThanOrderBySeqAsc(runId, Math.max(-1, afterSeq)).stream()
-                .map(AgentStepResponse::from).toList();
+                .flatMap(step -> AgentStepResponse.visible(step, activities).stream()).toList();
     }
 
     /** Structured mutation ledger for auditing and exact UI change summaries; never returns file contents. */

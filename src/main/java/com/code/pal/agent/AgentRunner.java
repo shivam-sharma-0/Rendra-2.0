@@ -619,7 +619,7 @@ public class AgentRunner implements AgentRuntime {
                 recordPhase(runtime, item.call.name());
             log.info("tool_{} runId={} tool={}", result.success() ? "completed" : "failed", run.getId(),
                     item.call.name());
-            events.emit(run, AgentStepType.TOOL_RESULT, item.call.name(), auditToolResult(result));
+            events.emit(run, AgentStepType.TOOL_RESULT, item.call.name(), auditToolResult(result, item.args));
         }
         boolean wrote = false;
         for (int index = 0; index < prepared.size(); index++) {
@@ -770,11 +770,46 @@ public class AgentRunner implements AgentRuntime {
     private record PreparedToolCall(ToolCall call, Map<String, Object> args, AgentTool tool) {
     }
 
+    private static final int AUDIT_MAX_PATHS = 50;
+    private static final int AUDIT_MAX_TEXT = 300;
+
+    /** Argument names, plus the file paths a tool works on (never file contents) for the activity timeline. */
     private static Map<String, Object> auditToolArgs(Map<String, Object> args) {
-        return Map.of("argumentNames", args.keySet().stream().sorted().toList());
+        Map<String, Object> audit = new java.util.LinkedHashMap<>();
+        audit.put("argumentNames", args.keySet().stream().sorted().toList());
+        audit.putAll(auditPaths(args));
+        return audit;
     }
 
-    private static Map<String, Object> auditToolResult(ToolExecutionResult result) {
+    /**
+     * The safe, user-facing part of a tool's arguments: {@code path}, {@code sourcePath}, {@code targetPath},
+     * the paths of {@code files} (createFiles) and the step titles of {@code setPlan}. Strings only, clipped.
+     */
+    static Map<String, Object> auditPaths(Map<String, Object> args) {
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        for (String key : List.of("path", "sourcePath", "targetPath")) {
+            if (args.get(key) instanceof String value && !value.isBlank()) out.put(key, clipAudit(value));
+        }
+        if (args.get("files") instanceof List<?> files) {
+            List<String> paths = files.stream()
+                    .filter(Map.class::isInstance).map(file -> ((Map<?, ?>) file).get("path"))
+                    .filter(String.class::isInstance).map(path -> clipAudit((String) path))
+                    .limit(AUDIT_MAX_PATHS).toList();
+            if (!paths.isEmpty()) out.put("paths", paths);
+        }
+        if (args.get("steps") instanceof List<?> steps) {
+            out.put("steps", steps.stream().filter(java.util.Objects::nonNull).map(step -> clipAudit(step.toString()))
+                    .limit(AUDIT_MAX_PATHS).toList());
+        }
+        return out;
+    }
+
+    private static String clipAudit(String value) {
+        String trimmed = value.strip();
+        return trimmed.length() <= AUDIT_MAX_TEXT ? trimmed : trimmed.substring(0, AUDIT_MAX_TEXT) + "...";
+    }
+
+    private static Map<String, Object> auditToolResult(ToolExecutionResult result, Map<String, Object> args) {
         if (result.success() && result.output() instanceof ValidationReport report) {
             Map<String, Object> audit = new java.util.LinkedHashMap<>();
             audit.put("success", true);
@@ -788,9 +823,11 @@ public class AgentRunner implements AgentRuntime {
             audit.put("preExistingDiagnostics", report.preExistingDiagnostics());
             return Map.copyOf(audit);
         }
-        return result.success()
-                ? Map.of("success", true)
-                : Map.of("success", false, "errorCode", result.error().code());
+        Map<String, Object> audit = new java.util.LinkedHashMap<>();
+        audit.put("success", result.success());
+        if (!result.success()) audit.put("errorCode", result.error().code());
+        audit.putAll(auditPaths(args));
+        return audit;
     }
 
     private Map<String, Object> parseArgs(String json) {

@@ -29,7 +29,7 @@ export function ChatMessage({ message, run, steps, onOpenDetails, onOpenPreview,
   return (
     <article className="msg msg--agent" data-message-id={message.id} data-role="ASSISTANT">
       {pending
-        ? (building ? <BuildProgress run={run!} steps={steps} /> : <ThinkingLine since={run?.createdAt ?? message.createdAt} />)
+        ? (building ? <BuildProgress run={run!} steps={steps} /> : <ThinkingLine since={run?.createdAt ?? message.createdAt} queued={run?.status === 'QUEUED'} />)
         : (
           <>
             {settled && run && (

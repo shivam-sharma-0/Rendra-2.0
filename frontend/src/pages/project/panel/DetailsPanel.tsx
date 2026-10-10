@@ -2,7 +2,7 @@ import { type AgentRun, type AgentStep, type Project, type RequirementSession } 
 import { AppIcon } from '../../../components/icons'
 import { EmptyState } from '../../../components/ui/States'
 import { cx } from '../../../lib/cx'
-import { BuildStep } from '../chat/RunProgress'
+import { RunTimeline } from '../chat/RunProgress'
 import { runStatus, runWhen } from '../runUtils'
 
 const STAGES = [
@@ -69,7 +69,7 @@ export function DetailsPanel({ run, steps, stage, requirements }: { run: AgentRu
       <section className="pv-well pv-steps">
         <h4>Steps</h4>
         {steps.length
-          ? <div className="run-steps">{steps.map((step, i) => <BuildStep key={step.seq} step={step} previousCreatedAt={steps[i - 1]?.createdAt ?? run.createdAt} />)}</div>
+          ? <div className="run-steps"><RunTimeline steps={steps} startedAt={run.createdAt} /></div>
           : <p className="pv-note">No steps recorded for this run.</p>}
       </section>
     </div>

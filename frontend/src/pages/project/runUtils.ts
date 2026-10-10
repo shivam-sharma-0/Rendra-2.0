@@ -1,4 +1,5 @@
 import { type AgentRun, type AgentStep, type Message, type Project } from '../../api/projects'
+import { FILE_CHANGE_KINDS } from './activity'
 
 export function isActive(run: AgentRun) {
   return run.status === 'QUEUED' || run.status === 'RUNNING' || run.status === 'AWAITING_INPUT'
@@ -22,11 +23,13 @@ export function formatMessageTime(iso: string): string {
   return `${day} at ${time}`
 }
 
-const BUILD_TOOL_NAMES = new Set(['createFile', 'patchFile', 'deleteFile', 'renameFile'])
+const BUILD_TOOL_NAMES = new Set(['createFile', 'createFiles', 'patchFile', 'deleteFile', 'renameFile', 'copyFile'])
 
 /** True once the run has actually started writing files, not merely exploring/reading them. */
 export function hasBuildActivity(steps: AgentStep[]): boolean {
-  return steps.some((s) => s.type === 'TOOL_CALL' && !!s.content && BUILD_TOOL_NAMES.has(s.content))
+  return steps.some((s) => s.activity
+    ? FILE_CHANGE_KINDS.has(s.activity.kind)
+    : (s.type === 'TOOL_CALL' || s.type === 'TOOL_RESULT') && !!s.content && BUILD_TOOL_NAMES.has(s.content))
 }
 
 export function formatDuration(run: AgentRun): string {

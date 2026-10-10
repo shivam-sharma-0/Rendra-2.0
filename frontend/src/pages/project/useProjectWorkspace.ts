@@ -110,8 +110,9 @@ export function useProjectWorkspace(id: string) {
       seq: event.seq,
       type: type as AgentStep['type'],
       content: event.content ?? null,
-      data: event.data === undefined ? null : JSON.stringify(event.data),
+      data: event.data === undefined || event.data === null ? null : JSON.stringify(event.data),
       createdAt: new Date().toISOString(),
+      activity: event.activity ?? null,
     }
     mergeSteps(event.runId, [step])
   }, [mergeSteps])

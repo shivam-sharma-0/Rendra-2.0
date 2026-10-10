@@ -30,7 +30,12 @@ export type AgentRun = {
   promptTokens: number; completionTokens: number; rollbackAvailable: boolean; conversational: boolean
   createdAt: string; updatedAt: string; respondingAt: string | null
 }
-export type AgentStep = { seq: number; type: AgentStepType; content: string | null; data: string | null; createdAt: string }
+export type ActivityKind = 'THINKING' | 'READ' | 'CREATE' | 'EDIT' | 'DELETE' | 'MOVE' | 'PLAN' | 'CHECK' | 'REVIEW'
+  | 'ATTACHMENTS' | 'SAVED' | 'PREVIEW' | 'STATUS' | 'STOPPED' | 'FAILED' | 'ASK_USER' | 'MESSAGE'
+/** What a step means to the user (from the backend's AgentActivityMapper). `ok`: outcome, or null while running / when none. */
+export type AgentActivity = { kind: ActivityKind; title: string; paths: string[]; ok: boolean | null; detail: string | null; items: string[] }
+/** A user-facing timeline step; internal steps (model calls, counters) are not sent. `activity` is absent from older servers. */
+export type AgentStep = { seq: number; type: AgentStepType; content: string | null; data: string | null; createdAt: string; activity?: AgentActivity | null }
 export type StagedFile = { path: string; content: string | null; deleted: boolean }
 export type FileNode = { name: string; path: string; dir: boolean; size: number; children: FileNode[] | null }
 export type FileContent = { path: string; content: string; truncated: boolean; binary: boolean }
