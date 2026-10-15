@@ -86,7 +86,11 @@ public final class ContractScaffold {
             String directory = app.substring(0, app.lastIndexOf('/') + 1);
             out.put(app, "import " + json(relative(directory, root + "theme.css", true)) + "\nimport { routes } from "
                     + json(relative(directory, root + "routes.ts", true))
-                    + "\nexport default function App() {\nconst route = routes.find(route => route.path === window.location.pathname) ?? routes.find(route => route.path === '/') ?? routes[0]\nconst Component = route?.component\nreturn Component ? <Component /> : null\n}\n");
+                    + "\nexport default function App() {\n"
+                    + "const route = routes.find(route => route.path === window.location.pathname)\n"
+                    + "const Component = route?.component\n"
+                    + "return Component ? <Component /> : <main><h1>Page not found</h1>"
+                    + "<p>The page you requested does not exist.</p><a href=\"/\">Go to the homepage</a></main>\n}\n");
         }
         if (existing.apply(app) == null && !out.containsKey(app))
             out.put(app, "export default function PendingApp() { return null }\n");
@@ -138,7 +142,7 @@ public final class ContractScaffold {
     }
 
     public static String revision() {
-        return ContractStore.hash("contract-scaffold-2026-10-16.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision());
+        return ContractStore.hash("contract-scaffold-2026-10-16.2/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision());
     }
 
     private String type(BuildContract.DataType t) {

@@ -2,6 +2,7 @@ package com.code.pal.agent.context;
 
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.preview.BuildVariables;
+import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.ProjectPaths;
 import com.code.pal.message.domain.Message;
@@ -86,6 +87,20 @@ public class ProjectContextService {
 
     public ProjectContextService(AgentProperties properties, ObjectMapper objectMapper) {
         this(properties, objectMapper, BuildVariables.NONE);
+    }
+
+    /** Conservative default; callers with full prompt accounting should use the explicit remaining-budget overload. */
+    public PreloadedFiles preloadedFiles(AgentContext context, String request) {
+        int used = context.contextTrace() == null ? 0 : context.contextTrace().diagnostics(0).approximateChars();
+        var targets = context.contextTrace() == null ? List.<String>of() : context.contextTrace().diagnostics(0).selectedFiles().stream()
+                .filter(selected -> selected.reason() == ContextSelectionReason.USER_MENTIONED || selected.reason() == ContextSelectionReason.SEARCH_MATCH)
+                .map(ContextDiagnostics.SelectedPath::path).toList();
+        return preloadedFiles(context, request, targets, Math.max(0, properties.getContextBudgetChars() - used - 1_024));
+    }
+
+    /** Prepare complete versioned bodies only; the runner records reads after inserting the returned text. */
+    public PreloadedFiles preloadedFiles(AgentContext context, String request, Collection<String> identifiedTargets, int remainingChars) {
+        return new EditFilePreloader(properties, objectMapper).load(context, request, identifiedTargets, remainingChars);
     }
 
     /**
