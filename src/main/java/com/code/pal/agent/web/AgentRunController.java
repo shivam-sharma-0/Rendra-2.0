@@ -28,6 +28,12 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.code.pal.agent.change.CodeRestoreService;
+import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.contract.ContractStore;
+import java.time.Instant;
+import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /** Replay source for reconnecting clients and the future agent timeline UI. */
 @RestController
@@ -45,18 +51,18 @@ public class AgentRunController {
     private final SiteBuildService sites;
     private final AgentActivityMapper activities;
     private final AgentCancellations cancellations;
-    private com.code.pal.agent.change.CodeRestoreService restores;
-    @org.springframework.beans.factory.annotation.Autowired
-    void useRestores(com.code.pal.agent.change.CodeRestoreService restores) {this.restores=restores;}
-    private com.code.pal.agent.contract.ContractStore contracts;
-    private com.code.pal.agent.config.AgentProperties properties;
-    @org.springframework.beans.factory.annotation.Autowired
-    void useContracts(com.code.pal.agent.contract.ContractStore contracts,com.code.pal.agent.config.AgentProperties properties) {this.contracts=contracts;this.properties=properties;}
+    private CodeRestoreService restores;
+    @Autowired
+    void useRestores(CodeRestoreService restores) {this.restores=restores;}
+    private ContractStore contracts;
+    private AgentProperties properties;
+    @Autowired
+    void useContracts(ContractStore contracts,AgentProperties properties) {this.contracts=contracts;this.properties=properties;}
 
     @GetMapping
     public List<AgentRunResponse> list(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId) {
         projects.requireAccessible(principal.userId(), projectId);
-        var plans=properties!=null && properties.isStructuredContracts()?contracts.reviewableRuns(projectId):java.util.Set.<UUID>of();
+        var plans=properties!=null && properties.isStructuredContracts()?contracts.reviewableRuns(projectId):Set.<UUID>of();
         return runs.findTop100ByProjectIdOrderByCreatedAtDesc(projectId).stream().map(r->AgentRunResponse.from(r).withPlanAvailable(plans.contains(r.getId()))).toList();
     }
 
@@ -121,7 +127,7 @@ public class AgentRunController {
         }
         // The flag reaches the run wherever it executes (a queued run stops the moment it begins); a run in this
         // process also stops at once, mid model call or sandbox command (other instances poll within ~250 ms).
-        int recorded=runs.recordCancellation(runId, projectId, principal.userId(), java.time.Instant.now());
+        int recorded=runs.recordCancellation(runId, projectId, principal.userId(), Instant.now());
         if(recorded==0) {
             AgentRun current=requireRun(projectId,runId);
             if(current.getCancelRequestedAt()==null || (current.getStatus()!=RunStatus.RUNNING && current.getStatus()!=RunStatus.QUEUED))

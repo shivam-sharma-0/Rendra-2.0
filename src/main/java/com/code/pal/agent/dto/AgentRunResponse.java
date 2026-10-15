@@ -6,12 +6,13 @@ import com.code.pal.project.domain.ProjectType;
 
 import java.time.Instant;
 import java.util.UUID;
+import com.code.pal.agent.domain.AgentFailureReason;
 
 /** Safe public status of one agent run. */
 public record AgentRunResponse(UUID id, UUID projectId, String messageId, ProjectType mode, RunStatus status,
                                int promptTokens, int completionTokens, boolean rollbackAvailable, boolean conversational,
                                Instant createdAt, Instant updatedAt, Instant respondingAt,
-                               Instant codeSavedAt,String previewStatus,boolean saveRecoveryRequired,boolean planAvailable,com.code.pal.agent.domain.AgentFailureReason failureReason) {
+                               Instant codeSavedAt,String previewStatus,boolean saveRecoveryRequired,boolean planAvailable,AgentFailureReason failureReason) {
     public AgentRunResponse withPlanAvailable(boolean available) {
         return new AgentRunResponse(id,projectId,messageId,mode,status,promptTokens,completionTokens,rollbackAvailable,conversational,
                 createdAt,updatedAt,respondingAt,codeSavedAt,previewStatus,saveRecoveryRequired,available,failureReason);

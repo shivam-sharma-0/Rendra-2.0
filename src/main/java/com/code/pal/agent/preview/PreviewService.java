@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import com.code.pal.project.brief.ProjectBriefFile;
 
 /**
  * Serves a project's files as static content for preview/published sites. Read-only, path-guarded
@@ -150,7 +151,7 @@ public class PreviewService {
 
     /** A servable project path, or {@code index.html} for anything invalid or protected. */
     static String safePath(String path) {
-        if (com.code.pal.project.brief.ProjectBriefFile.privatePath(path)) throw notFound();
+        if (ProjectBriefFile.privatePath(path)) throw notFound();
         String normalized;
         try {
             normalized = ProjectPaths.normalize(path, false).replaceAll("^(\\./)+", "");

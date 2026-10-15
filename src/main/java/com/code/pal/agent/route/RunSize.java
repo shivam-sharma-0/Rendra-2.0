@@ -3,6 +3,7 @@ package com.code.pal.agent.route;
 import com.code.pal.agent.config.AgentProperties;
 
 import java.util.List;
+import java.util.ArrayList;
 
 /** A run's size tier, why it was chosen, and the time limit and budgets that follow from it. */
 public record RunSize(SizeTier tier, List<String> reasons, long timeoutMs, int maxIterations, int maxModelCalls, int maxToolCalls) {
@@ -14,7 +15,7 @@ public record RunSize(SizeTier tier, List<String> reasons, long timeoutMs, int m
     /** The same size with a time limit of at least {@code timeoutMs}, and why. */
     public RunSize withLongerTimeout(long timeoutMs, String reason) {
         if (timeoutMs <= this.timeoutMs) return this;
-        List<String> withReason = new java.util.ArrayList<>(reasons);
+        List<String> withReason = new ArrayList<>(reasons);
         withReason.add(reason);
         return new RunSize(tier, withReason, timeoutMs, maxIterations, maxModelCalls, maxToolCalls);
     }

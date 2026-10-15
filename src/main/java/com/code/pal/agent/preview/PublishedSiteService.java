@@ -12,6 +12,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import com.code.pal.agent.stack.MernPack;
+import com.code.pal.agent.stack.StackPacks;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * The published site is a snapshot taken when the user publishes, so later agent runs change the
@@ -29,9 +32,9 @@ public class PublishedSiteService {
     static final String PUBLISHED = ProjectPaths.INTERNAL + "/published";
     static final String LIVE = "LIVE";
     static final String RELEASE = "RELEASE";
-    private com.code.pal.agent.stack.StackPacks stacks;
-    @org.springframework.beans.factory.annotation.Autowired
-    void useStacks(com.code.pal.agent.stack.StackPacks stacks) { this.stacks = stacks; }
+    private StackPacks stacks;
+    @Autowired
+    void useStacks(StackPacks stacks) { this.stacks = stacks; }
 
     private final SiteBuildService sites;
     private final ProjectFiles files;
@@ -89,7 +92,7 @@ public class PublishedSiteService {
     public Capability capability(UUID projectId) {
         if(stacks==null)return new Capability(false,"Publication capability is unavailable");
         var stack=stacks.detect(files,projectId,".");
-        if(stack instanceof com.code.pal.agent.stack.MernPack || files.exists(projectId,".","server/package.json"))
+        if(stack instanceof MernPack || files.exists(projectId,".","server/package.json"))
             return new Capability(false,"Publishing apps with an API is unavailable until isolated frontend/backend releases are supported");
         boolean entry=files.regularFile(projectId,".","index.html") || sites.currentSite(projectId)!=null || stack.previewBuild(files,projectId,".")!=null;
         return entry?new Capability(true,null):new Capability(false,"Build a browser application before publishing");

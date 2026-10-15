@@ -11,6 +11,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.*;
+import com.code.pal.agent.lease.LeaseLostException;
+import com.code.pal.agent.lease.ProjectLeaseService;
+import java.sql.Timestamp;
 
 /** Short independent transactions: filesystem critical sections must not roll this evidence back. */
 @Service
@@ -18,8 +21,8 @@ public class PromotionJournal {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
     private final ObjectMapper mapper;
-    private final com.code.pal.agent.lease.ProjectLeaseService leases;
-    public PromotionJournal(JdbcTemplate jdbc, PlatformTransactionManager manager, ObjectMapper mapper,com.code.pal.agent.lease.ProjectLeaseService leases) {
+    private final ProjectLeaseService leases;
+    public PromotionJournal(JdbcTemplate jdbc, PlatformTransactionManager manager, ObjectMapper mapper,ProjectLeaseService leases) {
         this.jdbc=jdbc;this.mapper=mapper;this.leases=leases;tx=new TransactionTemplate(manager);
         tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         tx.setTimeout(10);
@@ -33,7 +36,7 @@ public class PromotionJournal {
     public boolean prepare(AgentRun run,int revision,List<FileState> files) {
         validate(files);
         RunFence fence=RunFence.current();
-        if(fence==null) throw new com.code.pal.agent.lease.LeaseLostException();
+        if(fence==null) throw new LeaseLostException();
         leases.requireCurrent(run.getProjectId());
         if( (!fence.runId().equals(run.getId()) || !fence.projectId().equals(run.getProjectId())))
             throw new IllegalArgumentException("Promotion ownership mismatch");
@@ -64,9 +67,9 @@ public class PromotionJournal {
     public Instant saved(UUID run) {
         return tx.execute(status->{
             transitionOwned(run,"APPLYING","SAVED",true);
-            Instant saved=jdbc.queryForObject("select saved_at from agent_promotions where run_id=?",java.sql.Timestamp.class,run).toInstant();
+            Instant saved=jdbc.queryForObject("select saved_at from agent_promotions where run_id=?",Timestamp.class,run).toInstant();
             if(jdbc.update("update agent_runs set code_saved_at=?,preview_status='NOT_REQUESTED',save_recovery_required=false where id=? and status='COMMITTING' and code_saved_at is null",
-                    java.sql.Timestamp.from(saved),run)!=1) throw new IllegalStateException("Save finalization refused");
+                    Timestamp.from(saved),run)!=1) throw new IllegalStateException("Save finalization refused");
             return saved;
         });
     }

@@ -18,6 +18,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
+import com.code.pal.agent.runtime.AppServerService;
+import com.code.pal.agent.runtime.ReleaseSource;
+import java.util.HashSet;
+import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
  * Builds the site a project's preview and published URL serve, for stacks that need a build (Vite).
@@ -43,15 +49,15 @@ public class SiteBuildService {
     private final BuildVariables variables;
     private final PreviewListener listener;
     /** Builds and restarts a MERN project's API server next to the site; null in focused tests. */
-    private final com.code.pal.agent.runtime.AppServerService servers;
+    private final AppServerService servers;
     /** The latest build state per project, for viewers who open the preview between events. */
     private final Map<UUID, PreviewStatus> statuses = new ConcurrentHashMap<>();
     private final Map<UUID, ReentrantLock> locks = new ConcurrentHashMap<>();
     private final ExecutorService background = Executors.newVirtualThreadPerTaskExecutor();
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public SiteBuildService(StackPacks stacks, ProjectFiles files, SandboxPort sandbox, DependencyService dependencies,
-                            BuildVariables variables, PreviewListener listener, com.code.pal.agent.runtime.AppServerService servers) {
+                            BuildVariables variables, PreviewListener listener, AppServerService servers) {
         this.servers = servers;
         this.stacks = stacks;
         this.files = files;
@@ -79,7 +85,7 @@ public class SiteBuildService {
     }
 
     /** New values must reach the preview: rebuild once the change is committed. */
-    @org.springframework.transaction.event.TransactionalEventListener(fallbackExecution = true)
+    @TransactionalEventListener(fallbackExecution = true)
     public void onVariablesChanged(BuildVariables.Changed changed) {
         buildLater(changed.projectId());
     }
@@ -191,17 +197,17 @@ public class SiteBuildService {
             return Result.notNeeded();
         }
         String id = UUID.randomUUID().toString();
-        String sourceRevision = com.code.pal.agent.runtime.ReleaseSource.capture(files, projectId, ".");
+        String sourceRevision = ReleaseSource.capture(files, projectId, ".");
         long started = System.nanoTime();
         String error = compile(projectId, stack, build, ".", SITE + "/" + id);
         if (error != null) return Result.failed(error);
-        if (!sourceRevision.equals(com.code.pal.agent.runtime.ReleaseSource.capture(files, projectId, ".")))
+        if (!sourceRevision.equals(ReleaseSource.capture(files, projectId, ".")))
             return Result.failed("Project changed during frontend build; rebuild the current revision");
-        files.writeText(projectId, SITE + "/" + id, com.code.pal.agent.runtime.ReleaseSource.PROOF, sourceRevision);
+        files.writeText(projectId, SITE + "/" + id, ReleaseSource.PROOF, sourceRevision);
         String previous = currentSite(projectId);
         files.writeText(projectId, SITE, CURRENT, id);
         // The previous site stays one more build: a request that read the old CURRENT can still finish.
-        java.util.Set<String> keep = new java.util.HashSet<>(List.of(id));
+        Set<String> keep = new HashSet<>(List.of(id));
         if (previous != null) keep.add(previous.substring(SITE.length() + 1));
         prune(projectId, keep);
         log.info("site_build_done projectId={} stack={} elapsedMs={}", projectId, stack.id(), (System.nanoTime() - started) / 1_000_000);
@@ -258,10 +264,10 @@ public class SiteBuildService {
     private void retire(UUID projectId) {
         if (!files.exists(projectId, SITE, CURRENT)) return;
         files.delete(projectId, SITE, CURRENT);
-        prune(projectId, java.util.Set.of());
+        prune(projectId, Set.of());
     }
 
-    private void prune(UUID projectId, java.util.Set<String> keep) {
+    private void prune(UUID projectId, Set<String> keep) {
         // Cross-instance readers have no durable reference count: retain rather than race deletion.
     }
 

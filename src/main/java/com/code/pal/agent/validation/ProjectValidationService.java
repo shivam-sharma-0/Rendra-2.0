@@ -17,6 +17,9 @@ import org.springframework.stereotype.Service;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import com.code.pal.project.capability.BuildDecisions;
+import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Executes only backend-selected package validation operations in the sandbox and returns bounded
@@ -43,23 +46,31 @@ public class ProjectValidationService {
      * again; the final gate reuses what the agent's own typeCheck/build calls already ran.
      */
     private final Map<UUID, RevisionResults> results = new ConcurrentHashMap<>();
-    private com.code.pal.project.capability.BuildDecisions buildDecisions;
+    private BuildDecisions buildDecisions;
     private MernBehaviorCheck mernBehavior;
     private RunBehaviorCriteria behaviorCriteria;
-    @org.springframework.beans.factory.annotation.Autowired
-    public void useBehaviorCriteria(RunBehaviorCriteria criteria){this.behaviorCriteria=java.util.Objects.requireNonNull(criteria);}
-    @org.springframework.beans.factory.annotation.Autowired
-    public void useMernBehavior(MernBehaviorCheck check){this.mernBehavior=java.util.Objects.requireNonNull(check);}
 
-    @org.springframework.beans.factory.annotation.Autowired
-    public void setBuildDecisions(com.code.pal.project.capability.BuildDecisions decisions) {
-        this.buildDecisions = java.util.Objects.requireNonNull(decisions);
+    @Autowired
+    public void useBehaviorCriteria(RunBehaviorCriteria criteria) {
+        this.behaviorCriteria = Objects.requireNonNull(criteria);
+    }
+
+    @Autowired
+    public void useMernBehavior(MernBehaviorCheck check) {
+        this.mernBehavior = Objects.requireNonNull(check);
+    }
+
+    @Autowired
+    public void setBuildDecisions(BuildDecisions decisions) {
+        this.buildDecisions = Objects.requireNonNull(decisions);
     }
 
     public Object diagnostics(AgentContext context) {
         var capabilities = stack(context).inspect(files, context.projectId(), ".");
-        var summary = new CapabilitySummary(capabilities.stack(), capabilities.packageManager(), capabilities.declaredPackageManager(),
-                capabilities.scripts().keySet().stream().sorted().toList(), capabilities.availableOperations(), capabilities.error());
+        var summary = new CapabilitySummary(capabilities.stack(), capabilities.packageManager(),
+                capabilities.declaredPackageManager(),
+                capabilities.scripts().keySet().stream().sorted().toList(), capabilities.availableOperations(),
+                capabilities.error());
         return new DiagnosticsSnapshot(summary, lastReports.get(context.runId()),
                 changeSets.validationProgress(context));
     }
@@ -99,9 +110,10 @@ public class ProjectValidationService {
         }
         ChangeSetService.ValidationResult structure = changeSets.validate(context);
         if (!structure.valid()) {
-            List<ProjectDiagnostic> diagnostics = structure.issues().stream().map(issue ->
-                    new ProjectDiagnostic(issue.path(), null, null, DiagnosticSeverity.ERROR,
-                            issue.message(), "structure", issue.code())).toList();
+            List<ProjectDiagnostic> diagnostics = structure.issues().stream()
+                    .map(issue -> new ProjectDiagnostic(issue.path(), null, null, DiagnosticSeverity.ERROR,
+                            issue.message(), "structure", issue.code()))
+                    .toList();
             changeSets.recordProjectValidation(context, false, diagnostics);
             ValidationReport report = aggregateReport(context, false, diagnostics, List.of(),
                     "Deterministic file validation failed");
@@ -112,7 +124,8 @@ public class ProjectValidationService {
         StackPack stack = stack(context);
         if (stack.trustedCommandsChanged(files, context.projectId(), view.liveRoot(), view.stagedRoot())) {
             List<ProjectDiagnostic> diagnostics = List.of(new ProjectDiagnostic("package.json", null, null,
-                    DiagnosticSeverity.ERROR, "Validation scripts changed during the run and cannot be executed as trusted commands",
+                    DiagnosticSeverity.ERROR,
+                    "Validation scripts changed during the run and cannot be executed as trusted commands",
                     "validation-security", "VALIDATION_SCRIPT_CHANGED"));
             changeSets.recordProjectValidation(context, false, diagnostics);
             ValidationReport report = aggregateReport(context, false, diagnostics, List.of(),
@@ -121,85 +134,126 @@ public class ProjectValidationService {
             return report;
         }
         List<Comparison> comparisons = new ArrayList<>();
-        List<ValidationCheck> checks=new ArrayList<>();
-        checks.add(new ValidationCheck("STRUCTURE",ValidationCheck.Outcome.PASS,true,"Deterministic staged file validation passed"));
+        List<ValidationCheck> checks = new ArrayList<>();
+        checks.add(new ValidationCheck("STRUCTURE", ValidationCheck.Outcome.PASS, true,
+                "Deterministic staged file validation passed"));
         List<String> executed = new ArrayList<>();
         for (ValidationOperation operation : List.of(ValidationOperation.TYPE_CHECK, ValidationOperation.BUILD)) {
             CommandPlan plan = plan(context, operation, null);
             if (!plan.available()) {
-                checks.add(new ValidationCheck(operation.name(),ValidationCheck.Outcome.SKIPPED,false,plan.unavailableReason()));
+                checks.add(new ValidationCheck(operation.name(), ValidationCheck.Outcome.SKIPPED, false,
+                        plan.unavailableReason()));
                 continue;
             }
-            var comparison=compareOnce(context, plan);comparisons.add(comparison);
-            checks.add(new ValidationCheck(operation.name(),comparison.after().started() && !comparison.after().timedOut() && comparison.after().exitCode()==0?ValidationCheck.Outcome.PASS:
-                    !comparison.after().started()?ValidationCheck.Outcome.SKIPPED:ValidationCheck.Outcome.FAIL,true,
-                    comparison.changePassed()?"No new diagnostics":"Candidate command did not pass"));
+            var comparison = compareOnce(context, plan);
+            comparisons.add(comparison);
+            checks.add(new ValidationCheck(operation.name(),
+                    comparison.after().started() && !comparison.after().timedOut() && comparison.after().exitCode() == 0
+                            ? ValidationCheck.Outcome.PASS
+                            : !comparison.after().started() ? ValidationCheck.Outcome.SKIPPED
+                                    : ValidationCheck.Outcome.FAIL,
+                    true,
+                    comparison.changePassed() ? "No new diagnostics" : "Candidate command did not pass"));
             executed.add(operation.name());
         }
-        List<ProjectDiagnostic> introduced = new ArrayList<>(comparisons.stream().flatMap(value -> value.introduced().stream()).toList());
+        List<ProjectDiagnostic> introduced = new ArrayList<>(
+                comparisons.stream().flatMap(value -> value.introduced().stream()).toList());
         List<ProjectDiagnostic> existing = comparisons.stream().flatMap(value -> value.preExisting().stream()).toList();
-        boolean passed = comparisons.stream().allMatch(c->c.after().started() && !c.after().timedOut() && c.after().exitCode()==0);
-        boolean commandsPassed=passed;
+        boolean passed = comparisons.stream()
+                .allMatch(c -> c.after().started() && !c.after().timedOut() && c.after().exitCode() == 0);
+        boolean commandsPassed = passed;
         boolean terminal = comparisons.stream().anyMatch(value -> !value.after().started() || value.after().timedOut());
-        if(comparisons.stream().anyMatch(c->c.changePassed() && c.after().exitCode()!=0)) {
-            introduced.add(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,"The candidate still fails an existing required build check. Fix the existing project before saving this change.","validation","PRE_EXISTING_VALIDATION_FAILURE"));
-            terminal=true;
+        if (comparisons.stream().anyMatch(c -> c.changePassed() && c.after().exitCode() != 0)) {
+            introduced.add(new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR,
+                    "The candidate still fails an existing required build check. Fix the existing project before saving this change.",
+                    "validation", "PRE_EXISTING_VALIDATION_FAILURE"));
+            terminal = true;
         }
         // Only a change that type-checks and builds is worth loading in a browser.
         if (passed) {
             RuntimeCheckService.Result runtimeResult = revisionResults(context).runtime;
             if (runtimeResult == null) {
-                runtimeResult = runtime==null?new RuntimeCheckService.Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.SKIPPED,
-                        properties.getSandbox().isRuntimeCheck(),"Runtime probe is not wired"),List.of()):runtime.evaluate(context);
-                if(runtimeResult==null)throw new IllegalStateException("Runtime check did not report an outcome");
+                runtimeResult = runtime == null
+                        ? new RuntimeCheckService.Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED,
+                                properties.getSandbox().isRuntimeCheck(), "Runtime probe is not wired"), List.of())
+                        : runtime.evaluate(context);
+                if (runtimeResult == null)
+                    throw new IllegalStateException("Runtime check did not report an outcome");
                 revisionResults(context).runtime = runtimeResult;
             }
             checks.add(runtimeResult.check());
-            if(runtimeResult.check().outcome()==ValidationCheck.Outcome.PASS)executed.add("RUNTIME");
+            if (runtimeResult.check().outcome() == ValidationCheck.Outcome.PASS)
+                executed.add("RUNTIME");
             if (runtimeResult.check().blocksSuccess()) {
                 introduced.addAll(runtimeResult.diagnostics());
-                if(runtimeResult.diagnostics().stream().anyMatch(d->"PRE_EXISTING_RUNTIME_FAILURE".equals(d.code())))terminal=true;
+                if (runtimeResult.diagnostics().stream().anyMatch(d -> "PRE_EXISTING_RUNTIME_FAILURE".equals(d.code())))
+                    terminal = true;
                 passed = false;
-                if(runtimeResult.check().outcome()==ValidationCheck.Outcome.SKIPPED){
-                    terminal=true;introduced.add(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,
-                            runtimeResult.check().reason(),"runtime","REQUIRED_CHECK_SKIPPED"));
+                if (runtimeResult.check().outcome() == ValidationCheck.Outcome.SKIPPED) {
+                    terminal = true;
+                    introduced.add(new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR,
+                            runtimeResult.check().reason(), "runtime", "REQUIRED_CHECK_SKIPPED"));
                 }
             }
         }
         // API behavior is independent of a failed UI interaction once compilation/build succeeded.
         // Collect real API evidence before selecting repairs; deferred checks are not evidence of a code defect.
-        if(commandsPassed && checks.stream().noneMatch(ValidationCheck::unavailable)
-                && "mern".equals(stacks.detect(files,context.projectId(),context.root()).id())) {
-            var apiChecks=mernBehavior==null?List.of(new ValidationCheck("API_BEHAVIOR",ValidationCheck.Outcome.SKIPPED,true,"Candidate API validator is not wired")):
-                    mernBehavior.check(context);
+        if (commandsPassed && checks.stream().noneMatch(ValidationCheck::unavailable)
+                && "mern".equals(stacks.detect(files, context.projectId(), context.root()).id())) {
+            var apiChecks = mernBehavior == null ? List.of(new ValidationCheck("API_BEHAVIOR",
+                    ValidationCheck.Outcome.SKIPPED, true, "Candidate API validator is not wired"))
+                    : mernBehavior.check(context);
             checks.addAll(apiChecks);
-            for(var check:apiChecks)if(check.blocksSuccess()) {
-                passed=false;introduced.add(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,check.reason(),"api-behavior",
-                        check.outcome()==ValidationCheck.Outcome.SKIPPED?"REQUIRED_CHECK_SKIPPED":"API_ACCEPTANCE_FAILED"));
-                if(check.unavailable() || check.id().endsWith("CLEANUP"))terminal=true;
+            for (var check : apiChecks)
+                if (check.blocksSuccess()) {
+                    passed = false;
+                    introduced.add(new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR, check.reason(),
+                            "api-behavior",
+                            check.outcome() == ValidationCheck.Outcome.SKIPPED ? "REQUIRED_CHECK_SKIPPED"
+                                    : "API_ACCEPTANCE_FAILED"));
+                    if (check.unavailable() || check.id().endsWith("CLEANUP"))
+                        terminal = true;
+                }
+        }
+        var acceptance = behaviorCriteria == null ? null : behaviorCriteria.current(context);
+        if (acceptance != null) {
+            var missing = new ArrayList<String>();
+            if (!acceptance.browser().isEmpty() && checks.stream()
+                    .noneMatch(c -> c.id().equals("RUNTIME") && c.outcome() != ValidationCheck.Outcome.SKIPPED))
+                missing.add("BROWSER_ACCEPTANCE");
+            for (var step : acceptance.api())
+                if (checks.stream().noneMatch(c -> c.id().equals("API_" + step.id())))
+                    missing.add("API_" + step.id());
+            boolean blocked = checks.stream().anyMatch(ValidationCheck::blocksSuccess);
+            for (String id : missing) {
+                String reason = blocked ? "Earlier validation failed; required acceptance was not run"
+                        : "Required acceptance coverage is unavailable";
+                checks.add(new ValidationCheck(id, ValidationCheck.Outcome.SKIPPED, true, reason,
+                        blocked ? ValidationCheck.SkipCause.PREREQUISITE_FAILED
+                                : ValidationCheck.SkipCause.UNAVAILABLE));
+                if (!blocked)
+                    introduced.add(new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR, reason,
+                            "acceptance", "REQUIRED_CHECK_SKIPPED"));
+            }
+            if (!missing.isEmpty()) {
+                passed = false;
+                if (!blocked)
+                    terminal = true;
             }
         }
-        var acceptance=behaviorCriteria==null?null:behaviorCriteria.current(context);
-        if(acceptance!=null) {
-            var missing=new ArrayList<String>();
-            if(!acceptance.browser().isEmpty() && checks.stream().noneMatch(c->c.id().equals("RUNTIME") && c.outcome()!=ValidationCheck.Outcome.SKIPPED))missing.add("BROWSER_ACCEPTANCE");
-            for(var step:acceptance.api())if(checks.stream().noneMatch(c->c.id().equals("API_"+step.id())))missing.add("API_"+step.id());
-            boolean blocked=checks.stream().anyMatch(ValidationCheck::blocksSuccess);
-            for(String id:missing){String reason=blocked?"Earlier validation failed; required acceptance was not run":"Required acceptance coverage is unavailable";
-                checks.add(new ValidationCheck(id,ValidationCheck.Outcome.SKIPPED,true,reason,blocked?ValidationCheck.SkipCause.PREREQUISITE_FAILED:ValidationCheck.SkipCause.UNAVAILABLE));
-                if(!blocked)introduced.add(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,reason,"acceptance","REQUIRED_CHECK_SKIPPED"));}
-            if(!missing.isEmpty()){passed=false;if(!blocked)terminal=true;}
-        }
-        if (terminal) changeSets.recordTerminalValidationFailure(context, introduced);
-        else changeSets.recordProjectValidation(context, passed, introduced);
+        if (terminal)
+            changeSets.recordTerminalValidationFailure(context, introduced);
+        else
+            changeSets.recordProjectValidation(context, passed, introduced);
         String summary = passed
                 ? (executed.isEmpty() ? "Structural validation passed; no type-check/build script is configured"
-                                      : "Validation passed: " + String.join(", ", executed))
+                        : "Validation passed: " + String.join(", ", executed))
                 : checks.stream().anyMatch(ValidationCheck::unavailable)
-                    ? "Required validation coverage was unavailable; code cannot be certified"
-                    : "Validation found errors introduced by the staged changes";
+                        ? "Required validation coverage was unavailable; code cannot be certified"
+                        : "Validation found errors introduced by the staged changes";
         ValidationReport report = aggregateReport(context, passed, introduced, existing, summary).withChecks(checks);
-        log.info("required_validation runId={} checks={}",context.runId(),checks.stream().map(check->check.id()+":"+check.outcome()+(check.skipCause()==null?"":":"+check.skipCause())).toList());
+        log.info("required_validation runId={} checks={}", context.runId(), checks.stream().map(check -> check.id()
+                + ":" + check.outcome() + (check.skipCause() == null ? "" : ":" + check.skipCause())).toList());
         lastReports.put(context.runId(), report);
         return report;
     }
@@ -209,7 +263,10 @@ public class ProjectValidationService {
         return stacks.detect(files, context.projectId(), ".");
     }
 
-    public ValidationReport lastReport(UUID runId) { return lastReports.get(runId); }
+    public ValidationReport lastReport(UUID runId) {
+        return lastReports.get(runId);
+    }
+
     public void clear(UUID runId) {
         lastReports.remove(runId);
         results.remove(runId);
@@ -220,26 +277,32 @@ public class ProjectValidationService {
         RevisionResults current = revisionResults(context);
         Comparison cached = current.comparisons.get(plan.operation());
         if (cached != null) {
-            log.info("validation_reused run={} revision={} operation={}", context.runId(), current.revision, plan.operation());
+            log.info("validation_reused run={} revision={} operation={}", context.runId(), current.revision,
+                    plan.operation());
             return cached;
         }
         Comparison comparison = compare(context, plan);
         // A timeout or a sandbox that did not start says nothing about the code: try again next time.
-        if (comparison.after().started() && !comparison.after().timedOut()) current.comparisons.put(plan.operation(), comparison);
+        if (comparison.after().started() && !comparison.after().timedOut())
+            current.comparisons.put(plan.operation(), comparison);
         return comparison;
     }
 
     private RevisionResults revisionResults(AgentContext context) {
         int revision = changeSets.view(context).revision();
-        return results.compute(context.runId(), (run, existing) ->
-                existing != null && existing.revision == revision ? existing : new RevisionResults(revision));
+        return results.compute(context.runId(),
+                (run, existing) -> existing != null && existing.revision == revision ? existing
+                        : new RevisionResults(revision));
     }
 
     private static final class RevisionResults {
         final int revision;
         final Map<ValidationOperation, Comparison> comparisons = new ConcurrentHashMap<>();
         volatile RuntimeCheckService.Result runtime;
-        RevisionResults(int revision) { this.revision = revision; }
+
+        RevisionResults(int revision) {
+            this.revision = revision;
+        }
     }
 
     private Comparison compare(AgentContext context, CommandPlan plan) {
@@ -252,41 +315,57 @@ public class ProjectValidationService {
                 List<String> touched = changeSets.view(context).touchedPaths();
                 DependencyService.Preparation baselineDeps = dependencies.prepare(context.projectId(), baseline);
                 DependencyService.Preparation candidateDeps = dependencies.prepare(context.projectId(), candidate);
-                CommandOutcome before = baselineDeps.failed() ? notStarted(context, baseline, baselineDeps.error()) : execute(context, plan, baseline);
+                CommandOutcome before = baselineDeps.failed() ? notStarted(context, baseline, baselineDeps.error())
+                        : execute(context, plan, baseline);
                 if (candidateDeps.failed()) {
                     if (baselineDeps.failed()) {
                         // The project's own dependencies do not install either (registry down, or already broken):
                         // nothing the change can be blamed for, and nothing it can repair.
                         CommandOutcome after = notStarted(context, candidate, candidateDeps.error());
-                        return new Comparison(plan, before, after, List.of(infrastructureDiagnostic(after, plan.operation())), List.of(), false);
+                        return new Comparison(plan, before, after,
+                                List.of(infrastructureDiagnostic(after, plan.operation())), List.of(), false);
                     }
-                    CommandOutcome after = new CommandOutcome(true, false, 1, candidateDeps.error(), sandbox.commandPath(context.projectId(), candidate));
+                    CommandOutcome after = new CommandOutcome(true, false, 1, candidateDeps.error(),
+                            sandbox.commandPath(context.projectId(), candidate));
                     return new Comparison(plan, before, after, List.of(new ProjectDiagnostic(
-                            "package.json", null, null, DiagnosticSeverity.ERROR, truncate(candidateDeps.error(), 1_500),
+                            "package.json", null, null, DiagnosticSeverity.ERROR,
+                            truncate(candidateDeps.error(), 1_500),
                             "dependencies", "DEPENDENCY_INSTALL_FAILED")), List.of(), false);
                 }
                 CommandOutcome after = execute(context, plan, candidate);
                 List<ProjectDiagnostic> baselineDiagnostics = diagnostics(before, plan.operation(), touched);
                 List<ProjectDiagnostic> currentDiagnostics = diagnostics(after, plan.operation(), touched);
-                Set<String> baselineKeys = baselineDiagnostics.stream().map(ProjectValidationService::responsibilityFingerprint)
-                        .collect(java.util.stream.Collectors.toSet());
+                Set<String> baselineKeys = baselineDiagnostics.stream()
+                        .map(ProjectValidationService::responsibilityFingerprint)
+                        .collect(Collectors.toSet());
                 List<ProjectDiagnostic> introduced = currentDiagnostics.stream()
                         .filter(item -> !baselineKeys.contains(responsibilityFingerprint(item))).toList();
                 List<ProjectDiagnostic> existing = currentDiagnostics.stream()
                         .filter(item -> baselineKeys.contains(responsibilityFingerprint(item))).toList();
                 boolean passed;
-                if (!after.started() || after.timedOut()) passed = false;
-                else if (after.exitCode() == 0) passed = true;
-                else passed = before.started() && !before.timedOut() && before.exitCode() != 0 && introduced.isEmpty();
-                if (!passed && introduced.isEmpty()) introduced = List.of(infrastructureDiagnostic(after, plan.operation()));
+                if (!after.started() || after.timedOut())
+                    passed = false;
+                else if (after.exitCode() == 0)
+                    passed = true;
+                else
+                    passed = before.started() && !before.timedOut() && before.exitCode() != 0 && introduced.isEmpty();
+                if (!passed && introduced.isEmpty())
+                    introduced = List.of(infrastructureDiagnostic(after, plan.operation()));
                 List<ProjectDiagnostic> boundedIntroduced = bounded(introduced, touched);
                 int remaining = Math.max(0, properties.getMaxValidationDiagnostics() - boundedIntroduced.size());
-                return new Comparison(plan, before, after, boundedIntroduced, bounded(existing, touched, remaining), passed);
+                return new Comparison(plan, before, after, boundedIntroduced, bounded(existing, touched, remaining),
+                        passed);
             } finally {
-                try { sandbox.removeTree(context.projectId(), candidate); } catch (RuntimeException ignored) { }
+                try {
+                    sandbox.removeTree(context.projectId(), candidate);
+                } catch (RuntimeException ignored) {
+                }
             }
         } finally {
-            try { sandbox.removeTree(context.projectId(), baseline); } catch (RuntimeException ignored) { }
+            try {
+                sandbox.removeTree(context.projectId(), baseline);
+            } catch (RuntimeException ignored) {
+            }
         }
     }
 
@@ -301,10 +380,12 @@ public class ProjectValidationService {
     private CommandPlan plan(AgentContext context, ValidationOperation operation, String scope) {
         StackPack live = stack(context);
         CommandPlan plan = live.resolve(files, context.projectId(), ".", operation, scope);
-        if (plan.available()) return plan;
+        if (plan.available())
+            return plan;
         String staged = changeSets.view(context).stagedRoot();
         StackPack next = stacks.detect(files, context.projectId(), staged);
-        if (next == live) return plan;
+        if (next == live)
+            return plan;
         CommandPlan fixed = next.resolveFixed(files, context.projectId(), staged, operation);
         return fixed.available() ? fixed : plan;
     }
@@ -312,19 +393,24 @@ public class ProjectValidationService {
     private CommandOutcome execute(AgentContext context, CommandPlan plan, String root) {
         long started = System.nanoTime();
         var result = sandbox.exec(context.projectId(), root, plan.command());
-        log.info("validation_command runId={} operation={} root={} command=\"{}\" exitCode={} elapsedMs={}", context.runId(),
-                plan.operation(), root.substring(root.lastIndexOf('/') + 1), String.join(" ", plan.command()), result.exitCode(),
+        log.info("validation_command runId={} operation={} root={} command=\"{}\" exitCode={} elapsedMs={}",
+                context.runId(),
+                plan.operation(), root.substring(root.lastIndexOf('/') + 1), String.join(" ", plan.command()),
+                result.exitCode(),
                 (System.nanoTime() - started) / 1_000_000);
         String output = result.stdout() + (result.error().isBlank() ? "" : "\n" + result.error());
         return new CommandOutcome(result.started(), result.timedOut(), result.exitCode(), output,
                 sandbox.commandPath(context.projectId(), root));
     }
 
-    private List<ProjectDiagnostic> diagnostics(CommandOutcome outcome, ValidationOperation operation, List<String> touched) {
-        List<ProjectDiagnostic> diagnostics = new ArrayList<>(ValidationOutputParser.parse(outcome.output(), outcome.root(), operation));
+    private List<ProjectDiagnostic> diagnostics(CommandOutcome outcome, ValidationOperation operation,
+            List<String> touched) {
+        List<ProjectDiagnostic> diagnostics = new ArrayList<>(
+                ValidationOutputParser.parse(outcome.output(), outcome.root(), operation));
         if (outcome.exitCode() != 0 && diagnostics.isEmpty() && !outcome.output().isBlank()) {
             diagnostics.add(new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR,
-                    ValidationOutputParser.summary(outcome.output(), outcome.root()), operation.name().toLowerCase(Locale.ROOT), null));
+                    ValidationOutputParser.summary(outcome.output(), outcome.root()),
+                    operation.name().toLowerCase(Locale.ROOT), null));
         }
         return bounded(diagnostics, touched);
     }
@@ -334,13 +420,14 @@ public class ProjectValidationService {
     }
 
     private List<ProjectDiagnostic> bounded(List<ProjectDiagnostic> input, List<String> touched, int limit) {
-        if (limit <= 0) return List.of();
+        if (limit <= 0)
+            return List.of();
         Set<String> changed = new HashSet<>(touched);
         return input.stream().distinct().sorted(Comparator
-                        .comparing((ProjectDiagnostic item) -> item.severity() == DiagnosticSeverity.ERROR ? 0 : 1)
-                        .thenComparing(item -> item.file() != null && changed.contains(item.file()) ? 0 : 1)
-                        .thenComparing(item -> item.file() == null ? "" : item.file())
-                        .thenComparing(item -> item.line() == null ? 0 : item.line()))
+                .comparing((ProjectDiagnostic item) -> item.severity() == DiagnosticSeverity.ERROR ? 0 : 1)
+                .thenComparing(item -> item.file() != null && changed.contains(item.file()) ? 0 : 1)
+                .thenComparing(item -> item.file() == null ? "" : item.file())
+                .thenComparing(item -> item.line() == null ? 0 : item.line()))
                 .limit(limit).toList();
     }
 
@@ -350,24 +437,28 @@ public class ProjectValidationService {
                 comparison.changePassed(), comparison.after().timedOut(), comparison.after().exitCode(),
                 plan.packageManager(), plan.script(), comparison.introduced(), comparison.preExisting(),
                 progress.repairAttempts(), progress.repairAttemptsRemaining(), progress.revision(),
-                comparison.changePassed() ? "No new diagnostics were introduced" : "Staged changes introduced validation errors");
+                comparison.changePassed() ? "No new diagnostics were introduced"
+                        : "Staged changes introduced validation errors");
     }
 
     private ValidationReport withProgress(ValidationReport report, ChangeSetService.ValidationProgress progress) {
-        return new ValidationReport(report.operation(), report.available(), report.commandSucceeded(), report.changeValidationPassed(),
-                report.timedOut(), report.exitCode(), report.packageManager(), report.script(), report.introducedDiagnostics(),
+        return new ValidationReport(report.operation(), report.available(), report.commandSucceeded(),
+                report.changeValidationPassed(),
+                report.timedOut(), report.exitCode(), report.packageManager(), report.script(),
+                report.introducedDiagnostics(),
                 report.preExistingDiagnostics(), progress.repairAttempts(), progress.repairAttemptsRemaining(),
                 progress.revision(), report.summary());
     }
 
     private ValidationReport aggregateReport(AgentContext context, boolean passed, List<ProjectDiagnostic> introduced,
-                                             List<ProjectDiagnostic> existing, String summary) {
+            List<ProjectDiagnostic> existing, String summary) {
         var progress = changeSets.validationProgress(context);
         var view = changeSets.view(context);
         List<ProjectDiagnostic> boundedIntroduced = bounded(introduced, view.touchedPaths());
         int remaining = Math.max(0, properties.getMaxValidationDiagnostics() - boundedIntroduced.size());
         return new ValidationReport(ValidationOperation.ALL, true, passed, passed, false, passed ? 0 : 1,
-                stack(context).inspect(files, context.projectId(), view.liveRoot()).packageManager(), "project validation",
+                stack(context).inspect(files, context.projectId(), view.liveRoot()).packageManager(),
+                "project validation",
                 boundedIntroduced, bounded(existing, view.touchedPaths(), remaining), progress.repairAttempts(),
                 progress.repairAttemptsRemaining(), progress.revision(), summary);
     }
@@ -375,25 +466,31 @@ public class ProjectValidationService {
     private ValidationReport reportUnavailable(AgentContext context, CommandPlan plan) {
         var progress = changeSets.validationProgress(context);
         return new ValidationReport(plan.operation(), false, false, false, false, null, plan.packageManager(), null,
-                List.of(), List.of(), progress.repairAttempts(), progress.repairAttemptsRemaining(), progress.revision(),
+                List.of(), List.of(), progress.repairAttempts(), progress.repairAttemptsRemaining(),
+                progress.revision(),
                 plan.unavailableReason());
     }
 
     private static ProjectDiagnostic infrastructureDiagnostic(CommandOutcome outcome, ValidationOperation operation) {
-        String message = outcome.timedOut() ? "Validation timed out" : (!outcome.started()
-                ? "Validation executable could not be started" : "Validation failed without a parseable diagnostic");
+        String message = outcome.timedOut() ? "Validation timed out"
+                : (!outcome.started()
+                        ? "Validation executable could not be started"
+                        : "Validation failed without a parseable diagnostic");
         return new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR, message,
                 operation.name().toLowerCase(Locale.ROOT), null);
     }
 
     private static void validateScope(String scope) {
-        if (scope == null || scope.isBlank()) return;
+        if (scope == null || scope.isBlank())
+            return;
         if (scope.length() > 200 || scope.startsWith("-") || scope.indexOf('\0') >= 0 || Path.of(scope).isAbsolute()) {
             throw new AgentToolException("INVALID_TEST_SCOPE", "Test scope must be a short relative path or test name");
         }
-        for (Path part : Path.of(scope)) if (part.toString().equals("..")) {
-            throw new AgentToolException("INVALID_TEST_SCOPE", "Parent path traversal is not allowed in test scope");
-        }
+        for (Path part : Path.of(scope))
+            if (part.toString().equals("..")) {
+                throw new AgentToolException("INVALID_TEST_SCOPE",
+                        "Parent path traversal is not allowed in test scope");
+            }
         if (!scope.matches("[A-Za-z0-9_./\\\\:-]+")) {
             throw new AgentToolException("INVALID_TEST_SCOPE", "Test scope contains unsupported characters");
         }
@@ -403,15 +500,26 @@ public class ProjectValidationService {
         return String.join("|", item.file() == null ? "" : item.file(), item.severity().name(),
                 item.message(), item.source(), item.code() == null ? "" : item.code());
     }
-    private static String truncate(String value, int max) { return value.length() <= max ? value : value.substring(0, max) + "..."; }
+
+    private static String truncate(String value, int max) {
+        return value.length() <= max ? value : value.substring(0, max) + "...";
+    }
 
     /** {@code root}: the directory the command ran in, as the command saw it (for mapping its paths back). */
-    private record CommandOutcome(boolean started, boolean timedOut, int exitCode, String output, String root) {}
+    private record CommandOutcome(boolean started, boolean timedOut, int exitCode, String output, String root) {
+    }
+
     private record Comparison(CommandPlan plan, CommandOutcome before, CommandOutcome after,
-                              List<ProjectDiagnostic> introduced, List<ProjectDiagnostic> preExisting,
-                              boolean changePassed) {}
-    public record CapabilitySummary(String stack, String packageManager, String declaredPackageManager, List<String> scriptNames,
-                                    List<String> availableOperations, String error) {}
+            List<ProjectDiagnostic> introduced, List<ProjectDiagnostic> preExisting,
+            boolean changePassed) {
+    }
+
+    public record CapabilitySummary(String stack, String packageManager, String declaredPackageManager,
+            List<String> scriptNames,
+            List<String> availableOperations, String error) {
+    }
+
     public record DiagnosticsSnapshot(CapabilitySummary capabilities, ValidationReport lastReport,
-                                      ChangeSetService.ValidationProgress progress) {}
+            ChangeSetService.ValidationProgress progress) {
+    }
 }

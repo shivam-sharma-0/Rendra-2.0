@@ -19,6 +19,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import com.code.pal.agent.preview.PreviewGrants;
+import com.code.pal.agent.runtime.AppServerService;
+import com.code.pal.project.brief.ProjectBriefFile;
+import jakarta.servlet.ServletException;
+import org.springframework.web.util.UriUtils;
 
 /**
  * Serves sites on their own hosts ({@link SitesOrigin}, host-per-site mode): {@code <slug>.<domain>}
@@ -38,12 +43,12 @@ public class SiteHostFilter extends OncePerRequestFilter {
     private final ProjectService projects;
     private final PreviewService preview;
     private final DraftPreviewService drafts;
-    private final com.code.pal.agent.runtime.AppServerService servers;
-    private final com.code.pal.agent.preview.PreviewGrants grants;
+    private final AppServerService servers;
+    private final PreviewGrants grants;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
-            throws IOException, jakarta.servlet.ServletException {
+            throws IOException, ServletException {
         String label = sites.siteLabel(request);
         if (label == null) {
             // The sites domain itself, a nested host or another port: never the API.
@@ -57,7 +62,7 @@ public class SiteHostFilter extends OncePerRequestFilter {
         response.setHeader(HttpHeaders.CACHE_CONTROL,"no-store");
         // Apply before generated-server proxying as well as static/draft serving.
         try {
-            if (com.code.pal.project.brief.ProjectBriefFile.privatePath(path(request))) {
+            if (ProjectBriefFile.privatePath(path(request))) {
                 response.setStatus(HttpStatus.NOT_FOUND.value()); return;
             }
         } catch (IllegalArgumentException invalidPath) { response.setStatus(HttpStatus.NOT_FOUND.value()); return; }
@@ -119,7 +124,7 @@ public class SiteHostFilter extends OncePerRequestFilter {
         if (label.startsWith(SitesOrigin.PREVIEW_LABEL) || label.startsWith(SitesOrigin.DRAFT_LABEL)) return privateGrant(label).projectId();
         return projects.resolvePublishedProject(label);
     }
-    private com.code.pal.agent.preview.PreviewGrants.Grant privateGrant(String label) {
+    private PreviewGrants.Grant privateGrant(String label) {
         boolean draft=label.startsWith(SitesOrigin.DRAFT_LABEL);
         var grant=grants.resolve(label.substring(draft?SitesOrigin.DRAFT_LABEL.length():SitesOrigin.PREVIEW_LABEL.length()));
         if(draft!=(grant.draftRunId()!=null))throw new IllegalStateException("Preview mode changed");return grant;
@@ -130,7 +135,7 @@ public class SiteHostFilter extends OncePerRequestFilter {
     }
 
     private static String path(HttpServletRequest request) {
-        String path = org.springframework.web.util.UriUtils.decode(request.getRequestURI(), StandardCharsets.UTF_8);
+        String path = UriUtils.decode(request.getRequestURI(), StandardCharsets.UTF_8);
         while (path.startsWith("/")) path = path.substring(1);
         return path.isBlank() ? "index.html" : path;
     }

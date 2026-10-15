@@ -27,6 +27,10 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import com.code.pal.project.brief.ApprovedProjectMemory;
+import com.code.pal.project.capability.BuildDecisions;
+import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Builds deterministic, budgeted project context. It maps structure and relationships but leaves
@@ -63,17 +67,17 @@ public class ProjectContextService {
     private final AgentProperties properties;
     private final ObjectMapper objectMapper;
     private final BuildVariables variables;
-    private com.code.pal.project.capability.BuildDecisions buildDecisions;
-    private com.code.pal.project.brief.ApprovedProjectMemory memory;
-    @org.springframework.beans.factory.annotation.Autowired
-    public void setApprovedMemory(com.code.pal.project.brief.ApprovedProjectMemory memory) { this.memory=java.util.Objects.requireNonNull(memory); }
+    private BuildDecisions buildDecisions;
+    private ApprovedProjectMemory memory;
+    @Autowired
+    public void setApprovedMemory(ApprovedProjectMemory memory) { this.memory=Objects.requireNonNull(memory); }
 
-    @org.springframework.beans.factory.annotation.Autowired
-    public void setBuildDecisions(com.code.pal.project.capability.BuildDecisions decisions) {
-        this.buildDecisions = java.util.Objects.requireNonNull(decisions);
+    @Autowired
+    public void setBuildDecisions(BuildDecisions decisions) {
+        this.buildDecisions = Objects.requireNonNull(decisions);
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public ProjectContextService(AgentProperties properties, ObjectMapper objectMapper, BuildVariables variables) {
         this.properties = properties;
         this.objectMapper = objectMapper;
@@ -514,7 +518,7 @@ public class ProjectContextService {
     private static Set<String> normalizePaths(Collection<String> paths) {
         if (paths == null) return Set.of();
         Set<String> result = new LinkedHashSet<>();
-        paths.stream().filter(java.util.Objects::nonNull).map(path -> path.replace('\\', '/')).forEach(result::add);
+        paths.stream().filter(Objects::nonNull).map(path -> path.replace('\\', '/')).forEach(result::add);
         return Set.copyOf(result);
     }
 

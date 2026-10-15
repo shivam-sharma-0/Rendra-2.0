@@ -24,29 +24,36 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
+import java.nio.charset.StandardCharsets;
 
 /** Private file transport between an offline browser and one backend-selected candidate API.
  * Request/response bodies never enter model diagnostics or logs. Only the relay directory is writable. */
 final class BrowserApiRelay implements AutoCloseable {
-    static final int MAX_BYTES=1_048_576;
-    private static final Set<String> METHODS=Set.of("GET","HEAD","POST","PUT","PATCH","DELETE","OPTIONS");
-    private static final Set<String> REQUEST_HEADERS=Set.of("content-type","accept","authorization");
+    static final int MAX_BYTES = 1_048_576;
+    private static final Set<String> METHODS = Set.of("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
+    private static final Set<String> REQUEST_HEADERS = Set.of("content-type", "accept", "authorization");
     private static final Pattern API_PATH = Pattern.compile("/api(?:/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*");
-    private static final Pattern AMBIGUOUS_PATH_ENCODING = Pattern.compile("%(?:2f|5c|40|25)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern AMBIGUOUS_PATH_ENCODING = Pattern.compile("%(?:2f|5c|40|25)",
+            Pattern.CASE_INSENSITIVE);
     private final Path directory;
     private final SandboxPort.ServerEndpoint endpoint;
     private final URI candidateBase;
-    private final ObjectMapper mapper=new ObjectMapper();
+    private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient http;
-    private final ExecutorService worker=Executors.newSingleThreadExecutor(Thread.ofVirtual().name("candidate-api-relay").factory());
-    private final RunCancellation cancellation=RunCancellation.current();
+    private final ExecutorService worker = Executors
+            .newSingleThreadExecutor(Thread.ofVirtual().name("candidate-api-relay").factory());
+    private final RunCancellation cancellation = RunCancellation.current();
     private volatile boolean closing;
     private volatile CompletableFuture<?> active;
     private volatile Throwable failure;
-    record Request(String method,String path,Map<String,String> headers,String body) {}
-    record Reply(int status,Map<String,String> headers,String body,boolean unavailable) {}
 
-    BrowserApiRelay(Path directory,SandboxPort.ServerEndpoint endpoint) throws IOException {
+    record Request(String method, String path, Map<String, String> headers, String body) {
+    }
+
+    record Reply(int status, Map<String, String> headers, String body, boolean unavailable) {
+    }
+
+    BrowserApiRelay(Path directory, SandboxPort.ServerEndpoint endpoint) throws IOException {
         this(directory, endpoint, HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(2))
                 .followRedirects(HttpClient.Redirect.NEVER)
@@ -67,31 +74,43 @@ final class BrowserApiRelay implements AutoCloseable {
         Files.createDirectory(directory);
         worker.submit(this::serve);
     }
+
     private void serve() {
-        int count=0;
+        int count = 0;
         try {
-            while(!closing && !cancellation.isCancelled()) {
-                try(var requests=Files.newDirectoryStream(directory,"*.request.json")) {
-                    for(Path file:requests) {
-                        if(closing)break;
-                        String name=file.getFileName().toString();
-                        if(!name.matches("[a-f0-9]{32}\\.request\\.json"))throw new IOException("Invalid relay request identity");
+            while (!closing && !cancellation.isCancelled()) {
+                try (var requests = Files.newDirectoryStream(directory, "*.request.json")) {
+                    for (Path file : requests) {
+                        if (closing)
+                            break;
+                        String name = file.getFileName().toString();
+                        if (!name.matches("[a-f0-9]{32}\\.request\\.json"))
+                            throw new IOException("Invalid relay request identity");
                         Reply reply;
-                        if(++count>128)reply=unavailable();
-                        else try { reply=forward(mapper.readValue(read(file,MAX_BYTES*2),Request.class)); }
-                        catch(Exception rejected){reply=unavailable();}
-                        Path response=directory.resolve(name.replace(".request.json",".response.json"));
-                        Path temporary=directory.resolve(name.replace(".request.json",".tmp"));
-                        Files.writeString(temporary,mapper.writeValueAsString(reply),StandardOpenOption.CREATE_NEW);
-                        Files.move(temporary,response,StandardCopyOption.ATOMIC_MOVE);
+                        if (++count > 128)
+                            reply = unavailable();
+                        else
+                            try {
+                                reply = forward(mapper.readValue(read(file, MAX_BYTES * 2), Request.class));
+                            } catch (Exception rejected) {
+                                reply = unavailable();
+                            }
+                        Path response = directory.resolve(name.replace(".request.json", ".response.json"));
+                        Path temporary = directory.resolve(name.replace(".request.json", ".tmp"));
+                        Files.writeString(temporary, mapper.writeValueAsString(reply), StandardOpenOption.CREATE_NEW);
+                        Files.move(temporary, response, StandardCopyOption.ATOMIC_MOVE);
                         Files.delete(file);
                     }
                 }
                 Thread.sleep(15);
             }
-        }catch(InterruptedException stop){Thread.currentThread().interrupt();}
-        catch(Throwable unavailable){failure=unavailable;}
+        } catch (InterruptedException stop) {
+            Thread.currentThread().interrupt();
+        } catch (Throwable unavailable) {
+            failure = unavailable;
+        }
     }
+
     private Reply forward(Request data) throws Exception {
         if (data == null || !METHODS.contains(data.method()) || data.path() == null
                 || data.path().length() > 2048) {
@@ -113,7 +132,8 @@ final class BrowserApiRelay implements AutoCloseable {
         }
         endpoint.headers().forEach(request::header);
         request.method(data.method(), body.length == 0
-                ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
+                ? HttpRequest.BodyPublishers.noBody()
+                : HttpRequest.BodyPublishers.ofByteArray(body));
         var future = http.sendAsync(request.build(), HttpResponse.BodyHandlers.ofInputStream());
         active = future;
         try (var stop = cancellation.onCancel(() -> future.cancel(true))) {
@@ -182,21 +202,43 @@ final class BrowserApiRelay implements AutoCloseable {
         }
         return target;
     }
-    private static Reply unavailable(){return new Reply(503,Map.of("content-type","application/json"),Base64.getEncoder().encodeToString("{\"error\":\"Candidate API validation unavailable\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8)),true);}
-    private static String read(Path file,int limit) throws IOException {
-        try(var in=Files.newInputStream(file,StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS)) {
-            byte[] bytes=in.readNBytes(limit+1);if(bytes.length>limit)throw new IOException("Relay data exceeds capacity");
-            return new String(bytes,java.nio.charset.StandardCharsets.UTF_8);
+
+    private static Reply unavailable() {
+        return new Reply(503, Map.of("content-type", "application/json"), Base64.getEncoder().encodeToString(
+                "{\"error\":\"Candidate API validation unavailable\"}".getBytes(StandardCharsets.UTF_8)), true);
+    }
+
+    private static String read(Path file, int limit) throws IOException {
+        try (var in = Files.newInputStream(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+            byte[] bytes = in.readNBytes(limit + 1);
+            if (bytes.length > limit)
+                throw new IOException("Relay data exceeds capacity");
+            return new String(bytes, StandardCharsets.UTF_8);
         }
     }
-    @Override public void close() {
-        closing=true;var sending=active;if(sending!=null)sending.cancel(true);worker.shutdownNow();
+
+    @Override
+    public void close() {
+        closing = true;
+        var sending = active;
+        if (sending != null)
+            sending.cancel(true);
+        worker.shutdownNow();
         try {
-            if(!worker.awaitTermination(12,TimeUnit.SECONDS))throw new IllegalStateException("Candidate relay cleanup pending");
-            try(var files=Files.newDirectoryStream(directory)){for(Path file:files)Files.delete(file);}
+            if (!worker.awaitTermination(12, TimeUnit.SECONDS))
+                throw new IllegalStateException("Candidate relay cleanup pending");
+            try (var files = Files.newDirectoryStream(directory)) {
+                for (Path file : files)
+                    Files.delete(file);
+            }
             Files.delete(directory);
-            if(failure!=null)throw new IllegalStateException("Candidate relay unavailable",failure);
-        }catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new IllegalStateException("Candidate relay cleanup interrupted");}
-        catch(IOException failed){throw new UncheckedIOException("Candidate relay cleanup pending",failed);}
+            if (failure != null)
+                throw new IllegalStateException("Candidate relay unavailable", failure);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Candidate relay cleanup interrupted");
+        } catch (IOException failed) {
+            throw new UncheckedIOException("Candidate relay cleanup pending", failed);
+        }
     }
 }

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.data.redis.core.ScanOptions;
 
 /** Redis-backed durable run queue and ownership-checked per-project lock. */
 @Component
@@ -98,7 +99,7 @@ public class AgentJobQueue {
     /** Requeue parked runs of projects that are no longer locked (their worker died before releasing). */
     public long releaseOrphanedParked() {
         long moved = 0;
-        var options = org.springframework.data.redis.core.ScanOptions.scanOptions().match(PARKED_PREFIX + "*").count(100).build();
+        var options = ScanOptions.scanOptions().match(PARKED_PREFIX + "*").count(100).build();
         try (var keys = redis.scan(options)) {
             while (keys.hasNext()) {
                 String parkedKey = keys.next();

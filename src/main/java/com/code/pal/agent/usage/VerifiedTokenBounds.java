@@ -3,12 +3,14 @@ package com.code.pal.agent.usage;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.llm.LlmAccountingException;
 import com.code.pal.agent.llm.LlmClient;
+import com.code.pal.agent.llm.TokenEstimate;
+import java.util.Locale;
 
 /** Configured request caps are separate from quota reservations, which use an input estimate. */
 final class VerifiedTokenBounds {
     private VerifiedTokenBounds() {}
     static long input(AgentProperties properties,LlmClient.LlmRequest request) {
-        String key=request.provider().toLowerCase(java.util.Locale.ROOT)+":"+request.model();
+        String key=request.provider().toLowerCase(Locale.ROOT)+":"+request.model();
         var bound=properties.getAccountingBounds().get(key);
         if(bound==null || bound.getInputTokens()<=0 || bound.getOutputTokens()<=0
                 || bound.getEvidence()==null || bound.getEvidence().isBlank())
@@ -20,7 +22,7 @@ final class VerifiedTokenBounds {
         return bound.getInputTokens();
     }
     static long reservationInput(AgentProperties properties,LlmClient.LlmRequest request) {
-        long limit=input(properties,request),raw=com.code.pal.agent.llm.TokenEstimate.input(request);
+        long limit=input(properties,request),raw=TokenEstimate.input(request);
         if(raw>limit)throw new LlmAccountingException("Request input estimate exceeds the configured model limit");
         return Math.min(limit,Math.addExact(raw,Math.addExact(raw/4,64)));
     }

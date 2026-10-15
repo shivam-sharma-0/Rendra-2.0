@@ -14,6 +14,10 @@ import org.springframework.web.bind.annotation.RestController;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import com.code.pal.agent.preview.DraftPreviewService;
+import com.code.pal.agent.preview.PreviewGrants;
+import java.util.Objects;
+import org.springframework.web.server.ResponseStatusException;
 
 /** Serves a private project's generated files through a short-lived signed preview URL. */
 @RestController
@@ -21,8 +25,8 @@ import java.util.UUID;
 public class PreviewSiteController {
     private final JwtService jwt;
     private final PreviewService preview;
-    private final com.code.pal.agent.preview.DraftPreviewService drafts;
-    private final com.code.pal.agent.preview.PreviewGrants grants;
+    private final DraftPreviewService drafts;
+    private final PreviewGrants grants;
 
     @GetMapping({"/preview/{token}", "/preview/{token}/**"})
     public ResponseEntity<byte[]> serve(@PathVariable String token, HttpServletRequest request) {
@@ -33,7 +37,7 @@ public class PreviewSiteController {
             UUID projectId = jwt.previewProjectId(claims);
             UUID draftRun = jwt.previewDraftRun(claims);
             var grant=grants.resolve(jwt.previewGrantId(claims));
-            if(!grant.projectId().equals(projectId) || !java.util.Objects.equals(grant.draftRunId(),draftRun))throw new IllegalStateException("Preview binding changed");
+            if(!grant.projectId().equals(projectId) || !Objects.equals(grant.draftRunId(),draftRun))throw new IllegalStateException("Preview binding changed");
             String path = relativePath(request.getRequestURI(), token);
             String requested = path.isBlank() ? "index.html" : path;
             PreviewService.PreviewFile file;
@@ -51,8 +55,8 @@ public class PreviewSiteController {
                     .header("Referrer-Policy","no-referrer")
                     .body(file.content());
         } catch (RuntimeException error) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.NOT_FOUND, "Preview not found");
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND, "Preview not found");
         }
     }
 

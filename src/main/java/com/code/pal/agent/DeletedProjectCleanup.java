@@ -22,6 +22,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
+import com.code.pal.agent.lease.ProjectLeaseService;
+import com.code.pal.project.database.GeneratedDatabaseService;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Frees what a deleted project held: its runs are cancelled when the delete commits, and a sweep
@@ -41,13 +44,13 @@ public class DeletedProjectCleanup {
     private final AgentJobQueue queue;
     private final SandboxPort sandbox;
     private final WorkspaceStorage storage;
-    private final com.code.pal.project.database.GeneratedDatabaseService databases;
-    private com.code.pal.agent.lease.ProjectLeaseService leases;
+    private final GeneratedDatabaseService databases;
+    private ProjectLeaseService leases;
     private DeletedProjectCleanupJobs jobs;
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     void useJobs(DeletedProjectCleanupJobs jobs){this.jobs=jobs;}
-    @org.springframework.beans.factory.annotation.Autowired
-    void useLeases(com.code.pal.agent.lease.ProjectLeaseService leases){this.leases=leases;}
+    @Autowired
+    void useLeases(ProjectLeaseService leases){this.leases=leases;}
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onDeleted(ProjectDeleted event) {

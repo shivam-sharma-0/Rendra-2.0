@@ -10,6 +10,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import com.code.pal.agent.intent.RequestScope;
+import com.code.pal.project.capability.BuildDecisions;
 
 /**
  * Decides a run's {@link SizeTier} from the request and whether the project already has code — by rules,
@@ -52,7 +54,7 @@ public final class SizeTierRules {
      */
     public static Decision decide(ProjectType mode, String request, String initialPrompt, boolean existingProject) {
         if (mode != ProjectType.BUILD) return new Decision(SizeTier.S, List.of("not a build"));
-        String text = com.code.pal.agent.intent.RequestScope.positiveSignals(signalText(request, initialPrompt));
+        String text = RequestScope.positiveSignals(signalText(request, initialPrompt));
         Set<String> pages = matches(PAGE_WORDS, text);
         int pageCount = Math.max(pages.size(), namedPageCount(text));
         Set<String> data = matches(DATA_WORDS, text);
@@ -79,12 +81,12 @@ public final class SizeTierRules {
         return new Decision(tier, reasons);
     }
     public static Decision decide(ProjectType mode,String request,String initialPrompt,boolean existingProject,
-                                   com.code.pal.project.capability.BuildDecisions.Choice choice) {
+                                   BuildDecisions.Choice choice) {
         var result=decide(mode,request,initialPrompt,existingProject);
         if(mode==ProjectType.BUILD && !existingProject && result.tier()==SizeTier.S && choice!=null
-                && (choice.auth()==com.code.pal.project.capability.BuildDecisions.Auth.ACCOUNTS
-                || choice.storage()==com.code.pal.project.capability.BuildDecisions.Storage.MERN
-                || choice.storage()==com.code.pal.project.capability.BuildDecisions.Storage.SUPABASE)) {
+                && (choice.auth()==BuildDecisions.Auth.ACCOUNTS
+                || choice.storage()==BuildDecisions.Storage.MERN
+                || choice.storage()==BuildDecisions.Storage.SUPABASE)) {
             var reasons=new ArrayList<>(result.reasons());reasons.add("approved server/auth capability");return new Decision(SizeTier.M,reasons);
         }
         return result;

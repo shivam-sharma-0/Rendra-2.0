@@ -2,6 +2,7 @@ package com.code.pal.agent;
 
 import com.code.pal.agent.domain.AgentRun;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /** Reuses generation text without another call. Outcome claims always come from backend state. */
 final class BuildReplyText {
@@ -10,7 +11,7 @@ final class BuildReplyText {
     private BuildReplyText() {}
     static String success(String proposed,AgentRun run) {
         String text=proposed==null?"":proposed.split("(?i)\\n\\s*(?:changed files|files changed|created files|modified files)\\s*:",2)[0];
-        text=text.lines().filter(line->!TECHNICAL.matcher(line).find() && !OUTCOME.matcher(line).find()).limit(6).collect(java.util.stream.Collectors.joining("\n")).strip();
+        text=text.lines().filter(line->!TECHNICAL.matcher(line).find() && !OUTCOME.matcher(line).find()).limit(6).collect(Collectors.joining("\n")).strip();
         if(text.length()>600)text="";
         if(text.isBlank())text="Updated your application.";
         String preview=switch(run.getPreviewStatus()==null?"":run.getPreviewStatus()) {

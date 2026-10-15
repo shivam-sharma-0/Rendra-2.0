@@ -16,6 +16,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import com.code.pal.agent.lease.LeaseLostException;
+import com.code.pal.agent.lease.RunFence;
+import com.code.pal.agent.lease.TrustedOperationPendingException;
+import com.code.pal.agent.llm.LlmCallContext;
+import com.code.pal.agent.llm.LlmCancelledException;
+import com.code.pal.agent.runtime.RunCancellation;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 
 /** Bounded executor for independent readonly tool calls from a single model response. */
 @Component
@@ -49,8 +57,8 @@ public class AgentToolExecutor {
      */
     public ToolExecutionResult execute(String toolName, Collection<String> allowedToolNames,
                                        Map<String, Object> args, AgentContext context) {
-        if(com.code.pal.agent.runtime.RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted())
-            throw new com.code.pal.agent.llm.LlmCancelledException();
+        if(RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted())
+            throw new LlmCancelledException();
         if (!allowedToolNames.contains(toolName)) {
             return ToolExecutionResult.failure("TOOL_NOT_AVAILABLE", "Tool is not available for this agent run");
         }
@@ -70,11 +78,11 @@ public class AgentToolExecutor {
 
         try {
             return ToolExecutionResult.success(tool.execute(args, context));
-        } catch (com.code.pal.agent.lease.TrustedOperationPendingException pending) {
+        } catch (TrustedOperationPendingException pending) {
             throw pending;
-        } catch (com.code.pal.agent.lease.LeaseLostException lost) {
+        } catch (LeaseLostException lost) {
             throw lost;
-        } catch (com.code.pal.agent.llm.LlmCancelledException cancelled) {
+        } catch (LlmCancelledException cancelled) {
             throw cancelled;
         } catch (AgentToolException e) {
             return ToolExecutionResult.failure(e.code(), safeMessage(e), e.details());
@@ -88,36 +96,36 @@ public class AgentToolExecutor {
     /** Run independent read-only invocations concurrently while respecting the run deadline. */
     public List<ToolExecutionResult> executeParallel(List<Callable<ToolExecutionResult>> work, long deadlineNanos) {
         List<Future<ToolExecutionResult>> futures = new ArrayList<>(work.size());
-        var cancellation=com.code.pal.agent.runtime.RunCancellation.current();
-        var context=com.code.pal.agent.llm.LlmCallContext.current();
-        var fence=com.code.pal.agent.lease.RunFence.current();
+        var cancellation=RunCancellation.current();
+        var context=LlmCallContext.current();
+        var fence=RunFence.current();
         try {
             for (Callable<ToolExecutionResult> task : work) futures.add(pool.submit(()-> {
-                try(var generation=com.code.pal.agent.lease.RunFence.bind(fence);
-                    var stop=com.code.pal.agent.runtime.RunCancellation.bind(cancellation);
-                    var owner=com.code.pal.agent.llm.LlmCallContext.bind(context)) { return task.call(); }
+                try(var generation=RunFence.bind(fence);
+                    var stop=RunCancellation.bind(cancellation);
+                    var owner=LlmCallContext.bind(context)) { return task.call(); }
             }));
             List<ToolExecutionResult> results = new ArrayList<>(work.size());
             for (Future<ToolExecutionResult> future : futures) {
                 while(true) {
-                    if(cancellation.isCancelled()) throw new com.code.pal.agent.llm.LlmCancelledException();
+                    if(cancellation.isCancelled()) throw new LlmCancelledException();
                     long remaining=deadlineNanos-System.nanoTime();
                     if(remaining<=0) throw new IllegalStateException("Agent run timed out");
                     try { results.add(future.get(Math.min(remaining,TimeUnit.MILLISECONDS.toNanos(100)),TimeUnit.NANOSECONDS));break; }
-                    catch(java.util.concurrent.TimeoutException waiting) { /* poll Stop without consuming the full deadline */ }
+                    catch(TimeoutException waiting) { /* poll Stop without consuming the full deadline */ }
                 }
             }
             return results;
-        } catch (com.code.pal.agent.llm.LlmCancelledException cancelled) {
+        } catch (LlmCancelledException cancelled) {
             futures.forEach(future->future.cancel(true));throw cancelled;
-        } catch (java.util.concurrent.ExecutionException failed) {
+        } catch (ExecutionException failed) {
             futures.forEach(future->future.cancel(true));
-            if(failed.getCause() instanceof com.code.pal.agent.lease.LeaseLostException lost) throw lost;
-            if(failed.getCause() instanceof com.code.pal.agent.lease.TrustedOperationPendingException pending) throw pending;
-            if(failed.getCause() instanceof com.code.pal.agent.llm.LlmCancelledException stopped) throw stopped;
+            if(failed.getCause() instanceof LeaseLostException lost) throw lost;
+            if(failed.getCause() instanceof TrustedOperationPendingException pending) throw pending;
+            if(failed.getCause() instanceof LlmCancelledException stopped) throw stopped;
             throw new IllegalStateException("Parallel tool execution failed",failed.getCause());
         } catch (InterruptedException interrupted) {
-            futures.forEach(future->future.cancel(true));Thread.currentThread().interrupt();throw new com.code.pal.agent.llm.LlmCancelledException();
+            futures.forEach(future->future.cancel(true));Thread.currentThread().interrupt();throw new LlmCancelledException();
         } catch (Exception e) {
             futures.forEach(future -> future.cancel(true));
             throw new IllegalStateException("Parallel tool execution failed: " + e.getMessage(), e);

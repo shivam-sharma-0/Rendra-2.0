@@ -13,6 +13,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import com.code.pal.agent.repository.AgentRunRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * The Stop signals of the runs executing in this process. Stop requests travel through the queue's
@@ -27,15 +29,15 @@ public class AgentCancellations {
     static final long POLL_MS = 250;
 
     private final AgentJobQueue queue;
-    private final com.code.pal.agent.repository.AgentRunRepository runs;
+    private final AgentRunRepository runs;
     private final Map<UUID, RunCancellation> active = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler;
     private volatile ScheduledFuture<?> poller;
 
     public AgentCancellations(AgentJobQueue queue) { this(queue,null); }
 
-    @org.springframework.beans.factory.annotation.Autowired
-    public AgentCancellations(AgentJobQueue queue,com.code.pal.agent.repository.AgentRunRepository runs) {
+    @Autowired
+    public AgentCancellations(AgentJobQueue queue,AgentRunRepository runs) {
         this.queue = queue;
         this.runs=runs;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {

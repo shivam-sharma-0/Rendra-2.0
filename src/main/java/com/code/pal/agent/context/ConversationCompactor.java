@@ -10,6 +10,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import tools.jackson.databind.node.ArrayNode;
 
 /**
  * Keeps a run's conversation small as it grows. Every model call resends the whole conversation, so
@@ -45,7 +48,7 @@ public final class ConversationCompactor {
         Map<String, ToolCall> calls = new HashMap<>();
         int resultChars = 0;
         int argumentChars = 0;
-        Set<String> omittedReads=new java.util.LinkedHashSet<>();
+        Set<String> omittedReads=new LinkedHashSet<>();
         for (int i = 0; i < cutoff; i++) {
             LlmMessage message = messages.get(i);
             if (message.toolCalls() != null && !message.toolCalls().isEmpty()) {
@@ -89,7 +92,7 @@ public final class ConversationCompactor {
             if ("assistant".equals(message.role()) && message.toolCalls() != null && !message.toolCalls().isEmpty()) {
                 if (++seen == keepTurns) {
                     // A call/result pair may cross this cutoff only in malformed/interleaved input.
-                    Set<String> laterResults=new java.util.HashSet<>();
+                    Set<String> laterResults=new HashSet<>();
                     for(int later=i;later<messages.size();later++) if(messages.get(later).toolCallId()!=null)laterResults.add(messages.get(later).toolCallId());
                     for(int earlier=0;earlier<i;earlier++)if(messages.get(earlier).toolCalls()!=null)
                         for(var call:messages.get(earlier).toolCalls())if(laterResults.contains(call.id()))return earlier;
@@ -112,7 +115,7 @@ public final class ConversationCompactor {
         if (!(args instanceof ObjectNode object)) return call;
         ObjectNode copy = object.deepCopy();
         boolean changed = omitContents(copy);
-        if (copy.get("files") instanceof tools.jackson.databind.node.ArrayNode files) {
+        if (copy.get("files") instanceof ArrayNode files) {
             for (JsonNode file : files) if (file instanceof ObjectNode entry) changed |= omitContents(entry);
         }
         if (!changed) return call;

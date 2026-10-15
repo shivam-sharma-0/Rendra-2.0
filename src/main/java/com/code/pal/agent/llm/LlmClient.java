@@ -79,7 +79,7 @@ public interface LlmClient {
      * {@code extraContent}: provider data that must travel back with the call on the next request, e.g.
      * Gemini's thought_signature ({@code extra_content.google.thought_signature}); null for most providers.
      */
-    record ToolCall(String id, String name, String arguments, java.util.Map<String, Object> extraContent) {
+    record ToolCall(String id, String name, String arguments, Map<String, Object> extraContent) {
         public ToolCall(String id, String name, String arguments) {
             this(id, name, arguments, null);
         }

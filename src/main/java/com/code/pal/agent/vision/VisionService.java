@@ -33,6 +33,12 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import com.code.pal.agent.lease.LeaseLostException;
+import com.code.pal.agent.lease.RunFence;
+import com.code.pal.agent.lease.TrustedOperationPendingException;
+import com.code.pal.agent.llm.LlmAccountingException;
+import com.code.pal.agent.llm.LlmHttpException;
+import java.util.concurrent.ExecutionException;
 
 /**
  * Turns images the user attached (screenshots, mock-ups, sketches) into a written design brief, so the
@@ -70,23 +76,26 @@ public class VisionService {
     }
 
     /** {@code brief} is null when the file is not an image or no model could read it ({@code note} says why). */
-    public record Brief(String path, String brief, String note) {}
+    public record Brief(String path, String brief, String note) {
+    }
 
     public List<Brief> describe(UUID projectId, List<String> paths, String userRequest) {
         requireRunning();
-        if (paths.isEmpty()) return List.of();
+        if (paths.isEmpty())
+            return List.of();
         // Images are read on their own threads: carry the run's Stop signal and call context over to them.
         LlmCallContext context = LlmCallContext.current();
-        var fence=com.code.pal.agent.lease.RunFence.current();
-        RunCancellation cancellation = RunCancellation.current()==RunCancellation.NONE
-                ? new RunCancellation(context.runId()==null ? UUID.randomUUID() : context.runId()) : RunCancellation.current();
+        var fence = RunFence.current();
+        RunCancellation cancellation = RunCancellation.current() == RunCancellation.NONE
+                ? new RunCancellation(context.runId() == null ? UUID.randomUUID() : context.runId())
+                : RunCancellation.current();
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<Brief>> pending = new ArrayList<>();
             for (String path : paths) {
                 pending.add(pool.submit(() -> {
-                    try (var generation=com.code.pal.agent.lease.RunFence.bind(fence);
-                         RunCancellation.Registration stop = RunCancellation.bind(cancellation);
-                         LlmCallContext.Scope call = LlmCallContext.bind(context)) {
+                    try (var generation = RunFence.bind(fence);
+                            RunCancellation.Registration stop = RunCancellation.bind(cancellation);
+                            LlmCallContext.Scope call = LlmCallContext.bind(context)) {
                         return describeOne(projectId, path, userRequest);
                     }
                 }));
@@ -95,21 +104,28 @@ public class VisionService {
             for (int i = 0; i < pending.size(); i++) {
                 try {
                     briefs.add(pending.get(i).get());
-                } catch (java.util.concurrent.ExecutionException error) {
-                    if (error.getCause() instanceof com.code.pal.agent.lease.TrustedOperationPendingException || error.getCause() instanceof com.code.pal.agent.lease.LeaseLostException || error.getCause() instanceof LlmCancelledException || error.getCause() instanceof LlmQuotaExceededException
-                            || error.getCause() instanceof com.code.pal.agent.llm.LlmAccountingException) {
-                        cancellation.cancel();pending.forEach(future->future.cancel(true));
-                        throw (RuntimeException)error.getCause();
+                } catch (ExecutionException error) {
+                    if (error.getCause() instanceof TrustedOperationPendingException
+                            || error.getCause() instanceof LeaseLostException
+                            || error.getCause() instanceof LlmCancelledException
+                            || error.getCause() instanceof LlmQuotaExceededException
+                            || error.getCause() instanceof LlmAccountingException) {
+                        cancellation.cancel();
+                        pending.forEach(future -> future.cancel(true));
+                        throw (RuntimeException) error.getCause();
                     }
                     briefs.add(new Brief(paths.get(i), null, "could not be read: " + error.getCause().getMessage()));
                 } catch (InterruptedException interrupted) {
-                    cancellation.cancel();pending.forEach(future->future.cancel(true));Thread.currentThread().interrupt();
+                    cancellation.cancel();
+                    pending.forEach(future -> future.cancel(true));
+                    Thread.currentThread().interrupt();
                     throw new LlmCancelledException();
                 } catch (Exception error) {
                     briefs.add(new Brief(paths.get(i), null, "could not be read: " + error.getMessage()));
                 }
             }
-            if(cancellation.isCancelled()) throw new LlmCancelledException();
+            if (cancellation.isCancelled())
+                throw new LlmCancelledException();
             return briefs;
         }
     }
@@ -137,7 +153,8 @@ public class VisionService {
         } catch (RuntimeException unreadable) {
             return new Brief(path, null, "could not be read");
         }
-        if (image == null) return new Brief(path, null, "not an image the vision model can read; use readFile if it is text");
+        if (image == null)
+            return new Brief(path, null, "not an image the vision model can read; use readFile if it is text");
         requireRunning();
         String prompt = PROMPT.formatted(userRequest == null ? "" : userRequest.strip());
         for (AgentProperties.ModelSelection model : properties.visionModels()) {
@@ -154,20 +171,20 @@ public class VisionService {
                             result.content().length(), (System.nanoTime() - started) / 1_000_000);
                     return new Brief(path, result.content(), null);
                 }
-            } catch (com.code.pal.agent.lease.TrustedOperationPendingException pending) {
+            } catch (TrustedOperationPendingException pending) {
                 throw pending;
-            } catch (com.code.pal.agent.lease.LeaseLostException lost) {
+            } catch (LeaseLostException lost) {
                 throw lost;
             } catch (LlmCancelledException stopped) {
-                throw stopped;   // the run was stopped: not this model's fault
+                throw stopped; // the run was stopped: not this model's fault
             } catch (LlmQuotaExceededException quota) {
                 throw quota;
-            } catch (com.code.pal.agent.llm.LlmAccountingException accounting) {
+            } catch (LlmAccountingException accounting) {
                 throw accounting;
             } catch (RuntimeException failure) {
                 log.warn("vision_model_failed model={} reason={}", model.model(), failure.getMessage());
                 // A model this account cannot use is set aside for long, not just a moment.
-                if (failure instanceof com.code.pal.agent.llm.LlmHttpException http && http.modelUnavailable()) {
+                if (failure instanceof LlmHttpException http && http.modelUnavailable()) {
                     properties.markModelUnavailable(model, properties.getLlm().getModelUnavailableCooldownMs());
                     continue;
                 }
@@ -177,7 +194,10 @@ public class VisionService {
         return new Brief(path, null, "no vision model could read this image");
     }
 
-    private static void requireRunning() { if(RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted()) throw new LlmCancelledException(); }
+    private static void requireRunning() {
+        if (RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted())
+            throw new LlmCancelledException();
+    }
 
     /** A JPEG data URL small enough to send inline, or null when the bytes are not a readable image. */
     static String dataUrl(byte[] bytes) {
@@ -187,11 +207,13 @@ public class VisionService {
         } catch (IOException | RuntimeException unreadable) {
             return null;
         }
-        if (source == null) return null;   // not an image, or a format ImageIO cannot decode (e.g. WebP)
+        if (source == null)
+            return null; // not an image, or a format ImageIO cannot decode (e.g. WebP)
         double scale = Math.min(1.0, (double) MAX_SIDE / Math.max(source.getWidth(), source.getHeight()));
         for (int attempt = 0; attempt < 6; attempt++) {
             String encoded = Base64.getEncoder().encodeToString(jpeg(source, scale, 0.85f));
-            if (encoded.length() <= MAX_ENCODED) return "data:image/jpeg;base64," + encoded;
+            if (encoded.length() <= MAX_ENCODED)
+                return "data:image/jpeg;base64," + encoded;
             scale *= 0.75;
         }
         return null;
@@ -204,7 +226,7 @@ public class VisionService {
         Graphics2D graphics = target.createGraphics();
         try {
             graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-            graphics.setColor(Color.WHITE);   // transparent areas become white, as on a page
+            graphics.setColor(Color.WHITE); // transparent areas become white, as on a page
             graphics.fillRect(0, 0, width, height);
             graphics.drawImage(source, 0, 0, width, height, null);
         } finally {

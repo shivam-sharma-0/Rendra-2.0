@@ -8,6 +8,10 @@ import java.nio.file.*;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.locks.ReentrantLock;
+import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.contract.ContractStore;
+import java.util.Locale;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /** An OS file lock survives a DB connection loss during filesystem I/O. Every claimant uses the same
  * trusted shared workspace lock directory, which is never mounted in generated containers. Do not
@@ -17,13 +21,13 @@ import java.util.concurrent.locks.ReentrantLock;
 public class ProjectMutationLocks {
     private static final ConcurrentMap<Path,ReentrantLock> LOCAL=new ConcurrentHashMap<>();
     private final Path directory;
-    public ProjectMutationLocks(WorkspaceStorage storage) { this(storage,new com.code.pal.agent.config.AgentProperties()); }
-    @org.springframework.beans.factory.annotation.Autowired
-    public ProjectMutationLocks(WorkspaceStorage storage,com.code.pal.agent.config.AgentProperties props) {
+    public ProjectMutationLocks(WorkspaceStorage storage) { this(storage,new AgentProperties()); }
+    @Autowired
+    public ProjectMutationLocks(WorkspaceStorage storage,AgentProperties props) {
         String configured=props.getMutationLockPath();
         if(configured!=null && !configured.isBlank())directory=Path.of(configured).toAbsolutePath().normalize();
         else if(storage.base().toString().startsWith("\\\\")) {
-            String namespace=com.code.pal.agent.contract.ContractStore.hash(storage.base().toString().toLowerCase(java.util.Locale.ROOT));
+            String namespace=ContractStore.hash(storage.base().toString().toLowerCase(Locale.ROOT));
             directory=Path.of(System.getProperty("java.io.tmpdir"),"codepal-mutation-locks",namespace).toAbsolutePath().normalize();
         }else directory=storage.base().resolve(".project-mutation-locks");
         if(directory.toString().startsWith("\\\\"))throw new IllegalArgumentException("Mutation lock directory must be host-local; UNC file locks are unsupported");

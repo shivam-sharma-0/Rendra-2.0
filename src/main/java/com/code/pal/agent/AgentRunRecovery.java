@@ -23,6 +23,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.concurrent.TimeUnit;
+import com.code.pal.agent.change.PromotionRecoveryPendingException;
 
 /** Recovers queued deliveries lost from Redis and stops runs abandoned by a crashed worker. */
 @Slf4j
@@ -130,7 +131,7 @@ public class AgentRunRecovery {
         try {
             restored=changeSets.recoverPromotion(run);
             if(restored) sites.buildLater(run.getProjectId());
-        } catch(com.code.pal.agent.change.PromotionRecoveryPendingException pending) {
+        } catch(PromotionRecoveryPendingException pending) {
             try{runs.flagSaveRecovery(run.getId());}catch(RuntimeException unavailable){log.warn("save_recovery_status_deferred runId={}",run.getId());}
             log.warn("promotion_recovery_pending runId={}",run.getId());return;
         }

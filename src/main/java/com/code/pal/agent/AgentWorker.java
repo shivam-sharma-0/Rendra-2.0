@@ -17,6 +17,9 @@ import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import com.code.pal.agent.lease.ProjectLeaseService;
+import com.code.pal.agent.lease.RunFence;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Pulls runs off the queue and executes them. A fixed pool of consumer threads caps how many runs
@@ -37,9 +40,9 @@ public class AgentWorker {
     private final AgentRuntime runtime;
     private final SandboxPolicy sandboxPolicy;
 
-    private com.code.pal.agent.lease.ProjectLeaseService leases;
-    @org.springframework.beans.factory.annotation.Autowired
-    void useLeases(com.code.pal.agent.lease.ProjectLeaseService leases) { this.leases=leases; }
+    private ProjectLeaseService leases;
+    @Autowired
+    void useLeases(ProjectLeaseService leases) { this.leases=leases; }
 
     private volatile boolean running = true;
     private ExecutorService pool;
@@ -88,7 +91,7 @@ public class AgentWorker {
             queue.parkBehindLock(run.getProjectId(), runId);
             return;
         }
-        com.code.pal.agent.lease.RunFence fence=null;
+        RunFence fence=null;
         try {
             // A run can sit on the queue more than once (recovery requeue, park release). Another worker
             // may have executed it between our first read and taking the lock, so read it again.
@@ -98,7 +101,7 @@ public class AgentWorker {
                 fence=leases.claim(current.getProjectId(),runId,lockOwner);
                 if(fence==null) return; // durable QUEUED intent is retried by the bounded recovery sweep
             }
-            try(var owned=com.code.pal.agent.lease.RunFence.bind(fence)) { runtime.run(current); }
+            try(var owned=RunFence.bind(fence)) { runtime.run(current); }
         } finally {
             try { if(fence!=null) leases.release(fence); }
             finally { queue.unlockAndReleaseParked(run.getProjectId(), lockOwner); }

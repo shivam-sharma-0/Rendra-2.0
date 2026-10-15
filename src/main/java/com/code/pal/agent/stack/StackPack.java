@@ -5,6 +5,7 @@ import com.code.pal.agent.workspace.ProjectFiles;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.Map;
 
 /**
  * Everything the backend needs to know about one kind of project (static site, Node/Vite app, and
@@ -75,7 +76,7 @@ public interface StackPack {
      * Makes the project's build-time variables visible to a build of the copy at {@code root}. Never
      * applied to the project itself, so the values do not become project files.
      */
-    default void applyBuildVariables(ProjectFiles files, UUID projectId, String root, java.util.Map<String, String> variables) {
+    default void applyBuildVariables(ProjectFiles files, UUID projectId, String root, Map<String, String> variables) {
     }
 
     /**

@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.web.bind.annotation.PathVariable;
 
 /** Stores user attachments in the project's {@code uploads/} folder, within the project quota. */
 @RestController
@@ -29,7 +30,7 @@ public class ProjectAttachmentController {
 
     @PostMapping(consumes = "multipart/form-data")
     public List<AttachmentResponse> upload(@AuthenticationPrincipal AuthPrincipal principal,
-                                           @org.springframework.web.bind.annotation.PathVariable UUID projectId,
+                                           @PathVariable UUID projectId,
                                            @RequestPart("files") List<MultipartFile> uploads) {
         projects.requireCanEdit(principal.userId(), projectId);
         return uploads.stream().map(file -> store(projectId, file)).toList();

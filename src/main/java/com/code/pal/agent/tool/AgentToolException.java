@@ -1,12 +1,14 @@
 package com.code.pal.agent.tool;
 
+import java.util.Map;
+
 /** Expected, structured tool failure that the model may correct and retry. */
 public final class AgentToolException extends RuntimeException {
     private final String code;
     private final Object details;
 
     public AgentToolException(String code, String message) {
-        this(code, message, java.util.Map.of());
+        this(code, message, Map.of());
     }
 
     public AgentToolException(String code, String message, Object details) {

@@ -4,6 +4,7 @@ import com.code.pal.agent.lease.ProjectLeaseService;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import java.util.*;
+import com.code.pal.agent.contract.UnitWriteScope;
 
 /** Production file boundary: all writes serialize against project ownership takeover. */
 @Component @Primary
@@ -19,9 +20,9 @@ public class FencedProjectFiles implements ProjectFiles {
     public boolean regularFile(UUID p,String r,String f){return files.regularFile(p,r,f);}
     public long size(UUID p,String r,String f){return files.size(p,r,f);}
     public String version(UUID p,String r,String f){return files.version(p,r,f);}
-    public void writeText(UUID p,String r,String f,String c){com.code.pal.agent.contract.UnitWriteScope.rejectWorkerIo();leases.guarded(p,()->files.writeText(p,r,f,c));}
-    public void writeBytes(UUID p,String f,byte[]c){com.code.pal.agent.contract.UnitWriteScope.rejectWorkerIo();leases.guarded(p,()->files.writeBytes(p,f,c));}
-    public void delete(UUID p,String r,String f){com.code.pal.agent.contract.UnitWriteScope.rejectWorkerIo();leases.guarded(p,()->files.delete(p,r,f));}
-    public void move(UUID p,String r,String a,String b){com.code.pal.agent.contract.UnitWriteScope.rejectWorkerIo();leases.guarded(p,()->files.move(p,r,a,b));}
-    public void copyFile(UUID p,String r,String a,String t,String b){com.code.pal.agent.contract.UnitWriteScope.rejectWorkerIo();leases.guarded(p,()->files.copyFile(p,r,a,t,b));}
+    public void writeText(UUID p,String r,String f,String c){UnitWriteScope.rejectWorkerIo();leases.guarded(p,()->files.writeText(p,r,f,c));}
+    public void writeBytes(UUID p,String f,byte[]c){UnitWriteScope.rejectWorkerIo();leases.guarded(p,()->files.writeBytes(p,f,c));}
+    public void delete(UUID p,String r,String f){UnitWriteScope.rejectWorkerIo();leases.guarded(p,()->files.delete(p,r,f));}
+    public void move(UUID p,String r,String a,String b){UnitWriteScope.rejectWorkerIo();leases.guarded(p,()->files.move(p,r,a,b));}
+    public void copyFile(UUID p,String r,String a,String t,String b){UnitWriteScope.rejectWorkerIo();leases.guarded(p,()->files.copyFile(p,r,a,t,b));}
 }

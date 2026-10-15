@@ -15,6 +15,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import com.code.pal.agent.lease.RunFence;
+import com.code.pal.agent.llm.LlmCallContext;
+import com.code.pal.agent.runtime.RunCancellation;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Lets the user watch a BUILD run take shape: once the agent has stopped writing for a moment, its
@@ -49,7 +53,7 @@ public class DraftPreviewService {
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(
             Thread.ofVirtual().name("draft-preview").factory());
     /** Builds run here, so one project's build never holds up another's timer. */
-    private final java.util.concurrent.ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
 
     public DraftPreviewService(SiteBuildService sites, ProjectFiles files, SandboxPort sandbox,
                                AgentProperties properties, DraftListener listener) {
@@ -107,9 +111,9 @@ public class DraftPreviewService {
     }
 
     private void build(Draft draft) {
-        try(var fence=com.code.pal.agent.lease.RunFence.bind(draft.fence);
-            var stop=com.code.pal.agent.runtime.RunCancellation.bind(draft.cancellation);
-            var context=com.code.pal.agent.llm.LlmCallContext.bind(draft.context)) { buildOwned(draft); }
+        try(var fence=RunFence.bind(draft.fence);
+            var stop=RunCancellation.bind(draft.cancellation);
+            var context=LlmCallContext.bind(draft.context)) { buildOwned(draft); }
     }
 
     private void buildOwned(Draft draft) {
@@ -202,9 +206,9 @@ public class DraftPreviewService {
     }
 
     private static final class Draft {
-        final com.code.pal.agent.lease.RunFence fence=com.code.pal.agent.lease.RunFence.current();
-        final com.code.pal.agent.runtime.RunCancellation cancellation=com.code.pal.agent.runtime.RunCancellation.current();
-        final com.code.pal.agent.llm.LlmCallContext context=com.code.pal.agent.llm.LlmCallContext.current();
+        final RunFence fence=RunFence.current();
+        final RunCancellation cancellation=RunCancellation.current();
+        final LlmCallContext context=LlmCallContext.current();
         final UUID projectId;
         final UUID runId;
         final String stagedRoot;

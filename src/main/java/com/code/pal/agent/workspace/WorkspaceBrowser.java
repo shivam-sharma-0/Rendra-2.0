@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Objects;
 
 /**
  * Read-only browser over a project's files, backing the code/files panel in the UI. Traversal is
@@ -56,7 +57,7 @@ public class WorkspaceBrowser {
         }
         int[] budget = {MAX_NODES};
         return nodes.values().stream().filter(node -> !node.path.contains("/"))
-                .sorted(Node.ORDER).map(node -> toFileNode(node, budget)).filter(java.util.Objects::nonNull).toList();
+                .sorted(Node.ORDER).map(node -> toFileNode(node, budget)).filter(Objects::nonNull).toList();
     }
 
     /** Read a workspace file's text content (capped, binary-guarded, path-validated). */
@@ -76,7 +77,7 @@ public class WorkspaceBrowser {
         budget[0]--;
         if (!node.directory) return new FileNode(node.name, node.path, false, node.size, null);
         List<FileNode> children = node.children.values().stream().sorted(Node.ORDER)
-                .map(child -> toFileNode(child, budget)).filter(java.util.Objects::nonNull).toList();
+                .map(child -> toFileNode(child, budget)).filter(Objects::nonNull).toList();
         return new FileNode(node.name, node.path, true, 0, children);
     }
 

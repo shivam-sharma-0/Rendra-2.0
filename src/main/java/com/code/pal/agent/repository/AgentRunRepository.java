@@ -10,6 +10,10 @@ import org.springframework.data.repository.query.Param;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.Collection;
+import java.util.Optional;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 public interface AgentRunRepository extends JpaRepository<AgentRun, UUID> {
 
@@ -31,21 +35,21 @@ public interface AgentRunRepository extends JpaRepository<AgentRun, UUID> {
     int touchHeartbeat(@Param("id") UUID id, @Param("now") Instant now);
 
     /** Parallel reply accounting touches counters only; never re-saves status, liveness or save state. */
-    @org.springframework.transaction.annotation.Transactional
+    @Transactional
     @Modifying
     @Query("update AgentRun r set r.promptTokens=r.promptTokens+:prompt,r.completionTokens=r.completionTokens+:completion where r.id=:id")
     int addReportedTokens(@Param("id") UUID id,@Param("prompt") int prompt,@Param("completion") int completion);
 
-    java.util.Optional<AgentRun> findByIdAndProjectId(UUID id, UUID projectId);
-    java.util.Optional<AgentRun> findFirstByProjectIdAndMessageIdOrderByCreatedAtAsc(UUID projectId, String messageId);
-    java.util.Optional<AgentRun> findByProjectIdAndRequestMessageId(UUID projectId, String requestMessageId);
+    Optional<AgentRun> findByIdAndProjectId(UUID id, UUID projectId);
+    Optional<AgentRun> findFirstByProjectIdAndMessageIdOrderByCreatedAtAsc(UUID projectId, String messageId);
+    Optional<AgentRun> findByProjectIdAndRequestMessageId(UUID projectId, String requestMessageId);
 
     @Modifying
     @Query("update AgentRun r set r.retrySourceRunId=:source where r.id=:id and r.projectId=:project "
             +"and r.retrySourceRunId is null and r.status=com.code.pal.agent.domain.RunStatus.QUEUED")
     int bindRetrySource(@Param("id") UUID id,@Param("project") UUID project,@Param("source") UUID source);
 
-    @org.springframework.transaction.annotation.Transactional
+    @Transactional
     @Modifying
     @Query("update AgentRun r set r.cancelRequestedBy = :actor, r.cancelRequestedAt = :now "
             + "where r.id = :id and r.projectId = :projectId and r.cancelRequestedAt is null "
@@ -53,33 +57,33 @@ public interface AgentRunRepository extends JpaRepository<AgentRun, UUID> {
     int recordCancellation(@Param("id") UUID id, @Param("projectId") UUID projectId,
                            @Param("actor") Long actor, @Param("now") Instant now);
 
-    @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    @Transactional(propagation=Propagation.REQUIRES_NEW)
     @Modifying
     @Query("update AgentRun r set r.status=com.code.pal.agent.domain.RunStatus.COMMITTING,r.commitStartedAt=:now "
             + "where r.id=:id and r.projectId=:projectId and r.status=com.code.pal.agent.domain.RunStatus.RUNNING and r.cancelRequestedAt is null")
     int beginCommit(@Param("id") UUID id,@Param("projectId") UUID projectId,@Param("now") Instant now);
 
-    @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    @Transactional(propagation=Propagation.REQUIRES_NEW)
     @Modifying
     @Query("update AgentRun r set r.codeSavedAt=:now,r.previewStatus='NOT_REQUESTED' where r.id=:id and r.status=com.code.pal.agent.domain.RunStatus.COMMITTING")
     int recordCodeSaved(@Param("id") UUID id,@Param("now") Instant now);
 
-    @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    @Transactional(propagation=Propagation.REQUIRES_NEW)
     @Modifying
     @Query("update AgentRun r set r.previewStatus=:state where r.id=:id and r.codeSavedAt is not null")
     int recordPreviewStatus(@Param("id") UUID id,@Param("state") String state);
 
-    @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    @Transactional(propagation=Propagation.REQUIRES_NEW)
     @Modifying
     @Query("update AgentRun r set r.snapshotRef=:snapshot where r.id=:id and r.status=com.code.pal.agent.domain.RunStatus.COMMITTING")
     int recordSnapshot(@Param("id") UUID id,@Param("snapshot") String snapshot);
 
-    @org.springframework.transaction.annotation.Transactional
+    @Transactional
     @Modifying
     @Query("update AgentRun r set r.error='Requeued after stale queue delay',r.updatedAt=:now where r.id=:id and r.status=com.code.pal.agent.domain.RunStatus.QUEUED")
     int markRequeued(@Param("id") UUID id,@Param("now") Instant now);
 
-    @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    @Transactional(propagation=Propagation.REQUIRES_NEW)
     @Modifying
     @Query("update AgentRun r set r.saveRecoveryRequired=true where r.id=:id and r.status=com.code.pal.agent.domain.RunStatus.COMMITTING and r.codeSavedAt is null")
     int flagSaveRecovery(@Param("id") UUID id);
@@ -87,7 +91,7 @@ public interface AgentRunRepository extends JpaRepository<AgentRun, UUID> {
     /** Most-recent runs for a project, newest first â€” capped so the timeline list can't grow unbounded. */
     List<AgentRun> findTop100ByProjectIdOrderByCreatedAtDesc(UUID projectId);
 
-    java.util.Optional<AgentRun> findTopByProjectIdOrderByCreatedAtDesc(UUID projectId);
+    Optional<AgentRun> findTopByProjectIdOrderByCreatedAtDesc(UUID projectId);
 
     /* ── Analytics aggregates ────────────────────────────────────────────────── */
 
@@ -100,7 +104,7 @@ public interface AgentRunRepository extends JpaRepository<AgentRun, UUID> {
 
     /* ── Per-user usage limits ───────────────────────────────────────────────── */
 
-    long countByUserIdAndStatusIn(Long userId, java.util.Collection<RunStatus> statuses);
+    long countByUserIdAndStatusIn(Long userId, Collection<RunStatus> statuses);
 
     @Query("select coalesce(sum(r.promptTokens + r.completionTokens), 0) from AgentRun r "
             + "where r.userId = :userId and r.createdAt >= :since")

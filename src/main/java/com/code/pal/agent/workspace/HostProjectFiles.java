@@ -21,6 +21,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.nio.file.AccessDeniedException;
 
 /**
  * {@link ProjectFiles} on the backend's own filesystem view of the project directory
@@ -290,7 +291,7 @@ public class HostProjectFiles implements ProjectFiles {
                     Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
                 }
                 return;
-            } catch (java.nio.file.AccessDeniedException busy) {
+            } catch (AccessDeniedException busy) {
                 if (attempt >= 5) throw busy;
                 try {
                     Thread.sleep(25L * attempt);

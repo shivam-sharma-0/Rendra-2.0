@@ -35,6 +35,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.Collections;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Runs a MERN project's API server for its preview and published site.
@@ -81,7 +83,7 @@ public class AppServerService {
     private final Map<UUID, Status> statuses = new ConcurrentHashMap<>();
     private final ExecutorService background = Executors.newVirtualThreadPerTaskExecutor();
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public AppServerService(StackPacks stacks, ProjectFiles files, SandboxPort sandbox, DependencyService dependencies,
                             GeneratedDatabaseService databases, AgentProperties properties, ObjectMapper objectMapper) {
         this(stacks, files, sandbox, dependencies, databases, properties, objectMapper, Clock.systemUTC());
@@ -178,9 +180,9 @@ public class AppServerService {
         }
         HttpRequest.Builder forward = HttpRequest.newBuilder(URI.create(target)).timeout(Duration.ofSeconds(30))
                 .method(request.getMethod(), body.length == 0 ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
-        for (String name : java.util.Collections.list(request.getHeaderNames())) {
+        for (String name : Collections.list(request.getHeaderNames())) {
             if (HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT)) || name.toLowerCase(Locale.ROOT).startsWith("x-codepal-")) continue;
-            for (String value : java.util.Collections.list(request.getHeaders(name))) {
+            for (String value : Collections.list(request.getHeaders(name))) {
                 try {
                     forward.header(name, value);
                 } catch (IllegalArgumentException restricted) {

@@ -9,6 +9,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import com.code.pal.project.capability.BuildDecisions;
+import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Writes a {@link Starter}'s tested setup files into a new project, so the model never hand-writes the
@@ -20,11 +23,11 @@ public class StartProjectTool implements AgentTool {
     private static final List<String> MANIFESTS = List.of("package.json", "client/package.json", "server/package.json");
 
     private final ChangeSetService changeSets;
-    private com.code.pal.project.capability.BuildDecisions buildDecisions;
+    private BuildDecisions buildDecisions;
 
-    @org.springframework.beans.factory.annotation.Autowired
-    public void setBuildDecisions(com.code.pal.project.capability.BuildDecisions decisions) {
-        this.buildDecisions = java.util.Objects.requireNonNull(decisions);
+    @Autowired
+    public void setBuildDecisions(BuildDecisions decisions) {
+        this.buildDecisions = Objects.requireNonNull(decisions);
     }
 
     @Override

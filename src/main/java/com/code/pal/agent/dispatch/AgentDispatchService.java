@@ -16,32 +16,43 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import com.code.pal.project.domain.ProjectType;
+import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 /** At-least-once queue delivery; project/run claims prevent duplicate expensive execution. */
-@Service @RequiredArgsConstructor @Slf4j
+@Service
+@RequiredArgsConstructor
+@Slf4j
 public class AgentDispatchService {
     private final AgentDispatchRepository outbox;
     private final AgentRunRepository runs;
     private final AgentJobQueue queue;
     private final AgentEvents events;
-    private org.springframework.jdbc.core.JdbcTemplate jdbc;
-    @org.springframework.beans.factory.annotation.Autowired
-    public void setProjectionStore(org.springframework.jdbc.core.JdbcTemplate jdbc) {
-        this.jdbc = java.util.Objects.requireNonNull(jdbc);
+    private JdbcTemplate jdbc;
+
+    @Autowired
+    public void setProjectionStore(JdbcTemplate jdbc) {
+        this.jdbc = Objects.requireNonNull(jdbc);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void dispatch(UUID runId) {
         var delivery = outbox.lockByRunId(runId).orElse(null);
-        if (delivery == null || delivery.getDispatchedAt() != null) return;
+        if (delivery == null || delivery.getDispatchedAt() != null)
+            return;
         var run = runs.findById(runId).orElseThrow(() -> new IllegalStateException("Outbox run missing"));
-        if (jdbc != null && run.getMode() == com.code.pal.project.domain.ProjectType.BUILD
-                && Boolean.TRUE.equals(jdbc.queryForObject("select exists(select 1 from requirement_sessions s join requirement_projections p on p.id=s.projection_id where s.project_id=? and p.state='PENDING')",
-                Boolean.class, run.getProjectId()))) return;
+        if (jdbc != null && run.getMode() == ProjectType.BUILD
+                && Boolean.TRUE.equals(jdbc.queryForObject(
+                        "select exists(select 1 from requirement_sessions s join requirement_projections p on p.id=s.projection_id where s.project_id=? and p.state='PENDING')",
+                        Boolean.class, run.getProjectId())))
+            return;
         if (run.getStatus() == RunStatus.QUEUED) {
             queue.enqueue(runId); // Failure rolls back; polling can retry after restart.
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override public void afterCommit() {
+                @Override
+                public void afterCommit() {
                     try {
                         events.emit(run, AgentStepType.STATUS, "Queued", Map.of("status", RunStatus.QUEUED.name()));
                     } catch (RuntimeException eventFailure) {

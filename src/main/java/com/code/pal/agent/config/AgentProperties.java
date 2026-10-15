@@ -17,6 +17,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import com.code.pal.agent.starter.Starter;
+import java.util.Set;
+import org.springframework.context.EnvironmentAware;
+import org.springframework.core.env.Environment;
 
 /** Configuration for agent execution and its provider connection. */
 @Slf4j
@@ -24,7 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @ConfigurationProperties(prefix = "app.agent")
 @Getter
 @Setter
-public class AgentProperties implements org.springframework.context.EnvironmentAware {
+public class AgentProperties implements EnvironmentAware {
     /** MERN requires coordinator-bound acceptance even when optional structured routes are off. */
     private boolean fullStackContracts = true;
 
@@ -34,10 +38,10 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
      */
     @lombok.Getter(lombok.AccessLevel.NONE)
     @lombok.Setter(lombok.AccessLevel.NONE)
-    private org.springframework.core.env.Environment environment;
+    private Environment environment;
 
     @Override
-    public void setEnvironment(org.springframework.core.env.Environment environment) {
+    public void setEnvironment(Environment environment) {
         this.environment = environment;
     }
 
@@ -47,19 +51,30 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     private final Limits limits = new Limits();
     /** Application request limits for shipped routes; unknown routes require explicit configuration. */
     private Map<String, AccountingBound> accountingBounds = defaultAccountingBounds();
-    private static Map<String,AccountingBound> defaultAccountingBounds() {
-        var bounds=new LinkedHashMap<String,AccountingBound>();
-        for(String model:List.of("mistral:codestral-latest","mistral:open-mistral-nemo","mistral:ministral-8b-latest","nvidia:nvidia/nemotron-3-super-120b-a12b","nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning","nvidia:meta/llama-3.2-11b-vision-instruct")) {
-            var b=new AccountingBound();b.setInputTokens(65536);b.setOutputTokens(8192);b.setImages(model.contains("omni")||model.contains("vision"));
-            b.setEvidence("Shipped application caps, 2026-10-14; provider context >=128k; see ACCOUNTING_OPERATIONS.md");bounds.put(model,b);
-        }return bounds;
+
+    private static Map<String, AccountingBound> defaultAccountingBounds() {
+        var bounds = new LinkedHashMap<String, AccountingBound>();
+        for (String model : List.of("mistral:codestral-latest", "mistral:open-mistral-nemo",
+                "mistral:ministral-8b-latest", "nvidia:nvidia/nemotron-3-super-120b-a12b",
+                "nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "nvidia:meta/llama-3.2-11b-vision-instruct")) {
+            var b = new AccountingBound();
+            b.setInputTokens(65536);
+            b.setOutputTokens(8192);
+            b.setImages(model.contains("omni") || model.contains("vision"));
+            b.setEvidence(
+                    "Shipped application caps, 2026-10-14; provider context >=128k; see ACCOUNTING_OPERATIONS.md");
+            bounds.put(model, b);
+        }
+        return bounds;
     }
+
     private long smallRunTokenBudget = 500_000;
     private long mediumRunTokenBudget = 1_000_000;
     private long largeRunTokenBudget = 1_500_000;
     private long accountingRecoveryAgeMs = 300_000;
 
-    @Getter @Setter
+    @Getter
+    @Setter
     public static class AccountingBound {
         /** Provider-enforced ceiling including messages, tools, images and hidden input framing. */
         private long inputTokens;
@@ -69,6 +84,7 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
         /** Operator's verification reference; blank means unsupported. Never put credentials here. */
         private String evidence;
     }
+
     /** Provider-specific endpoints. The legacy {@code llm} block remains the compatibility fallback. */
     private Map<String, Provider> providers = new LinkedHashMap<>();
     private BillingMode billingMode = BillingMode.PAID;
@@ -79,7 +95,9 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     /** Upper bound on candidates inspected per routing decision. */
     private static final int MAX_ROUTING_PROBES = 16;
 
-    public enum BillingMode { FREE, PAID }
+    public enum BillingMode {
+        FREE, PAID
+    }
 
     /** Root directory holding one sub-folder per project's code. */
     private String workspaceBasePath = "./workspaces";
@@ -119,18 +137,26 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     /** Separate rollout switch; never enabled by merely enabling structured contracts. */
     private boolean parallelUnits = false;
     private final Scheduling scheduling = new Scheduling();
-    @Getter @Setter
+
+    @Getter
+    @Setter
     public static class Scheduling {
-        private boolean enabled=false;
-        private int globalConcurrency=4;
-        private int userConcurrency=2;
-        private int runConcurrency=2;
-        private long maxWaitMs=10000;
+        private boolean enabled = false;
+        private int globalConcurrency = 4;
+        private int userConcurrency = 2;
+        private int runConcurrency = 2;
+        private long maxWaitMs = 10000;
         /** Provider names mapped to an operator-verified shared account group and its concurrent-call cap. */
-        private Map<String,SchedulingPool> pools=new LinkedHashMap<>();
+        private Map<String, SchedulingPool> pools = new LinkedHashMap<>();
     }
-    @Getter @Setter
-    public static class SchedulingPool {private String account;private int concurrency;}
+
+    @Getter
+    @Setter
+    public static class SchedulingPool {
+        private String account;
+        private int concurrency;
+    }
+
     /** Maximum readonly calls from one model response to run at once. */
     private int toolConcurrency = 4;
     /** Coalesce model token deltas before broadcasting a live socket delta. */
@@ -179,11 +205,15 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
 
     @PostConstruct
     void decryptKeys() {
-        String masterKey = environment != null ? environment.getProperty("GATEWAY_MASTER_KEY") : System.getenv("GATEWAY_MASTER_KEY");
+        String masterKey = environment != null ? environment.getProperty("GATEWAY_MASTER_KEY")
+                : System.getenv("GATEWAY_MASTER_KEY");
         if (masterKey == null || masterKey.isBlank()) {
             int cleared = 0;
             for (Provider p : providers.values()) {
-                if (KeyVault.isEncrypted(p.getApiKey())) { p.setApiKey(""); cleared++; }
+                if (KeyVault.isEncrypted(p.getApiKey())) {
+                    p.setApiKey("");
+                    cleared++;
+                }
                 if (p.getApiKeys().stream().anyMatch(KeyVault::isEncrypted)) {
                     p.setApiKeys(p.getApiKeys().stream()
                             .map(k -> KeyVault.isEncrypted(k) ? "" : k)
@@ -222,7 +252,8 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
                 p.setApiKeys(decrypted);
             }
         }
-        if (count > 0) log.info("Decrypted {} API key(s)", count);
+        if (count > 0)
+            log.info("Decrypted {} API key(s)", count);
         sanitizeModelLists();
         reportRouting();
     }
@@ -238,16 +269,19 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     }
 
     private List<String> filterUsable(List<String> modelList) {
-        if (modelList == null || modelList.isEmpty()) return modelList;
+        if (modelList == null || modelList.isEmpty())
+            return modelList;
         List<String> filtered = modelList.stream().filter(m -> {
             int sep = m.indexOf(':');
-            if (sep <= 0) return true;
+            if (sep <= 0)
+                return true;
             String provider = m.substring(0, sep).toLowerCase(Locale.ROOT);
             Provider p = providers.get(provider);
             return p != null && !p.resolvedKeys().isEmpty();
         }).toList();
         int removed = modelList.size() - filtered.size();
-        if (removed > 0) log.warn("Removed {} model(s) with unconfigured providers from routing", removed);
+        if (removed > 0)
+            log.warn("Removed {} model(s) with unconfigured providers from routing", removed);
         return filtered;
     }
 
@@ -263,7 +297,8 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
         lists.put("PLAN", free ? models.getFreePlan() : models.getPlan());
         lists.put("VISION", models.getVision());
         return lists.entrySet().stream()
-                .filter(entry -> entry.getValue() == null || entry.getValue().stream().noneMatch(m -> m != null && !m.isBlank()))
+                .filter(entry -> entry.getValue() == null
+                        || entry.getValue().stream().noneMatch(m -> m != null && !m.isBlank()))
                 .map(Map.Entry::getKey).toList();
     }
 
@@ -355,7 +390,8 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
             if (!apiKeys.isEmpty()) {
                 return apiKeys.stream().filter(k -> k != null && !k.isBlank()).toList();
             }
-            if (apiKey != null && !apiKey.isBlank()) return List.of(apiKey);
+            if (apiKey != null && !apiKey.isBlank())
+                return List.of(apiKey);
             return List.of();
         }
     }
@@ -374,7 +410,7 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
         private String dockerCommand = "docker";
         /** Optional whitespace-separated arguments, e.g. {@code -e docker} when launched from Windows. */
         private String dockerCommandArgs = "";
-        private String image = com.code.pal.agent.starter.Starter.RUNTIME_IMAGE;
+        private String image = Starter.RUNTIME_IMAGE;
         /**
          * Docker network for project containers. "none" keeps generated code off the network while
          * it is validated; an existing container on another network is recreated (its volume stays).
@@ -476,15 +512,33 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
         private final AtomicInteger freeChatIndex = new AtomicInteger();
         private final AtomicInteger freePlanIndex = new AtomicInteger();
 
-        String nextBuild() { return roundRobin(build, buildIndex); }
-        String nextChat() { return roundRobin(chat, chatIndex); }
-        String nextPlan() { return roundRobin(plan, planIndex); }
-        String nextFreeBuild() { return roundRobin(freeBuild, freeBuildIndex); }
-        String nextFreeChat() { return roundRobin(freeChat, freeChatIndex); }
-        String nextFreePlan() { return roundRobin(freePlan, freePlanIndex); }
+        String nextBuild() {
+            return roundRobin(build, buildIndex);
+        }
+
+        String nextChat() {
+            return roundRobin(chat, chatIndex);
+        }
+
+        String nextPlan() {
+            return roundRobin(plan, planIndex);
+        }
+
+        String nextFreeBuild() {
+            return roundRobin(freeBuild, freeBuildIndex);
+        }
+
+        String nextFreeChat() {
+            return roundRobin(freeChat, freeChatIndex);
+        }
+
+        String nextFreePlan() {
+            return roundRobin(freePlan, freePlanIndex);
+        }
 
         private static String roundRobin(List<String> options, AtomicInteger index) {
-            if (options == null || options.isEmpty()) return null;
+            if (options == null || options.isEmpty())
+                return null;
             return options.get(Math.floorMod(index.getAndIncrement(), options.size()));
         }
     }
@@ -500,8 +554,10 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
         // mean the list was exhausted: probe a bounded number of entries instead.
         for (int probe = 0; probe < MAX_ROUTING_PROBES; probe++) {
             ModelSelection candidate = nextModelFor(mode);
-            if (first == null) first = candidate;
-            if (!coolingDown(candidate)) return candidate;
+            if (first == null)
+                first = candidate;
+            if (!coolingDown(candidate))
+                return candidate;
         }
         return first;
     }
@@ -513,26 +569,33 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
      */
     public ModelSelection preferredModel(ProjectType mode) {
         List<String> configured = switch (mode) {
-            case CHAT -> billingMode == BillingMode.FREE ? models.getFreeChat() : models.getChat();
-            case PLAN -> billingMode == BillingMode.FREE ? models.getFreePlan() : models.getPlan();
-            case BUILD -> billingMode == BillingMode.FREE ? models.getFreeBuild() : models.getBuild();
+        case CHAT -> billingMode == BillingMode.FREE ? models.getFreeChat() : models.getChat();
+        case PLAN -> billingMode == BillingMode.FREE ? models.getFreePlan() : models.getPlan();
+        case BUILD -> billingMode == BillingMode.FREE ? models.getFreeBuild() : models.getBuild();
         };
         List<ModelSelection> all = configured == null ? List.of()
                 : configured.stream().filter(entry -> entry != null && !entry.isBlank()).map(this::selection).toList();
-        if (all.isEmpty()) return modelFor(mode);
+        if (all.isEmpty())
+            return modelFor(mode);
         return all.stream().filter(this::available).findFirst().orElse(all.getFirst());
     }
 
     /** A run never reselects a route whose bounded provider attempt already failed. */
-    public ModelSelection untriedModel(ProjectType mode, java.util.Set<ModelSelection> failed) {
-        List<String> configured = switch(mode) {
-            case CHAT -> billingMode == BillingMode.FREE ? models.getFreeChat() : models.getChat();
-            case PLAN -> billingMode == BillingMode.FREE ? models.getFreePlan() : models.getPlan();
-            case BUILD -> billingMode == BillingMode.FREE ? models.getFreeBuild() : models.getBuild();
+    public ModelSelection untriedModel(ProjectType mode, Set<ModelSelection> failed) {
+        List<String> configured = switch (mode) {
+        case CHAT -> billingMode == BillingMode.FREE ? models.getFreeChat() : models.getChat();
+        case PLAN -> billingMode == BillingMode.FREE ? models.getFreePlan() : models.getPlan();
+        case BUILD -> billingMode == BillingMode.FREE ? models.getFreeBuild() : models.getBuild();
         };
-        var candidates=configured==null?List.<ModelSelection>of():configured.stream().filter(value->value!=null&&!value.isBlank()).map(this::selection).distinct().filter(value->!failed.contains(value)).toList();
-        if(configured==null || configured.stream().noneMatch(value->value!=null&&!value.isBlank())) {var fallback=modelFor(mode);return failed.contains(fallback)?null:fallback;}
-        return candidates.stream().filter(this::available).findFirst().orElse(candidates.isEmpty()?null:candidates.getFirst());
+        var candidates = configured == null ? List.<ModelSelection>of()
+                : configured.stream().filter(value -> value != null && !value.isBlank()).map(this::selection).distinct()
+                        .filter(value -> !failed.contains(value)).toList();
+        if (configured == null || configured.stream().noneMatch(value -> value != null && !value.isBlank())) {
+            var fallback = modelFor(mode);
+            return failed.contains(fallback) ? null : fallback;
+        }
+        return candidates.stream().filter(this::available).findFirst()
+                .orElse(candidates.isEmpty() ? null : candidates.getFirst());
     }
 
     /** False while the model is cooling down after a failure. */
@@ -548,18 +611,22 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     /** As {@link #markModelUnavailable(ModelSelection)}, for a failure that says how long it lasts. */
     public void markModelUnavailable(ModelSelection selection, long cooldownMs) {
         long cooldown = Math.max(0, cooldownMs);
-        if (selection == null || cooldown == 0) return;
+        if (selection == null || cooldown == 0)
+            return;
         unavailableUntil.put(routingKey(selection), System.nanoTime() + cooldown * 1_000_000);
     }
 
     public void markModelAvailable(ModelSelection selection) {
-        if (selection != null) unavailableUntil.remove(routingKey(selection));
+        if (selection != null)
+            unavailableUntil.remove(routingKey(selection));
     }
 
     private boolean coolingDown(ModelSelection selection) {
         Long until = unavailableUntil.get(routingKey(selection));
-        if (until == null) return false;
-        if (System.nanoTime() - until < 0) return true;
+        if (until == null)
+            return false;
+        if (System.nanoTime() - until < 0)
+            return true;
         unavailableUntil.remove(routingKey(selection), until);
         return false;
     }
@@ -571,22 +638,24 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     /** The vision models in preference order, skipping ones that failed recently (all of them if every one did). */
     public List<ModelSelection> visionModels() {
         List<ModelSelection> all = models.getVision() == null ? List.of()
-                : models.getVision().stream().filter(entry -> entry != null && !entry.isBlank()).map(this::selection).toList();
+                : models.getVision().stream().filter(entry -> entry != null && !entry.isBlank()).map(this::selection)
+                        .toList();
         List<ModelSelection> available = all.stream().filter(selection -> !coolingDown(selection)).toList();
         return available.isEmpty() ? all : available;
     }
 
     private ModelSelection nextModelFor(ProjectType mode) {
         String configured = switch (mode) {
-            case CHAT -> billingMode == BillingMode.FREE ? models.nextFreeChat() : models.nextChat();
-            case PLAN -> billingMode == BillingMode.FREE ? models.nextFreePlan() : models.nextPlan();
-            case BUILD -> billingMode == BillingMode.FREE ? models.nextFreeBuild() : models.nextBuild();
+        case CHAT -> billingMode == BillingMode.FREE ? models.nextFreeChat() : models.nextChat();
+        case PLAN -> billingMode == BillingMode.FREE ? models.nextFreePlan() : models.nextPlan();
+        case BUILD -> billingMode == BillingMode.FREE ? models.nextFreeBuild() : models.nextBuild();
         };
         return selection(configured);
     }
 
     private ModelSelection selection(String configured) {
-        if (configured == null || configured.isBlank()) return new ModelSelection(defaultProvider(), configured);
+        if (configured == null || configured.isBlank())
+            return new ModelSelection(defaultProvider(), configured);
 
         // Provider-qualified entries look like "nvidia:deepseek-ai/deepseek-v4.1-flash". Preserve
         // legacy model ids such as "nvidia/...:free", where the colon belongs to the model.
@@ -607,10 +676,12 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
                 : List.of("mistral", "nvidia", "openrouter");
         for (String name : priority) {
             Provider p = providers.get(name);
-            if (p != null && !p.resolvedKeys().isEmpty()) return name;
+            if (p != null && !p.resolvedKeys().isEmpty())
+                return name;
         }
         return priority.getFirst();
     }
 
-    public record ModelSelection(String provider, String model) {}
+    public record ModelSelection(String provider, String model) {
+    }
 }

@@ -15,6 +15,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import com.code.pal.agent.preview.PreviewGrants;
+import java.time.Instant;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 
 /**
  * Mints a short-lived preview URL after the normal project access check. The URL is on the
@@ -31,7 +36,7 @@ public class ProjectPreviewTokenController {
     private final PreviewService preview;
     private final SiteBuildService builds;
     private final DraftPreviewService drafts;
-    private final com.code.pal.agent.preview.PreviewGrants grants;
+    private final PreviewGrants grants;
 
     @GetMapping
     public PreviewTokenResponse token(@AuthenticationPrincipal AuthPrincipal principal,
@@ -51,15 +56,15 @@ public class ProjectPreviewTokenController {
         String url = key != null ? sites.previewHostUrl(key) : sites.previewUrl(token);
         return new PreviewTokenResponse(token, url, preview.available(projectId), builds.status(projectId), draft, grant.expiresAt());
     }
-    @org.springframework.web.bind.annotation.DeleteMapping
-    @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+    @DeleteMapping
+    @ResponseStatus(HttpStatus.NO_CONTENT)
     public void revoke(@AuthenticationPrincipal AuthPrincipal actor,@PathVariable UUID projectId){grants.revoke(actor,projectId);}
 
     /**
      * {@code available}: there is something to show (a built site, or a static site's own files).
      * {@code draft}: the running build's unvalidated changes, while there are some to show.
      */
-    public record PreviewTokenResponse(String token, String url, boolean available, SiteBuildService.PreviewStatus status, Draft draft, java.time.Instant expiresAt) {}
+    public record PreviewTokenResponse(String token, String url, boolean available, SiteBuildService.PreviewStatus status, Draft draft, Instant expiresAt) {}
 
-    public record Draft(UUID runId, String version, String url, java.time.Instant expiresAt) {}
+    public record Draft(UUID runId, String version, String url, Instant expiresAt) {}
 }

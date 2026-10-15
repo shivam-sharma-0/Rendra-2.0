@@ -6,6 +6,7 @@ import com.code.pal.agent.workspace.SandboxPort;
 import com.code.pal.project.database.GeneratedDatabaseService;
 import org.springframework.stereotype.Service;
 import java.util.*;
+import java.util.concurrent.CancellationException;
 
 /** Candidate code and a unique scratch database; never the saved preview's API/data. */
 @Service
@@ -26,7 +27,7 @@ public final class CandidateBrowserCheck {
             var endpoint=sandbox.startServer(context.projectId(),name,root,List.of("node",servers.entry(context.projectId(),root)),Map.of("MONGODB_URI",db.uri(),"NODE_ENV","test"),3000);
             servers.awaitListening(context.projectId(),name,endpoint);
             return sandbox.browseWithApi(context.projectId(),site,acceptance,endpoint);
-        }catch(java.util.concurrent.CancellationException cancelled){throw cancelled;}
+        }catch(CancellationException cancelled){throw cancelled;}
         catch(RuntimeException failed){return unavailable("Candidate API/browser infrastructure unavailable");}
         finally {
             if(starting)try{sandbox.stopServer(context.projectId(),name);}catch(RuntimeException pending){stopped=false;}

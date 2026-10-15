@@ -4,6 +4,7 @@ import com.code.pal.agent.workspace.ProjectFiles;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
+import java.security.NoSuchAlgorithmException;
 
 /** Content identity only; cannot grant permission or prove database schema compatibility. */
 public final class ReleaseSource {
@@ -24,7 +25,7 @@ public final class ReleaseSource {
             var digest = MessageDigest.getInstance("SHA-256");
             versions.forEach((path, version) -> digest.update((path + "\0" + version + "\n").getBytes(StandardCharsets.UTF_8)));
             return HexFormat.of().formatHex(digest.digest());
-        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+        } catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
     }
     public static boolean paired(ProjectFiles files, UUID project, String server) {
         try {

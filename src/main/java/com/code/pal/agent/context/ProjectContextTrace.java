@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.Set;
 
 /** Thread-safe per-run trace updated by context creation and progressive discovery tools. */
 public final class ProjectContextTrace {
@@ -11,7 +14,7 @@ public final class ProjectContextTrace {
     private final List<ContextDiagnostics.OmittedPath> omitted = new ArrayList<>();
     private final Map<String, Fingerprint> reads = new LinkedHashMap<>();
     private final Map<String, Integer> patchMisses = new LinkedHashMap<>();
-    private final java.util.Set<String> patchReadRequired = new java.util.HashSet<>();
+    private final Set<String> patchReadRequired = new HashSet<>();
     private int patchMissLimit = 3;
 
     public synchronized void patchMissLimit(int limit) { patchMissLimit = Math.max(1, Math.min(5, limit)); }
@@ -23,7 +26,7 @@ public final class ProjectContextTrace {
     }
     public synchronized boolean patchNeedsRead(String path) { return patchReadRequired.contains(normalize(path)); }
     public synchronized boolean patchLimitReached() { return patchMisses.values().stream().anyMatch(count -> count >= patchMissLimit); }
-    public synchronized java.util.List<String> patchBlockedPaths() { return patchMisses.entrySet().stream().filter(e -> e.getValue() >= patchMissLimit).map(Map.Entry::getKey).toList(); }
+    public synchronized List<String> patchBlockedPaths() { return patchMisses.entrySet().stream().filter(e -> e.getValue() >= patchMissLimit).map(Map.Entry::getKey).toList(); }
     public synchronized void patchSucceeded(String path) { patchMisses.remove(normalize(path)); patchReadRequired.remove(normalize(path)); }
     /** File read requests so far in the run; a repeat is only deduplicated while the read it repeats is recent. */
     private int readCount;
@@ -74,7 +77,7 @@ public final class ProjectContextTrace {
     }
 
     private static String normalize(String path) {
-        return java.nio.file.Path.of(path.replace('\\', '/')).normalize().toString().replace('\\', '/');
+        return Path.of(path.replace('\\', '/')).normalize().toString().replace('\\', '/');
     }
 
     private record Fingerprint(long size, String version, int readIndex) {

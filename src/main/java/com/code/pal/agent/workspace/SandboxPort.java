@@ -3,6 +3,7 @@ package com.code.pal.agent.workspace;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.Map;
 
 /**
  * Port to a project's isolated environment: running trusted backend-chosen commands next to the
@@ -102,7 +103,7 @@ public interface SandboxPort {
      * server listens on {@code port}. Returns how to reach it; it may still be starting.
      */
     ServerEndpoint startServer(UUID projectId, String name, String relativeRoot, List<String> command,
-                               java.util.Map<String, String> environment, int port);
+                               Map<String, String> environment, int port);
 
     /** How to reach the named server while it runs, or null. */
     ServerEndpoint server(UUID projectId, String name);
@@ -113,7 +114,7 @@ public interface SandboxPort {
     String serverLogs(UUID projectId, String name, int lines);
 
     /** {@code baseUrl} plus the headers that route a request to the server (through the gateway, if any). */
-    record ServerEndpoint(String baseUrl, java.util.Map<String, String> headers) {}
+    record ServerEndpoint(String baseUrl, Map<String, String> headers) {}
 
     record CommandResult(boolean success, int exitCode, String stdout, String error) {
         public static final String NOT_STARTED = "Command could not be started";

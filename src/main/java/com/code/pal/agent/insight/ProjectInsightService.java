@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import com.code.pal.agent.usage.DailyTokenBudget;
 
 /**
  * Read-only project insights computed from real data: activity aggregates (runs/messages/files/tokens)
@@ -49,7 +50,7 @@ public class ProjectInsightService {
     private final AgentRunRepository runs;
     private final MessageRepository messages;
     private final WorkspaceBrowser browser;
-    private final com.code.pal.agent.usage.DailyTokenBudget budget;
+    private final DailyTokenBudget budget;
 
     public ProjectAnalytics analytics(Long userId, UUID projectId) {
         ProjectResponse p = projects.get(userId, projectId); // authorizes (accessible)

@@ -19,6 +19,10 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import com.code.pal.agent.preview.BuildVariables;
+import java.util.Map;
+import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Loads the staged site in a headless browser and reports what breaks at runtime: uncaught exceptions,
@@ -41,46 +45,78 @@ public class RuntimeCheckService {
     private final DependencyService dependencies;
     private final AgentProperties properties;
     private final ObjectMapper objectMapper;
-    private final com.code.pal.agent.preview.BuildVariables variables;
+    private final BuildVariables variables;
     private RunBehaviorCriteria behaviorCriteria;
-    @org.springframework.beans.factory.annotation.Autowired
-    public void useBehaviorCriteria(RunBehaviorCriteria criteria){this.behaviorCriteria=java.util.Objects.requireNonNull(criteria);}
-    private CandidateBrowserCheck candidateBrowser;
-    @org.springframework.beans.factory.annotation.Autowired
-    public void useCandidateBrowser(CandidateBrowserCheck browser){this.candidateBrowser=java.util.Objects.requireNonNull(browser);}
 
-    public record Result(ValidationCheck check,List<ProjectDiagnostic> diagnostics) {
-        public Result {diagnostics=List.copyOf(diagnostics);}
+    @Autowired
+    public void useBehaviorCriteria(RunBehaviorCriteria criteria) {
+        this.behaviorCriteria = Objects.requireNonNull(criteria);
     }
+
+    private CandidateBrowserCheck candidateBrowser;
+
+    @Autowired
+    public void useCandidateBrowser(CandidateBrowserCheck browser) {
+        this.candidateBrowser = Objects.requireNonNull(browser);
+    }
+
+    public record Result(ValidationCheck check, List<ProjectDiagnostic> diagnostics) {
+        public Result {
+            diagnostics = List.copyOf(diagnostics);
+        }
+    }
+
     /** Legacy diagnostics projection; use evaluate for coverage and final certification. */
     public List<ProjectDiagnostic> check(AgentContext context) {
         return evaluate(context).diagnostics();
     }
+
     public Result evaluate(AgentContext context) {
-        if (!properties.getSandbox().isRuntimeCheck())return new Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.SKIPPED,false,"Explicitly disabled by backend configuration"),List.of());
+        if (!properties.getSandbox().isRuntimeCheck())
+            return new Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED, false,
+                    "Explicitly disabled by backend configuration"), List.of());
         Probe staged = probe(context, true);
-        if(staged==null)return new Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.SKIPPED,true,"Candidate runtime probe was unavailable or unreadable"),List.of());
-        if(staged.issues().stream().anyMatch(issue->issue.kind().equals("api-unavailable")))return new Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.SKIPPED,true,"Candidate API transport was unavailable; code repair cannot resolve infrastructure"),List.of());
-        if(staged.issues().isEmpty())return new Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.PASS,true,"Candidate loaded without new runtime issues"),List.of());
+        if (staged == null)
+            return new Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED, true,
+                    "Candidate runtime probe was unavailable or unreadable"), List.of());
+        if (staged.issues().stream().anyMatch(issue -> issue.kind().equals("api-unavailable")))
+            return new Result(
+                    new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED, true,
+                            "Candidate API transport was unavailable; code repair cannot resolve infrastructure"),
+                    List.of());
+        if (staged.issues().isEmpty())
+            return new Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.PASS, true,
+                    "Candidate loaded without new runtime issues"), List.of());
         Probe live = probe(context, false);
         Set<String> existing = live == null ? Set.of()
                 : live.issues().stream().map(RuntimeCheckService::fingerprint).collect(Collectors.toSet());
-        List<ProjectDiagnostic> introduced = staged.issues().stream().filter(issue -> !existing.contains(fingerprint(issue)))
+        List<ProjectDiagnostic> introduced = staged.issues().stream()
+                .filter(issue -> !existing.contains(fingerprint(issue)))
                 .map(RuntimeCheckService::diagnostic).toList();
-        introduced.forEach(issue -> log.info("runtime_check_issue runId={} code={} message={}", context.runId(), issue.code(),
-                issue.message().length() > 300 ? issue.message().substring(0, 300) + "..." : issue.message()));
-        if(introduced.isEmpty())return new Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.FAIL,true,"Candidate still has existing runtime failures"),
-                List.of(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,"Existing runtime problems still prevent a working preview", "runtime","PRE_EXISTING_RUNTIME_FAILURE")));
-        return new Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.FAIL,true,"Candidate introduced runtime issues"),introduced);
+        introduced.forEach(
+                issue -> log.info("runtime_check_issue runId={} code={} message={}", context.runId(), issue.code(),
+                        issue.message().length() > 300 ? issue.message().substring(0, 300) + "..." : issue.message()));
+        if (introduced.isEmpty())
+            return new Result(
+                    new ValidationCheck("RUNTIME", ValidationCheck.Outcome.FAIL, true,
+                            "Candidate still has existing runtime failures"),
+                    List.of(new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR,
+                            "Existing runtime problems still prevent a working preview", "runtime",
+                            "PRE_EXISTING_RUNTIME_FAILURE")));
+        return new Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.FAIL, true,
+                "Candidate introduced runtime issues"), introduced);
     }
 
     /** {@code action}: the control being exercised when it happened (e.g. button "Reset"), null while loading. */
     record Issue(String kind, String message, String source, String action) {
-        Issue(String kind, String message, String source) { this(kind, message, source, null); }
+        Issue(String kind, String message, String source) {
+            this(kind, message, source, null);
+        }
     }
 
     /** {@code interactions}: how many controls the probe exercised after the page loaded. */
-    private record Probe(List<Issue> issues, int interactions) {}
+    private record Probe(List<Issue> issues, int interactions) {
+    }
 
     /** Builds (if the stack needs it) a copy of the staged or live project and loads it; null if skipped. */
     private Probe probe(AgentContext context, boolean staged) {
@@ -90,44 +126,59 @@ public class RuntimeCheckService {
         long started = System.nanoTime();
         try {
             String site = site(projectId, copy);
-            if (site == null) return null;
-            BehaviorCriteria criteria=staged && behaviorCriteria!=null?behaviorCriteria.current(context):null;
-            var actions=criteria==null?List.<BehaviorCriteria.BrowserAction>of():criteria.browser();
-            String acceptance=objectMapper.writeValueAsString(java.util.Map.of("schema",1,"actions",actions));
-            boolean mern="mern".equals(stacks.detect(files,projectId,copy).id());
+            if (site == null)
+                return null;
+            BehaviorCriteria criteria = staged && behaviorCriteria != null ? behaviorCriteria.current(context) : null;
+            var actions = criteria == null ? List.<BehaviorCriteria.BrowserAction>of() : criteria.browser();
+            String acceptance = objectMapper.writeValueAsString(Map.of("schema", 1, "actions", actions));
+            boolean mern = "mern".equals(stacks.detect(files, projectId, copy).id());
             SandboxPort.CommandResult result = mern
-                    ? candidateBrowser==null?new SandboxPort.CommandResult(false,-1,"",SandboxPort.CommandResult.NOT_STARTED+": candidate API browser not wired")
-                    :candidateBrowser.browse(context,copy,site,acceptance)
-                    :actions.isEmpty()?sandbox.browse(projectId,site):sandbox.browse(projectId,site,acceptance);
+                    ? candidateBrowser == null
+                            ? new SandboxPort.CommandResult(false, -1, "",
+                                    SandboxPort.CommandResult.NOT_STARTED + ": candidate API browser not wired")
+                            : candidateBrowser.browse(context, copy, site, acceptance)
+                    : actions.isEmpty() ? sandbox.browse(projectId, site) : sandbox.browse(projectId, site, acceptance);
             if (!result.started() || !result.success()) {
                 log.warn("runtime_check_skipped runId={} reason={}", context.runId(),
                         result.error().isBlank() ? result.stdout() : result.error());
                 return null;
             }
             Probe probe = parse(result.stdout());
-            if(probe!=null && !actions.isEmpty()) {
-                JsonNode json=objectMapper.readTree(result.stdout().lines().filter(line->line.startsWith("{")).reduce((first,last)->last).orElse("{}"));
-                var actual=json.path("acceptance");
-                if(!actual.isArray() || actual.size()!=actions.size())return null;
-                List<Issue> checked=new ArrayList<>(probe.issues());
-                boolean prerequisiteFailed=false;
-                for(int i=0;i<actions.size();i++) {
-                    var a=actual.get(i);
-                    if(!actions.get(i).id().equals(a.path("id").asString()) || !a.path("passed").isBoolean())return null;
-                    if(a.path("prerequisiteFailed").asBoolean(false)) {
-                        if(!prerequisiteFailed || a.path("passed").asBoolean())return null;
+            if (probe != null && !actions.isEmpty()) {
+                JsonNode json = objectMapper.readTree(result.stdout().lines().filter(line -> line.startsWith("{"))
+                        .reduce((first, last) -> last).orElse("{}"));
+                var actual = json.path("acceptance");
+                if (!actual.isArray() || actual.size() != actions.size())
+                    return null;
+                List<Issue> checked = new ArrayList<>(probe.issues());
+                boolean prerequisiteFailed = false;
+                for (int i = 0; i < actions.size(); i++) {
+                    var a = actual.get(i);
+                    if (!actions.get(i).id().equals(a.path("id").asString()) || !a.path("passed").isBoolean())
+                        return null;
+                    if (a.path("prerequisiteFailed").asBoolean(false)) {
+                        if (!prerequisiteFailed || a.path("passed").asBoolean())
+                            return null;
                         continue;
                     }
-                    if(!a.path("passed").asBoolean()){prerequisiteFailed=true;checked.add(new Issue("acceptance","Required interaction "+actions.get(i).id()+" did not pass",null));}
+                    if (!a.path("passed").asBoolean()) {
+                        prerequisiteFailed = true;
+                        checked.add(new Issue("acceptance",
+                                "Required interaction " + actions.get(i).id() + " did not pass", null));
+                    }
                 }
-                probe=new Probe(List.copyOf(checked),probe.interactions());
+                probe = new Probe(List.copyOf(checked), probe.interactions());
             }
-            log.info("runtime_check runId={} target={} issues={} interactions={} elapsedMs={}", context.runId(), staged ? "staged" : "live",
+            log.info("runtime_check runId={} target={} issues={} interactions={} elapsedMs={}", context.runId(),
+                    staged ? "staged" : "live",
                     probe == null ? "unreadable" : probe.issues().size(), probe == null ? 0 : probe.interactions(),
                     (System.nanoTime() - started) / 1_000_000);
             return probe;
         } finally {
-            try { sandbox.removeTree(projectId, copy); } catch (RuntimeException ignored) { }
+            try {
+                sandbox.removeTree(projectId, copy);
+            } catch (RuntimeException ignored) {
+            }
         }
     }
 
@@ -135,30 +186,38 @@ public class RuntimeCheckService {
     private String site(UUID projectId, String copy) {
         StackPack stack = stacks.detect(files, projectId, copy);
         StackPack.PreviewBuild build = stack.diagnosticBuild(files, projectId, copy);
-        if (build == null) return files.regularFile(projectId, copy, "index.html") ? copy : null;
+        if (build == null)
+            return files.regularFile(projectId, copy, "index.html") ? copy : null;
         stack.applyBuildVariables(files, projectId, copy, variables.variables(projectId));
         // A broken install or build is already reported by validation; nothing to load then.
-        if (dependencies.prepare(projectId, copy).failed()) return null;
-        if (!sandbox.exec(projectId, copy, build.command()).success()) return null;
+        if (dependencies.prepare(projectId, copy).failed())
+            return null;
+        if (!sandbox.exec(projectId, copy, build.command()).success())
+            return null;
         return build.outputDirectories().stream().map(directory -> copy + "/" + directory)
                 .filter(directory -> files.regularFile(projectId, directory, "index.html")).findFirst().orElse(null);
     }
 
     private Probe parse(String stdout) {
         String json = stdout.lines().filter(line -> line.startsWith("{")).reduce((first, last) -> last).orElse(null);
-        if (json == null) return null;
+        if (json == null)
+            return null;
         try {
             JsonNode report = objectMapper.readTree(json);
             if (report.hasNonNull("error")) {
                 log.warn("runtime_check_probe_error reason={}", report.get("error").asText());
                 return null;
             }
-            if(json.length()>64_000 || !report.path("loaded").isBoolean() || !report.path("issues").isArray()
-                    || report.path("issues").size()>50 || !report.path("interactions").isArray() || report.path("interactions").size()>20)return null;
+            if (json.length() > 64_000 || !report.path("loaded").isBoolean() || !report.path("issues").isArray()
+                    || report.path("issues").size() > 50 || !report.path("interactions").isArray()
+                    || report.path("interactions").size() > 20)
+                return null;
             List<Issue> issues = new ArrayList<>();
-            if(!report.path("loaded").asBoolean())issues.add(new Issue("load","Candidate page did not finish loading",null));
+            if (!report.path("loaded").asBoolean())
+                issues.add(new Issue("load", "Candidate page did not finish loading", null));
             for (JsonNode issue : report.path("issues")) {
-                if(!issue.isObject() || !issue.path("kind").isString() || !issue.path("message").isString())return null;
+                if (!issue.isObject() || !issue.path("kind").isString() || !issue.path("message").isString())
+                    return null;
                 issues.add(new Issue(issue.path("kind").asText("console"), issue.path("message").asText(""),
                         issue.path("source").isNull() ? null : issue.path("source").asText(null),
                         issue.path("action").isNull() ? null : issue.path("action").asText(null)));
@@ -180,19 +239,21 @@ public class RuntimeCheckService {
 
     private static ProjectDiagnostic diagnostic(Issue issue) {
         String code = switch (issue.kind()) {
-            case "exception" -> "RUNTIME_EXCEPTION";
-            case "asset" -> "MISSING_ASSET";
-            case "blank" -> "BLANK_PAGE";
-            case "load" -> "PAGE_NOT_LOADED";
-            case "acceptance" -> "BROWSER_ACCEPTANCE_FAILED";
-            default -> "CONSOLE_ERROR";
+        case "exception" -> "RUNTIME_EXCEPTION";
+        case "asset" -> "MISSING_ASSET";
+        case "blank" -> "BLANK_PAGE";
+        case "load" -> "PAGE_NOT_LOADED";
+        case "acceptance" -> "BROWSER_ACCEPTANCE_FAILED";
+        default -> "CONSOLE_ERROR";
         };
         String message = switch (issue.kind()) {
-            case "blank" -> "The page rendered nothing visible: check that the entry script runs and mounts the app into index.html";
-            case "asset" -> "A file the page references is missing: " + issue.message();
-            default -> issue.message() + (issue.source() == null ? "" : " (at " + issue.source() + ")");
+        case "blank" ->
+            "The page rendered nothing visible: check that the entry script runs and mounts the app into index.html";
+        case "asset" -> "A file the page references is missing: " + issue.message();
+        default -> issue.message() + (issue.source() == null ? "" : " (at " + issue.source() + ")");
         };
-        if (issue.action() != null) message = "After the check clicked/typed into " + issue.action() + ": " + message;
+        if (issue.action() != null)
+            message = "After the check clicked/typed into " + issue.action() + ": " + message;
         String bounded = message.length() <= MAX_MESSAGE ? message : message.substring(0, MAX_MESSAGE) + "...";
         return new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR, bounded, "runtime", code);
     }

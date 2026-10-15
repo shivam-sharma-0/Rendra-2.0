@@ -18,6 +18,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import com.code.pal.agent.route.SizeTier;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.UUID;
 
 /** User admission and durable daily capacity. Redis supplies only the optional per-minute counter. */
 @Slf4j
@@ -75,7 +79,7 @@ public class AgentUsagePolicy implements AgentTurnAdmission {
     public static final String QUOTA_LOW_MESSAGE = "Not enough of today's AI quota is left for this request. It resets at 00:00 UTC.";
 
     public DailyTokenBudget.Grant reserve(LlmCallContext context, LlmClient.LlmRequest request, long input,
-                                         java.util.UUID logicalId, java.util.UUID attemptId) {
+                                         UUID logicalId, UUID attemptId) {
         try {
             if(context.runId()!=null) budget.prepareRun(context.runId(),context.userId(),properties.getSmallRunTokenBudget());
             return budget.reserve(new DailyTokenBudget.Request(attemptId, logicalId, context,
@@ -83,17 +87,17 @@ public class AgentUsagePolicy implements AgentTurnAdmission {
         } catch (RuntimeException unavailable) { throw new LlmAccountingException(unavailable); }
     }
 
-    public void markSent(java.util.UUID id) { budget.markSent(id); }
-    public void settle(java.util.UUID id, LlmClient.Usage report) { budget.settleReported(id, report); }
-    public void retainUnknown(java.util.UUID id) { budget.retainUnknown(id); }
-    public void releaseUnsent(java.util.UUID id) { budget.releaseUnsent(id); }
-    public void finishAttempt(java.util.UUID id, LlmClient.Usage report, String outcome, String error, int elapsedMs) {
+    public void markSent(UUID id) { budget.markSent(id); }
+    public void settle(UUID id, LlmClient.Usage report) { budget.settleReported(id, report); }
+    public void retainUnknown(UUID id) { budget.retainUnknown(id); }
+    public void releaseUnsent(UUID id) { budget.releaseUnsent(id); }
+    public void finishAttempt(UUID id, LlmClient.Usage report, String outcome, String error, int elapsedMs) {
         budget.finishAttempt(id, report, outcome, error, elapsedMs);
     }
-    public boolean boundExceeded(java.util.UUID id) {
+    public boolean boundExceeded(UUID id) {
         try { return budget.boundExceeded(id); } catch (RuntimeException unavailable) { throw new LlmAccountingException(unavailable); }
     }
-    public void configureRun(java.util.UUID id,Long user,com.code.pal.agent.route.SizeTier tier) {
+    public void configureRun(UUID id,Long user,SizeTier tier) {
         long cap=switch(tier) {
             case S -> properties.getSmallRunTokenBudget();
             case M -> properties.getMediumRunTokenBudget();
@@ -108,7 +112,7 @@ public class AgentUsagePolicy implements AgentTurnAdmission {
     }
 
     private DailyTokenBudget.Usage usageToday(Long userId) {
-        return budget.usage(userId, java.time.LocalDate.ofInstant(clock.instant(), java.time.ZoneOffset.UTC));
+        return budget.usage(userId, LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC));
     }
 
     /** Today's token use against the daily quota, and when the count resets (next 00:00 UTC). */

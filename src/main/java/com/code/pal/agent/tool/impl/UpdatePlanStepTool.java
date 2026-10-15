@@ -12,21 +12,39 @@ import java.util.Map;
 
 @Component
 public class UpdatePlanStepTool implements AgentTool {
-    @Override public String name() { return "updatePlanStep"; }
-    @Override public String description() { return "Optional: mark pending/in-progress/skipped work or attach a note. Completion requires backend-verified acceptance, never model bookkeeping. Revise the plan with setPlan when assumptions change."; }
-    @Override public boolean parallelSafe() { return false; }
-    @Override public Map<String, Object> parametersSchema() {
+    @Override
+    public String name() {
+        return "updatePlanStep";
+    }
+
+    @Override
+    public String description() {
+        return "Optional: mark pending/in-progress/skipped work or attach a note. Completion requires backend-verified acceptance, never model bookkeeping. Revise the plan with setPlan when assumptions change.";
+    }
+
+    @Override
+    public boolean parallelSafe() {
+        return false;
+    }
+
+    @Override
+    public Map<String, Object> parametersSchema() {
         return Map.of("type", "object", "properties", Map.of(
                 "stepId", Map.of("type", "integer"),
                 "status", Map.of("type", "string", "enum", List.of("PENDING", "IN_PROGRESS", "SKIPPED")),
                 "note", Map.of("type", "string")), "required", List.of("stepId", "status"));
     }
-    @Override public Object execute(Map<String, Object> args, AgentContext context) {
-        if (!context.plan().exists()) throw new AgentToolException("PLANNING_REQUIRED", "Create a plan before updating its steps");
+
+    @Override
+    public Object execute(Map<String, Object> args, AgentContext context) {
+        if (!context.plan().exists())
+            throw new AgentToolException("PLANNING_REQUIRED", "Create a plan before updating its steps");
         int id = ((Number) args.get("stepId")).intValue();
         try {
             StepStatus status = StepStatus.valueOf(args.get("status").toString().toUpperCase(Locale.ROOT));
-            if(status==StepStatus.COMPLETED)throw new AgentToolException("PLAN_COMPLETION_REQUIRES_VERIFICATION","A model cannot certify completion of plan acceptance criteria");
+            if (status == StepStatus.COMPLETED)
+                throw new AgentToolException("PLAN_COMPLETION_REQUIRES_VERIFICATION",
+                        "A model cannot certify completion of plan acceptance criteria");
             return context.plan().updateStep(id, status, args.get("note") == null ? null : args.get("note").toString());
         } catch (IllegalArgumentException error) {
             throw new AgentToolException("INVALID_PLAN_STATUS", "Unknown plan step status");

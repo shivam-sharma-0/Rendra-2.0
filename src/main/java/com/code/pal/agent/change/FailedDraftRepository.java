@@ -4,6 +4,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.*;
+import com.code.pal.project.event.ProjectDeleted;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 @Repository
 public class FailedDraftRepository {
@@ -40,11 +45,11 @@ public class FailedDraftRepository {
         if(jdbc.update("update agent_failed_drafts set retry_run_id=? where project_id=? and run_id=? and state='AVAILABLE' and retry_run_id is null",retry,project,source)!=1)
             throw new IllegalStateException("Draft retry acceptance refused");
     }
-    @org.springframework.transaction.event.TransactionalEventListener(phase=org.springframework.transaction.event.TransactionPhase.AFTER_COMMIT)
-    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
-    public void onDeleted(com.code.pal.project.event.ProjectDeleted event) {jdbc.update("delete from agent_failed_drafts where project_id=?",event.projectId());}
+    @TransactionalEventListener(phase=TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation=Propagation.REQUIRES_NEW)
+    public void onDeleted(ProjectDeleted event) {jdbc.update("delete from agent_failed_drafts where project_id=?",event.projectId());}
 
-    @org.springframework.scheduling.annotation.Scheduled(fixedDelayString="${app.agent.deleted-project-sweep-ms:60000}")
+    @Scheduled(fixedDelayString="${app.agent.deleted-project-sweep-ms:60000}")
     @Transactional
     public void purgeDeleted() {
         jdbc.update("delete from agent_failed_drafts where project_id in (select d.project_id from agent_failed_drafts d "

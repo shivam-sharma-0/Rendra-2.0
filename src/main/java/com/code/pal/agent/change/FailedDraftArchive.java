@@ -6,6 +6,7 @@ import java.io.*;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.zip.*;
+import java.security.NoSuchAlgorithmException;
 
 /** Bounded source archive, never a runnable or certified release. Names and bytes are reverified on read. */
 public final class FailedDraftArchive {
@@ -30,7 +31,7 @@ public final class FailedDraftArchive {
     }
     public static String hash(byte[] bytes) {
         try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));}
-        catch(java.security.NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}
+        catch(NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}
     }
     public static byte[] pack(Map<String,byte[]> files) {
         check(files);

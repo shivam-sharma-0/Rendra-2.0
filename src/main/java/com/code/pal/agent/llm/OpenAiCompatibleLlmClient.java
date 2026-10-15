@@ -36,6 +36,10 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import jakarta.annotation.PostConstruct;
+import java.io.FilterInputStream;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * OpenAI-compatible streaming client. It understands the standard SSE delta format used by
@@ -62,7 +66,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private final long streamIdleTimeoutNanos;
     private boolean accountingRequired;
 
-    @jakarta.annotation.PostConstruct
+    @PostConstruct
     public void requireAccountingForManagedUse() { accountingRequired = true; }
 
     public OpenAiCompatibleLlmClient(AgentProperties props, ObjectMapper objectMapper) {
@@ -307,7 +311,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         StreamWatchdog(InputStream source, long idleNanos, long deadline, RunCancellation cancellation) {
             this.cancellation = cancellation;
             this.source = source;
-            this.tracked = new java.io.FilterInputStream(source) {
+            this.tracked = new FilterInputStream(source) {
                 @Override public int read() throws IOException {
                     int value = super.read();
                     lastActivity.set(System.nanoTime());
@@ -553,9 +557,9 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 
     private static final class EndpointPool {
         private final List<Endpoint> endpoints;
-        private final java.util.concurrent.atomic.AtomicInteger index = new java.util.concurrent.atomic.AtomicInteger();
+        private final AtomicInteger index = new AtomicInteger();
         /** Keys the provider rejected, until when (nanoTime). */
-        private final Map<Endpoint, Long> disabledUntil = new java.util.concurrent.ConcurrentHashMap<>();
+        private final Map<Endpoint, Long> disabledUntil = new ConcurrentHashMap<>();
 
         EndpointPool(List<Endpoint> endpoints) { this.endpoints = List.copyOf(endpoints); }
 

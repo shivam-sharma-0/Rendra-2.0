@@ -16,6 +16,12 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Installs a project's dependencies once per set of dependency manifests and links them in.
@@ -37,7 +43,7 @@ public class DependencyService {
     private static final int MAX_SETS = 5;
     private static final int ERROR_TAIL_CHARS = 1_500;
 
-    private final java.util.Map<UUID, java.util.concurrent.locks.ReentrantLock> locks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<UUID, ReentrantLock> locks = new ConcurrentHashMap<>();
     private final StackPacks stacks;
     private final ProjectFiles files;
     private final SandboxPort sandbox;
@@ -58,7 +64,7 @@ public class DependencyService {
     public Preparation prepare(UUID projectId, String root) {
         // One at a time per project: a draft build and a validation may need the same set at once, and
         // two installs into one folder (or a prune during an install) would break both.
-        java.util.concurrent.locks.ReentrantLock lock = locks.computeIfAbsent(projectId, id -> new java.util.concurrent.locks.ReentrantLock());
+        ReentrantLock lock = locks.computeIfAbsent(projectId, id -> new ReentrantLock());
         lock.lock();
         try {
             return prepareLocked(projectId, root);
@@ -68,13 +74,13 @@ public class DependencyService {
     }
 
     /** Resolve npm locks in disposable dependency sets; never writes the calling workspace. */
-    public java.util.Map<String, String> refreshNpmLocks(UUID projectId, String root) {
-        var lock = locks.computeIfAbsent(projectId, id -> new java.util.concurrent.locks.ReentrantLock());
+    public Map<String, String> refreshNpmLocks(UUID projectId, String root) {
+        var lock = locks.computeIfAbsent(projectId, id -> new ReentrantLock());
         lock.lock();
         try {
             var packages = stacks.detect(files, projectId, root).packageRoots(files, projectId, root);
             if (packages.isEmpty() || packages.size() > 3) throw new IllegalArgumentException("Unsupported package layout");
-            var commands = new java.util.LinkedHashMap<String, List<String>>();
+            var commands = new LinkedHashMap<String, List<String>>();
             for (String pkg : packages) {
                 String packageRoot = pkg.equals(".") ? root : ProjectPaths.combine(root, pkg);
                 var stack = stacks.detect(files, projectId, packageRoot);
@@ -84,7 +90,7 @@ public class DependencyService {
                 command.set(1, "install"); // Fixed backend command, scripts disabled; preserves compatible locked versions.
                 commands.put(pkg, List.copyOf(command));
             }
-            var resolved = new java.util.LinkedHashMap<String, String>();
+            var resolved = new LinkedHashMap<String, String>();
             for (var entry : commands.entrySet()) {
                 String packageRoot = entry.getKey().equals(".") ? root : ProjectPaths.combine(root, entry.getKey());
                 var stack = stacks.detect(files, projectId, packageRoot);
@@ -94,14 +100,14 @@ public class DependencyService {
                     if (error != null) throw new IllegalStateException(error);
                 }
                 String content = new String(files.readBytes(projectId, set, "package-lock.json", 1_000_000), StandardCharsets.UTF_8);
-                var mapper = new tools.jackson.databind.ObjectMapper();
+                var mapper = new ObjectMapper();
                 var generated = mapper.readTree(content).path("packages").path("");
                 var manifest = mapper.readTree(new String(files.readBytes(projectId, packageRoot, "package.json", 1_000_000), StandardCharsets.UTF_8));
                 if (generated.isMissingNode()) throw new IllegalStateException("Resolved npm lock lacks its package root");
                 if (!NpmLockfiles.matches(manifest, generated)) throw new IllegalStateException("Resolved npm lock does not match the package manifest");
                 resolved.put(entry.getKey().equals(".") ? "package-lock.json" : entry.getKey() + "/package-lock.json", content);
             }
-            return java.util.Collections.unmodifiableMap(resolved);
+            return Collections.unmodifiableMap(resolved);
         } finally { lock.unlock(); }
     }
 

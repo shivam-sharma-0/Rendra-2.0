@@ -27,6 +27,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.URI;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * {@link SandboxPort} without isolation: commands run directly on the backend host in the project
@@ -287,13 +291,13 @@ public class LocalProjectEnvironment implements SandboxPort {
 
     // ---- App servers: a local process on a free loopback port (development and tests only) ----------
 
-    private final Map<String, LocalServer> servers = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, LocalServer> servers = new ConcurrentHashMap<>();
 
     private record LocalServer(Process process, int port, Path log) {}
 
     @Override
     public String databaseAddress() {
-        return java.net.URI.create(properties.getSandbox().getLocalAppsDatabaseUri()).getAuthority();
+        return URI.create(properties.getSandbox().getLocalAppsDatabaseUri()).getAuthority();
     }
 
     @Override
@@ -306,7 +310,7 @@ public class LocalProjectEnvironment implements SandboxPort {
                                       Map<String, String> variables, int port) {
         stopServer(projectId, name);
         int localPort;
-        try (java.net.ServerSocket probe = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())) {
+        try (ServerSocket probe = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             localPort = probe.getLocalPort();
         } catch (IOException error) {
             throw new UncheckedIOException(error);

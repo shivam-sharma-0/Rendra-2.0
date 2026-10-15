@@ -8,6 +8,8 @@ import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.service.ProjectService;
 import org.springframework.stereotype.Service;
 import java.util.*;
+import com.code.pal.agent.domain.RunStatus;
+import com.code.pal.agent.repository.AgentRunRepository;
 
 /** Restores only journal-proved code/brief paths. Live data and unrelated edits are untouched. */
 @Service
@@ -15,9 +17,9 @@ public class CodeRestoreService {
     private final ProjectLeaseService leases; private final PromotionJournal promotions;
     private final RestoreJournal journal; private final ProjectFiles files;
     private final BuildDecisions decisions; private final ProjectService projects;
-    private final com.code.pal.agent.repository.AgentRunRepository runs;
+    private final AgentRunRepository runs;
     public CodeRestoreService(ProjectLeaseService leases, PromotionJournal promotions, RestoreJournal journal,
-                              ProjectFiles files, BuildDecisions decisions, ProjectService projects, com.code.pal.agent.repository.AgentRunRepository runs) {
+                              ProjectFiles files, BuildDecisions decisions, ProjectService projects, AgentRunRepository runs) {
         this.leases=leases;this.promotions=promotions;this.journal=journal;this.files=files;this.decisions=decisions;this.projects=projects;
         this.runs=runs;
     }
@@ -28,7 +30,7 @@ public class CodeRestoreService {
         UUID project=run.getProjectId(); projects.requireManageable(actor,project);
         var latest=runs.findTopByProjectIdOrderByCreatedAtDesc(project).orElse(null);
         if(latest==null || !latest.getId().equals(run.getId()) || latest.getCodeSavedAt()==null
-                || java.util.Set.of(com.code.pal.agent.domain.RunStatus.QUEUED,com.code.pal.agent.domain.RunStatus.RUNNING,com.code.pal.agent.domain.RunStatus.COMMITTING).contains(latest.getStatus()))
+                || Set.of(RunStatus.QUEUED,RunStatus.RUNNING,RunStatus.COMMITTING).contains(latest.getStatus()))
             throw conflict("Only the latest saved inactive build can be restored");
         var state=decisions.state(project);
         if(state.blocked()) throw conflict("Build decisions are unavailable for restore compatibility review");
