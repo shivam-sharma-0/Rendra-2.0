@@ -34,6 +34,28 @@ class ValidationOutputParserTest {
     }
 
     @Test
+    void rolldownBoxLabelsAreAttributedToTheirFile() {
+        // Shape of a Rolldown/Oxc parse failure (miette labels) from a benchmark build.
+        String output = """
+                [PARSE_ERROR] Error: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+                   ╭─[ src/pages/home.tsx:2:14 ]
+                   │
+                 2 │   return <main>></main>
+                   ╰────
+                [PARSE_ERROR] Error: Expected a semicolon
+                   ,-[ /workspace/run/candidate-build/src/pages/menu.tsx:3:1 ]
+                """;
+
+        List<ProjectDiagnostic> diagnostics = ValidationOutputParser.parse(output, "/workspace/run/candidate-build",
+                ValidationOperation.BUILD);
+
+        assertEquals(List.of("src/pages/home.tsx", "src/pages/menu.tsx"), diagnostics.stream().map(ProjectDiagnostic::file).toList());
+        assertEquals(2, diagnostics.getFirst().line());
+        assertTrue(diagnostics.getFirst().message().contains("Unexpected token"), diagnostics.getFirst().message());
+        assertTrue(diagnostics.get(1).message().contains("Expected a semicolon"), diagnostics.get(1).message());
+    }
+
+    @Test
     void typeScriptErrorsInBothFormats() {
         String output = """
                 src/App.tsx(4,7): error TS2322: Type 'string' is not assignable to type 'number'.

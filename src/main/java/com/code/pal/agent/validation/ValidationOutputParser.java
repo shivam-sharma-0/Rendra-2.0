@@ -21,6 +21,8 @@ final class ValidationOutputParser {
     /** {@code at fn (location)}: the location is inside the parentheses. */
     private static final Pattern FRAME_CALL = Pattern.compile("^at\\s.*?\\((.+)\\)$");
     private static final Pattern LOCATION_PREFIX = Pattern.compile("^(?:file:\\s*|at\\s+)", Pattern.CASE_INSENSITIVE);
+    /** Rolldown/Oxc (miette) labels: {@code ╭─[ src/App.tsx:2:10 ]}, also {@code ┌─[ ... ]} and ASCII {@code ,-[ ... ]}. */
+    private static final Pattern BOX_LOCATION = Pattern.compile("^[\\x{256D}\\x{250C},][\\x{2500}-]+\\[\\s*(.+?)\\s*\\]$");
     private static final int MAX_MESSAGE = 400;
 
     private ValidationOutputParser() {
@@ -37,13 +39,15 @@ final class ValidationOutputParser {
             boolean frame = FRAME.matcher(line).matches();
             Matcher call = frame ? FRAME_CALL.matcher(line) : null;
             String location = call != null && call.matches() ? call.group(1) : LOCATION_PREFIX.matcher(line).replaceFirst("");
+            Matcher box = BOX_LOCATION.matcher(location);
+            if (box.matches()) location = box.group(1);
             Matcher matcher = TS_PAREN.matcher(location);
             if (!matcher.matches()) matcher = COLON.matcher(location);
             if (matcher.matches()) {
                 String file = normalizeFile(root, matcher.group(1));
                 if (dependencyInternal(file) || (frame && file.contains("://"))) continue;
                 String message = matcher.group(6) == null ? "" : matcher.group(6).trim();
-                if (message.isEmpty() || message.equals(")")) message = context == null ? "" : context;
+                if (message.isEmpty() || message.equals(")") || message.equals("]")) message = context == null ? "" : context;
                 if (frame && message.isEmpty()) continue;
                 diagnostics.add(new ProjectDiagnostic(file, Integer.valueOf(matcher.group(2)), Integer.valueOf(matcher.group(3)),
                         "warning".equalsIgnoreCase(matcher.group(4)) ? DiagnosticSeverity.WARNING : DiagnosticSeverity.ERROR,
