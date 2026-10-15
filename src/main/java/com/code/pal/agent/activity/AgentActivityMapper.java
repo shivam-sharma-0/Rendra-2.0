@@ -106,6 +106,7 @@ public class AgentActivityMapper {
             case "deleteFile" -> activity(Kind.DELETE, "Deleted", paths, true, null);
             case "renameFile" -> activity(Kind.MOVE, "Renamed", paths, true, null);
             case "copyFile" -> activity(Kind.MOVE, "Copied", paths, true, null);
+            case "retireAcceptanceCheck" -> activity(Kind.PLAN, "Retired a check for a feature you changed", List.of(), true, null);
             case "setPlan" -> plan(data);
             case "updatePlanStep" -> data.path("stepId").isIntegralNumber() && data.path("planStatus").isString()
                     ? activity(Kind.PLAN,"Updated plan step "+data.path("stepId").asInt(),List.of(),null,

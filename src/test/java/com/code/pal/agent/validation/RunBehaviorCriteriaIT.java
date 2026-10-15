@@ -50,6 +50,33 @@ class RunBehaviorCriteriaIT {
         when(decisions.state(f.project())).thenReturn(new BuildDecisions.State(new BuildDecisions.Choice(1,BuildDecisions.Storage.MERN,BuildDecisions.Auth.ACCOUNTS,null),new BuildDecisions.Available(true,null),null));
         assertThrows(IllegalArgumentException.class,()->store.install(f.run(),f.project(),f.projection(),2,criteria("5")));
     }
+    private BehaviorCriteria two(){return new BehaviorCriteria(1,List.of(new BehaviorCriteria.BrowserAction("heading",BehaviorCriteria.BrowserKind.ASSERT_TEXT,"h1","Bakery"),
+            new BehaviorCriteria.BrowserAction("menu",BehaviorCriteria.BrowserKind.ASSERT_COUNT,"[data-item]","3")),List.of(),false,false);}
+    private UUID followUp(Fixture f,String status){UUID run=UUID.randomUUID();jdbc.update("insert into agent_runs(id,project_id,user_id,mode,status,prompt_tokens,completion_tokens,created_at,updated_at) values (?,?,7,'BUILD',?,0,0,now(),now())",run,f.project(),status);return run;}
+    private AgentContext context(Fixture f,UUID run){return new AgentContext(f.project(),7L,ProjectType.BUILD,"stage",null,null,run,new com.code.pal.agent.plan.AgentPlanState(),null);}
+    @Test void aFollowUpEditInheritsTheLastCompletedBuildsBrowserChecks() {
+        var f=fixture();store.install(f.run(),f.project(),f.projection(),2,two());
+        var edit=followUp(f,"RUNNING");
+        assertNull(store.regression(context(f,edit)),"an unfinished build passes nothing on");
+        jdbc.update("update agent_runs set status='DONE' where id=?",f.run());
+        assertEquals(two().browser(),store.regression(context(f,edit)).browser());
+        assertNull(store.current(context(f,edit)),"inherited checks are not the edit's own required acceptance");
+        jdbc.update("update requirement_sessions set answer_revision=3 where id=?",f.session());
+        assertNull(store.regression(context(f,edit)),"changed requirements drop inherited checks");
+    }
+    @Test void aRetiredCheckStaysRetiredForLaterEditsButOnlyWithAReasonAndAKnownId() {
+        var f=fixture();store.install(f.run(),f.project(),f.projection(),2,two());jdbc.update("update agent_runs set status='DONE' where id=?",f.run());
+        var edit=followUp(f,"RUNNING");
+        assertThrows(IllegalArgumentException.class,()->store.retire(context(f,edit),List.of("missing"),"renamed"));
+        assertThrows(IllegalArgumentException.class,()->store.retire(context(f,edit),List.of("heading")," "));
+        assertThrows(IllegalArgumentException.class,()->store.retire(f.context(),List.of("heading"),"own acceptance"));
+        assertEquals(List.of("menu"),store.retire(context(f,edit),List.of("heading"),"The user renamed the bakery"));
+        assertEquals(List.of("menu"),store.regression(context(f,edit)).browser().stream().map(BehaviorCriteria.BrowserAction::id).toList());
+        var later=followUp(f,"RUNNING");
+        assertEquals(2,store.regression(context(f,later)).browser().size(),"a failed or unfinished edit's retirement does not stick");
+        jdbc.update("update agent_runs set status='DONE' where id=?",edit);
+        assertEquals(List.of("menu"),store.regression(context(f,later)).browser().stream().map(BehaviorCriteria.BrowserAction::id).toList());
+    }
     @Configuration @Import({ApprovedProjectMemory.class,RunBehaviorCriteria.class})
     static class Services {
         @Bean ObjectMapper mapper(){return new ObjectMapper();}

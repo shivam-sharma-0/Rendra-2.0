@@ -75,6 +75,9 @@ public class RuntimeCheckService {
         if (!properties.getSandbox().isRuntimeCheck())
             return new Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED, false,
                     "Explicitly disabled by backend configuration"), List.of());
+        if (apiOnly(context))
+            return new Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED, true,
+                    "Unsupported scope: an API-only app has no page for browser acceptance"), List.of());
         Probe staged = probe(context, true);
         if (staged == null)
             return new Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED, true,
@@ -129,6 +132,11 @@ public class RuntimeCheckService {
             if (site == null)
                 return null;
             BehaviorCriteria criteria = staged && behaviorCriteria != null ? behaviorCriteria.current(context) : null;
+            boolean inherited = false;
+            if (staged && behaviorCriteria != null && criteria == null) {
+                criteria = behaviorCriteria.regression(context);
+                inherited = criteria != null;
+            }
             var actions = criteria == null ? List.<BehaviorCriteria.BrowserAction>of() : criteria.browser();
             String acceptance = objectMapper.writeValueAsString(Map.of("schema", 1, "actions", actions));
             boolean mern = "mern".equals(stacks.detect(files, projectId, copy).id());
@@ -163,8 +171,10 @@ public class RuntimeCheckService {
                     }
                     if (!a.path("passed").asBoolean()) {
                         prerequisiteFailed = true;
-                        checked.add(new Issue("acceptance",
-                                "Required interaction " + actions.get(i).id() + " did not pass", null));
+                        checked.add(new Issue("acceptance", inherited
+                                ? "Earlier approved check " + actions.get(i).id() + " no longer passes: keep that feature "
+                                        + "working, or call retireAcceptanceCheck with this id if the user asked to change it"
+                                : "Required interaction " + actions.get(i).id() + " did not pass", null));
                     }
                 }
                 probe = new Probe(List.copyOf(checked), probe.interactions());
@@ -228,6 +238,18 @@ public class RuntimeCheckService {
         }
     }
 
+    /** A server with no web page is out of browser scope; it is reported, never passed as a browser check. */
+    private boolean apiOnly(AgentContext context) {
+        var view = changeSets.view(context);
+        if (view == null)
+            return false;
+        String staged = view.stagedRoot();
+        UUID projectId = context.projectId();
+        return files.regularFile(projectId, staged, "server/package.json")
+                && !files.regularFile(projectId, staged, "client/package.json")
+                && !files.regularFile(projectId, staged, "index.html");
+    }
+
     /** Same problem, different build: asset hashes, line and column numbers and ports do not count. */
     static String fingerprint(Issue issue) {
         String message = issue.message().split("\\R", 2)[0]
@@ -244,6 +266,7 @@ public class RuntimeCheckService {
         case "blank" -> "BLANK_PAGE";
         case "load" -> "PAGE_NOT_LOADED";
         case "acceptance" -> "BROWSER_ACCEPTANCE_FAILED";
+        case "layout" -> "MOBILE_OVERFLOW";
         default -> "CONSOLE_ERROR";
         };
         String message = switch (issue.kind()) {

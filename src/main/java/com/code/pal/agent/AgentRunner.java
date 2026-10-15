@@ -136,7 +136,8 @@ public class AgentRunner implements AgentRuntime {
     private static final Set<String> WRITE_TOOLS = Set.of("startProject", "createFile", "createFiles", "patchFile",
             "deleteFile",
             "renameFile", "copyFile", "refreshDependencies",
-            "getDiagnostics", "runTypeCheck", "runBuild", "runTests", "validateChanges", "finishBuild");
+            "getDiagnostics", "runTypeCheck", "runBuild", "runTests", "validateChanges", "finishBuild",
+            "retireAcceptanceCheck");
 
     private ProjectLeaseService leases;
 
@@ -540,10 +541,14 @@ public class AgentRunner implements AgentRuntime {
         return convo;
     }
 
-    /** The approved spec plans only a new project's first build; later edits use the tool loop. */
+    /**
+     * The approved spec plans a new project's first build and resumes or reuses its versioned plan;
+     * ordinary later edits use the tool loop.
+     */
     private ContractCoordinator.SpecPlanning specPlanning(AgentRun run, String root) {
         if (approvedSpecs == null || !props.isStructuredContracts()
-                || !projectShape(run.getProjectId(), root).equals(BuildPrompt.ProjectShape.EMPTY)) {
+                || !(contractCoordinator.needsSpecPlanning(run)
+                        || projectShape(run.getProjectId(), root).equals(BuildPrompt.ProjectShape.EMPTY))) {
             return null;
         }
         var budget = new BatchBudget.Limits(SPEC_INPUT_BYTES, props.getLlm().getMaxOutputTokens(), SPEC_CONTEXT_TOKENS,

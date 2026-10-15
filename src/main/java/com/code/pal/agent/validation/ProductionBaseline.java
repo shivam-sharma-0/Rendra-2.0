@@ -33,6 +33,9 @@ public class ProductionBaseline {
     private static final Pattern SECRET_LITERAL = Pattern.compile("sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
             + "|-----BEGIN [A-Z ]*PRIVATE KEY-----|service_role|SUPABASE_SERVICE_ROLE");
     private static final Pattern CATCH_ALL_ROUTE = Pattern.compile("path\\s*[=:]\\s*\\{?\\s*[\"']\\*[\"']");
+    /** A hand-written router (as the contract scaffold generates) that picks a page from the URL path. */
+    private static final Pattern CUSTOM_ROUTER = Pattern.compile("location\\.pathname");
+    private static final Pattern NOT_FOUND_VIEW = Pattern.compile("(?i)\\b404\\b|not ?found|page does not exist");
 
     private final ProjectFiles files;
     private final ObjectMapper mapper;
@@ -46,8 +49,11 @@ public class ProductionBaseline {
     public List<ProjectDiagnostic> check(UUID projectId, String root) {
         String web = files.regularFile(projectId, root, "client/package.json") ? "client" : ".";
         String indexPath = path(web, "index.html");
-        if (!files.regularFile(projectId, root, indexPath) || files.size(projectId, root, indexPath) > MAX_FILE_BYTES) {
+        if (!files.regularFile(projectId, root, indexPath)) {
             return List.of();
+        }
+        if (files.size(projectId, root, indexPath) > MAX_FILE_BYTES) {
+            return List.of(issue(indexPath, "BASELINE_UNSCANNED", "index.html is too large to check; keep it under 256 KB"));
         }
         String index = files.readText(projectId, root, indexPath);
         List<ProjectDiagnostic> missing = new ArrayList<>();
@@ -65,13 +71,24 @@ public class ProductionBaseline {
             missing.add(issue(indexPath, "BASELINE_FAVICON", "Add a favicon (<link rel=\"icon\" ...> with an icon file)"));
         }
         boolean routed = routed(projectId, root, web);
+        boolean customRouter = false;
         boolean catchAll = false;
+        boolean notFoundView = false;
         int scanned = 0;
         for (var entry : files.list(projectId, path(root, web), 6, SKIPPED)) {
-            if (entry.directory() || entry.size() > MAX_FILE_BYTES || !source(entry.path()) || scanned++ >= MAX_SCANNED_FILES) {
+            if (entry.directory() || !source(entry.path())) {
                 continue;
             }
             String relative = path(web, entry.path());
+            // Unscanned client code could hide a secret, so it is reported instead of passing silently.
+            if (entry.size() > MAX_FILE_BYTES) {
+                missing.add(issue(relative, "BASELINE_UNSCANNED", "Client file too large to check for secrets; split it"));
+                continue;
+            }
+            if (++scanned > MAX_SCANNED_FILES) {
+                missing.add(issue(path(web, "src"), "BASELINE_UNSCANNED", "Too many client files to check for secrets"));
+                break;
+            }
             String text = files.readText(projectId, root, relative);
             var env = PRIVATE_ENV.matcher(text);
             if (env.find()) {
@@ -81,9 +98,11 @@ public class ProductionBaseline {
                 missing.add(issue(relative, "BASELINE_CLIENT_SECRET",
                         "Client code contains a server secret or service-role key; keep secrets on the server"));
             }
-            catchAll |= routed && CATCH_ALL_ROUTE.matcher(text).find();
+            catchAll |= CATCH_ALL_ROUTE.matcher(text).find();
+            customRouter |= !relative.endsWith(".html") && CUSTOM_ROUTER.matcher(text).find();
+            notFoundView |= !relative.endsWith(".html") && NOT_FOUND_VIEW.matcher(text).find();
         }
-        if (routed && !catchAll) {
+        if ((routed && !catchAll) || (!routed && customRouter && !notFoundView)) {
             missing.add(issue(path(web, "src"), "BASELINE_NOT_FOUND_ROUTE",
                     "Add a not-found page on a catch-all route (path=\"*\")"));
         }

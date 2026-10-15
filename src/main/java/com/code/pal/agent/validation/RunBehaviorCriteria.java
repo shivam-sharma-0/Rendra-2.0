@@ -5,13 +5,20 @@ import com.code.pal.project.brief.ApprovedProjectMemory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
+import java.time.OffsetDateTime;
+import java.util.HashSet;
+import java.util.List;
 import java.util.UUID;
 import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.exception.WorkflowStageException;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 
-/** Internal coordinator-owned criteria; agent tools cannot write the store. Requirements remain authoritative. */
+/**
+ * Internal coordinator-owned criteria; agent tools cannot write the store. Requirements remain authoritative.
+ * A follow-up run without its own criteria inherits the last completed run's browser checks as regression
+ * checks; the agent may only retire inherited checks (with a reason), never add or rewrite them.
+ */
 @Service
 public final class RunBehaviorCriteria {
     private final JdbcTemplate jdbc;
@@ -46,6 +53,50 @@ public final class RunBehaviorCriteria {
         var criteria = mapper.readValue((String) row[2], BehaviorCriteria.class);
         checkCapabilities(ctx.projectId(), criteria);
         return criteria;
+    }
+
+    /** Browser checks of the last completed run with acceptance, minus retired ones; null when none apply. */
+    public BehaviorCriteria regression(AgentContext ctx) {
+        var approved = memory.current(ctx.projectId());
+        if (approved == null)
+            return null;
+        var rows = jdbc.query("select c.criteria_json,c.created_at,c.requirements_projection_id,c.requirements_revision "
+                + "from agent_behavior_criteria c join agent_runs r on r.id=c.run_id "
+                + "where c.project_id=? and c.run_id<>? and r.status='DONE' order by c.created_at desc limit 1",
+                (rs, row) -> new Source(rs.getString(1), rs.getObject(2, OffsetDateTime.class), rs.getObject(3, UUID.class),
+                        rs.getLong(4)), ctx.projectId(), ctx.runId());
+        if (rows.isEmpty() || !approved.projectionId().equals(rows.getFirst().projection())
+                || approved.revision() != rows.getFirst().revision())
+            return null;
+        var source = rows.getFirst();
+        var retired = new HashSet<>(jdbc.queryForList("select t.action_id from agent_acceptance_retirements t "
+                + "join agent_runs r on r.id=t.run_id where t.project_id=? and t.created_at>? and (t.run_id=? or r.status='DONE')",
+                String.class, ctx.projectId(), source.created(), ctx.runId()));
+        var browser = mapper.readValue(source.json(), BehaviorCriteria.class).browser().stream()
+                .filter(action -> !retired.contains(action.id())).toList();
+        return browser.isEmpty() ? null : new BehaviorCriteria(1, browser, List.of(), false, false);
+    }
+
+    /** Retires inherited checks the user's request intentionally changes or removes; returns what remains. */
+    public List<String> retire(AgentContext ctx, List<String> ids, String reason) {
+        if (current(ctx) != null)
+            throw new IllegalArgumentException("This run's own approved acceptance cannot be retired");
+        var inherited = regression(ctx);
+        if (inherited == null)
+            throw new IllegalArgumentException("No earlier acceptance checks apply to this change");
+        var known = inherited.browser().stream().map(BehaviorCriteria.BrowserAction::id).toList();
+        if (ids == null || ids.isEmpty() || ids.size() > 24 || !known.containsAll(ids))
+            throw new IllegalArgumentException("Unknown acceptance check id; current ids: " + known);
+        String why = reason == null ? "" : reason.strip();
+        if (why.isEmpty() || why.length() > 300)
+            throw new IllegalArgumentException("Give a short reason (at most 300 characters)");
+        for (String id : ids)
+            jdbc.update("insert into agent_acceptance_retirements(run_id,project_id,action_id,reason) values (?,?,?,?) "
+                    + "on conflict do nothing", ctx.runId(), ctx.projectId(), id, why);
+        return known.stream().filter(id -> !ids.contains(id)).toList();
+    }
+
+    private record Source(String json, OffsetDateTime created, UUID projection, long revision) {
     }
 
     public void install(UUID run, UUID project, UUID projection, long revision, BehaviorCriteria criteria) {

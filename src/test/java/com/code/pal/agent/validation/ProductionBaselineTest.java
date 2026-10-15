@@ -84,6 +84,35 @@ class ProductionBaselineTest {
     }
 
     @Test
+    void aHandWrittenPathRouterNeedsANotFoundView() {
+        open();
+        files.writeText(project, "index.html", GOOD_HEAD);
+        files.writeText(project, "src/App.tsx", "const route = routes.find(r => r.path === window.location.pathname) ?? routes[0]");
+        assertEquals(List.of("BASELINE_NOT_FOUND_ROUTE"), codes("."));
+
+        files.writeText(project, "src/App.tsx", "const route = routes.find(r => r.path === window.location.pathname);"
+                + " return route ? <route.component/> : <NotFound/>");
+        assertEquals(List.of(), baseline.check(project, "."));
+    }
+
+    @Test
+    void codeTooLargeOrTooManyFilesToScanIsReportedInsteadOfPassing() {
+        open();
+        files.writeText(project, "index.html", GOOD_HEAD);
+        files.writeText(project, "src/big.js", "const key = 'x';\n".repeat(20_000));
+        assertEquals(List.of("BASELINE_UNSCANNED"), codes("."));
+
+        files.delete(project, "src/big.js");
+        for (int index = 0; index <= 400; index++) {
+            files.writeText(project, "src/part" + index + ".js", "export const part = " + index + ";");
+        }
+        assertEquals(List.of("BASELINE_UNSCANNED"), codes("."));
+
+        files.writeText(project, "index.html", "<title>x</title>".repeat(20_000));
+        assertEquals(List.of("BASELINE_UNSCANNED"), codes("."));
+    }
+
+    @Test
     void aMernClientIsCheckedAndAnApiOnlyProjectIsOutOfScope() {
         open();
         files.writeText(project, "server/package.json", "{}");
