@@ -16,7 +16,7 @@ import java.util.Set;
  * values fall back to defaults and every feature gets at least a route check. Nothing here grants capabilities;
  * persistence comes from the server's storage decision.
  */
-final class SpecNormalizer {
+public final class SpecNormalizer {
     private static final Set<String> STEP_KINDS = Set.of("CLICK", "FILL", "SELECT", "ASSERT_TEXT", "ASSERT_COUNT",
             "ASSERT_ROUTE", "RELOAD");
     private static final Set<String> FONTS = Set.of("system", "serif", "mono");
@@ -26,7 +26,7 @@ final class SpecNormalizer {
     private SpecNormalizer() {
     }
 
-    static ApprovedSpec.Spec normalize(JsonNode node, ApprovedSpec.Storage storage) {
+    public static ApprovedSpec.Spec normalize(JsonNode node, ApprovedSpec.Storage storage) {
         String title = text(node.path("title").asString(""), 120, "App");
         String goal = text(node.path("goal").asString(""), 2_000, title);
         String language = text(node.path("language").asString(""), 32, "en");

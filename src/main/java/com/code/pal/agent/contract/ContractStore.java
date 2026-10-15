@@ -97,8 +97,16 @@ public final class ContractStore {
             ids.add("supabase:" + state.choice().connectionRevision());
         String code = ReleaseSource.capture(files, project, ".");
         String capability = hash(mapper.writeValueAsString(new TreeMap<>(Map.of("choice", state.choice(), "available", state.available()))));
+        ContractSpecIdentity spec = null;
         if (approved.specJson() != null && state.choice().storage() != BuildDecisions.Storage.MERN) {
-            var spec = ContractSpecIdentity.of(approved, state.choice().storage(), mapper);
+            try {
+                spec = ContractSpecIdentity.of(approved, state.choice().storage(), mapper);
+            } catch (RuntimeException unusable) {
+                // An unusable draft only means no spec plan; it never blocks the ordinary contract binding.
+                spec = null;
+            }
+        }
+        if (spec != null) {
             return new Binding(2, approved.projectionId(), approved.revision(), code, capability, ids, spec.id(), spec.revision(),
                     spec.hash(), Starter.TEMPLATE_VERSION, ContractScaffold.revision(), spec.documentHash());
         }

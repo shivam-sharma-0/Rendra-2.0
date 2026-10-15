@@ -3,9 +3,8 @@ package com.code.pal.agent.contract;
 import com.code.pal.project.brief.ApprovedProjectMemory;
 import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.spec.ApprovedSpec;
-import tools.jackson.databind.DeserializationFeature;
+import com.code.pal.project.spec.SpecNormalizer;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ObjectNode;
 
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
@@ -19,18 +18,12 @@ public record ContractSpecIdentity(UUID id, long revision, String hash, String d
                 ContractStore.hash(approved.specJson()));
     }
 
+    /** The same normalized body ApprovedSpecs approves, so binding and envelope hashes always agree. */
     public static ApprovedSpec.Spec body(String json, BuildDecisions.Storage storage, ObjectMapper mapper) {
-        var node = (ObjectNode) mapper.readTree(json);
-        node.putArray("assets");
-        if (!node.path("language").isString()) {
-            node.put("language", "en");
+        var node = mapper.readTree(json);
+        if (!node.isObject()) {
+            throw new IllegalArgumentException("Spec draft is not an object");
         }
-        for (var entity : node.path("entities")) {
-            if (entity instanceof ObjectNode object) {
-                object.put("persistence", storage.name());
-            }
-        }
-        return mapper.readerFor(ApprovedSpec.Spec.class).without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                .readValue(mapper.writeValueAsString(node));
+        return SpecNormalizer.normalize(node, ApprovedSpec.Storage.valueOf(storage.name()));
     }
 }

@@ -56,6 +56,10 @@ public class ApprovedSpecs {
                 return Optional.empty();
             }
             var spec = SpecNormalizer.normalize(draft, storage);
+            String specHash = "sha256:" + ContractStore.hash(mapper.writeValueAsString(spec));
+            if (binding.specHash() != null && !binding.specHash().equals(specHash)) {
+                return Optional.empty();
+            }
             var desired = new ApprovedSpec.Desired(renderStack(spec, storage), storage,
                     ApprovedSpec.Auth.valueOf(choice.auth().name()));
             UUID specId = UUID.nameUUIDFromBytes(("spec:" + approved.projectionId()).getBytes(StandardCharsets.UTF_8));
