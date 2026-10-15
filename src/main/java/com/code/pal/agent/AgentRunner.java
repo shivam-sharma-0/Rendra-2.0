@@ -1345,8 +1345,13 @@ public class AgentRunner implements AgentRuntime {
             ToolExecutionResult result = results.get(index);
             if (result.success())
                 recordPhase(runtime, item.call.name());
-            log.info("tool_{} runId={} tool={}", result.success() ? "completed" : "failed", run.getId(),
-                    item.call.name());
+            if (result.success() || result.error() == null) {
+                log.info("tool_{} runId={} tool={}", result.success() ? "completed" : "failed", run.getId(), item.call.name());
+            } else {
+                String message = result.error().message() == null ? "" : result.error().message();
+                log.info("tool_failed runId={} tool={} code={} message={}", run.getId(), item.call.name(), result.error().code(),
+                        message.length() > 200 ? message.substring(0, 200) + "..." : message);
+            }
             events.emit(run, AgentStepType.TOOL_RESULT, item.call.name(), auditToolResult(result, item.args));
         }
         boolean wrote = false;

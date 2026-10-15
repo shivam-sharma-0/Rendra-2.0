@@ -153,7 +153,11 @@ public class ProductionBaseline {
         return base.equals(".") ? child : base + "/" + child;
     }
 
+    /** A leaked secret or code that could not be scanned blocks the build; the polish items are advisory. */
+    private static final Set<String> BLOCKING = Set.of("BASELINE_CLIENT_SECRET", "BASELINE_UNSCANNED");
+
     private static ProjectDiagnostic issue(String path, String code, String message) {
-        return new ProjectDiagnostic(path, null, null, DiagnosticSeverity.ERROR, message, CATEGORY, code);
+        return new ProjectDiagnostic(path, null, null, BLOCKING.contains(code) ? DiagnosticSeverity.ERROR : DiagnosticSeverity.WARNING,
+                message, CATEGORY, code);
     }
 }

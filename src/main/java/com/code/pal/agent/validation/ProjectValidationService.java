@@ -284,11 +284,13 @@ public class ProjectValidationService {
         }
         if (baseline != null) {
             var missing = introducedBaseline(context, view);
-            checks.add(new ValidationCheck("BASELINE", missing.isEmpty() ? ValidationCheck.Outcome.PASS
-                    : ValidationCheck.Outcome.FAIL, true, missing.isEmpty() ? "Production checklist met"
-                            : "Production checklist items are missing"));
-            if (!missing.isEmpty()) {
-                introduced.addAll(missing);
+            var blocking = missing.stream().filter(issue -> issue.severity() == DiagnosticSeverity.ERROR).toList();
+            checks.add(new ValidationCheck("BASELINE", blocking.isEmpty() ? ValidationCheck.Outcome.PASS
+                    : ValidationCheck.Outcome.FAIL, true, blocking.isEmpty()
+                            ? missing.isEmpty() ? "Production checklist met" : "Production checklist met; polish items remain"
+                            : "Client code exposes a secret or could not be checked"));
+            if (!blocking.isEmpty()) {
+                introduced.addAll(blocking);
                 passed = false;
             }
         }
