@@ -167,8 +167,13 @@ public final class BatchUnitGenerator {
 
     private List<UnitGenerator.Output> generatePrepared(List<UnitGenerator.Input> inputs, AgentProperties.ModelSelection model,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, String data, int outputCap, int inputCap) {
+        String policy = SYSTEM;
+        if (inputs.getFirst().contract().schemaVersion() == 2 && inputs.getFirst().contract().stack() == BuildContract.Stack.STATIC) {
+            policy += "\nStatic HTML/CSS/JS only. Backend compiles Tailwind and injects local rendra.css. "
+                    + "Use utility classes; no runtime CDN, remote scripts/fonts, CSS imports or compiler directives.";
+        }
         var messages = new ArrayList<LlmClient.LlmMessage>(
-                List.of(LlmClient.LlmMessage.system(SYSTEM), LlmClient.LlmMessage.user(data)));
+                List.of(LlmClient.LlmMessage.system(policy), LlmClient.LlmMessage.user(data)));
         for (int attempt = 0; attempt < 2; attempt++) {
             var grammar = schema(inputs);
             int bytes = messages.stream().mapToInt(message -> message.content().getBytes(StandardCharsets.UTF_8).length).sum()

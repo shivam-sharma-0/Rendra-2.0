@@ -218,6 +218,9 @@ public final class ContractCoordinator {
                 .map(id -> c.units().stream().filter(unit -> unit.id().equals(id)).findFirst().orElseThrow()).toList()).toList() : c.waves();
         for (int waveIndex = 0; waveIndex < executionWaves.size(); waveIndex++) {
             var wave = executionWaves.get(waveIndex);
+            if (c.schemaVersion() == 2) {
+                beforeIo.run();
+            }
             requireBasis(ctx, basis);
             var outputs = new ArrayList<UnitGenerator.Delta>();
             var inputs = new ArrayList<UnitGenerator.Input>();
@@ -311,6 +314,7 @@ public final class ContractCoordinator {
         for (int attempt = 0;; attempt++) {
             beforeIo.run();
             requireBasis(ctx, basis);
+            ContractCompletion.require(c, path -> files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null);
             activity.accept("Checking required behavior");
             var report = validation.validateAll(ctx);
             if (report.changeValidationPassed() && c.acceptance().api().stream()
@@ -480,18 +484,11 @@ public final class ContractCoordinator {
     }
 
     private List<UnitGenerator.Output> recoverBatch(AgentRun run, AgentContext ctx, List<UnitGenerator.Input> inputs) {
-        var recovered = new ArrayList<UnitGenerator.Output>();
         if (unitCheckpoints == null) {
-            return recovered;
+            return List.of();
         }
-        for (var input : inputs) {
-            var cached = unitCheckpoints.reuse(run, input, ctx);
-            if (cached == null) {
-                return List.of();
-            }
-            recovered.add(cached);
-        }
-        return List.copyOf(recovered);
+        var cached = unitCheckpoints.reuseBatch(run, inputs, ctx);
+        return cached == null ? List.of() : cached;
     }
 
     private List<UnitGenerator.Delta> plannedOutputs(AgentContext ctx, AgentRun run, BuildContract contract, ContractBatch batch,
@@ -506,10 +503,8 @@ public final class ContractCoordinator {
                 generated = new BatchUnitGenerator(mapper).generatePlanned(contract, batch, frozen, completed,
                         planning.spec(), props.preferredModel(ProjectType.BUILD), checked);
             }
-            for (int index = 0; index < frozen.size(); index++) {
-                if (unitCheckpoints != null && !generated.get(index).files().isEmpty()) {
-                    unitCheckpoints.save(run, frozen.get(index), generated.get(index));
-                }
+            if (unitCheckpoints != null) {
+                unitCheckpoints.saveBatch(run, frozen, generated);
             }
         }
         return generated.stream().flatMap(output -> output.files().stream()).toList();

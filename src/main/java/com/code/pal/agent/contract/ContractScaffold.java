@@ -4,12 +4,13 @@ import com.code.pal.agent.starter.Starter;
 import com.code.pal.project.capability.BuildDecisions;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
-import java.nio.file.Path;
-import java.util.*;
-import java.util.function.Function;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.function.Function;
 
 /** Pure rendering. The coordinator owns all mutations; no LLM, installation or connector activation here. */
 @Component
@@ -20,12 +21,29 @@ public final class ContractScaffold {
         this.mapper = mapper;
     }
 
+    @SuppressWarnings("unchecked")
     public Map<String, String> render(BuildContract c, String title, Function<String, String> existing) {
         var out = new LinkedHashMap<String, String>();
+        if (c.schemaVersion() == 2 && c.stack() == BuildContract.Stack.STATIC) {
+            var starter = StaticAssets.files(c.id());
+            for (String name : List.of("package.json", "package-lock.json")) {
+                String old = existing.apply(name);
+                if (old != null && !mapper.readTree(old).equals(mapper.readTree(starter.get(name)))) {
+                    throw new IllegalArgumentException("Static starter cannot replace user-owned dependency manifests");
+                }
+            }
+            out.putAll(starter);
+        }
         if (c.stack() != BuildContract.Stack.STATIC) {
             String manifest = c.stack() == BuildContract.Stack.MERN ? "client/package.json" : "package.json";
             if (existing.apply(manifest) == null)
                 out.putAll((c.stack() == BuildContract.Stack.MERN ? Starter.MERN : Starter.VITE_REACT).files(title));
+            if (c.schemaVersion() == 2 && out.containsKey("package.json")) {
+                Map<String, Object> manifestData = mapper.readValue(out.get("package.json"), Map.class);
+                Map<String, Object> scripts = (Map<String, Object>) manifestData.get("scripts");
+                scripts.put("build", "vite build");
+                out.put("package.json", mapper.writeValueAsString(manifestData));
+            }
         }
         String root = c.clientRoot();
         var theme = new StringBuilder(":root {\n");
@@ -117,6 +135,10 @@ public final class ContractScaffold {
             out.put("server/src/index.ts", entry);
         }
         return Collections.unmodifiableMap(out);
+    }
+
+    public static String revision() {
+        return ContractStore.hash("contract-scaffold-2026-10-16.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision());
     }
 
     private String type(BuildContract.DataType t) {

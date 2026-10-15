@@ -4,6 +4,7 @@ import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.runtime.ReleaseSource;
+import com.code.pal.agent.starter.Starter;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.service.ConversationProposals;
@@ -12,21 +13,43 @@ import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.exception.WorkflowStageException;
 import com.code.pal.project.service.ProjectService;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.*;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.*;
 import java.security.NoSuchAlgorithmException;
+import java.util.*;
 
 /** Immutable contract + server-owned approval/code/capability binding. Imported/model text is not approval. */
 @Service
 public final class ContractStore {
     public record Binding(int version, UUID requirementsProjection, long requirementsRevision, String codeRevision,
-            String capabilityRevision, Set<String> integrationIds) {
+            String capabilityRevision, Set<String> integrationIds,
+            @JsonInclude(JsonInclude.Include.NON_NULL) UUID specId,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Long specRevision,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String specHash,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String templateVersion,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String scaffoldRevision,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String specDocumentHash) {
+        public Binding(int version, UUID projection, long revision, String code, String capability, Set<String> integrations) {
+            this(version, projection, revision, code, capability, integrations, null, null, null, null, null, null);
+        }
+
+        public Binding {
+            integrationIds = Set.copyOf(integrationIds);
+            if (version != 1 && version != 2) {
+                throw new IllegalArgumentException("Unknown contract binding version");
+            }
+            if (version == 2 && (specId == null || specRevision == null || specRevision < 1 || specHash == null
+                    || !specHash.matches("sha256:[a-f0-9]{64}") || templateVersion == null || scaffoldRevision == null || specDocumentHash == null)) {
+                throw new IllegalArgumentException("Incomplete v2 contract binding");
+            }
+        }
     }
 
     public record Stored(UUID runId, UUID projectId, BuildContract contract, String hash, Binding binding, String state,
@@ -72,10 +95,14 @@ public final class ContractStore {
             ids.add("platform:mongodb");
         if (state.choice().storage() == BuildDecisions.Storage.SUPABASE)
             ids.add("supabase:" + state.choice().connectionRevision());
-        return new Binding(1, approved.projectionId(), approved.revision(), ReleaseSource.capture(files, project, "."),
-                hash(mapper.writeValueAsString(
-                        new TreeMap<>(Map.of("choice", state.choice(), "available", state.available())))),
-                Set.copyOf(ids));
+        String code = ReleaseSource.capture(files, project, ".");
+        String capability = hash(mapper.writeValueAsString(new TreeMap<>(Map.of("choice", state.choice(), "available", state.available()))));
+        if (approved.specJson() != null && state.choice().storage() != BuildDecisions.Storage.MERN) {
+            var spec = ContractSpecIdentity.of(approved, state.choice().storage(), mapper);
+            return new Binding(2, approved.projectionId(), approved.revision(), code, capability, ids, spec.id(), spec.revision(),
+                    spec.hash(), Starter.TEMPLATE_VERSION, ContractScaffold.revision(), spec.documentHash());
+        }
+        return new Binding(1, approved.projectionId(), approved.revision(), code, capability, ids);
     }
 
     public Stored create(AgentRun run, BuildContract contract, Binding expected, BuildContract.Limits allowed) {
@@ -91,6 +118,11 @@ public final class ContractStore {
                 throw conflict("Code, capabilities or requirements changed during planning; request a current plan");
             if (!contract.limits().within(allowed))
                 throw conflict("Contract exceeds the approved run caps");
+            if (contract.schemaVersion() == 2 && (expected.version() != 2 || !contract.specId().equals(expected.specId())
+                    || !contract.specRevision().equals(expected.specRevision()) || !contract.specHash().equals(expected.specHash())
+                    || !contract.templateVersion().equals(expected.templateVersion()))) {
+                throw conflict("Contract differs from the current approved spec/template");
+            }
             var choice = decisions.state(run.getProjectId()).choice();
             if (contract.storage() != choice.storage() || contract.auth() != choice.auth())
                 throw conflict("Contract differs from approved capabilities");

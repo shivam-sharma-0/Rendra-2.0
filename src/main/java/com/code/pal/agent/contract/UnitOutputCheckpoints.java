@@ -1,17 +1,18 @@
 package com.code.pal.agent.contract;
 
+import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.lease.ProjectLeaseService;
+import com.code.pal.agent.starter.Starter;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.workspace.ProjectFiles;
-import com.code.pal.agent.config.AgentProperties;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.*;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
+
 import java.util.*;
-import com.code.pal.agent.starter.Starter;
 
 /** Durable proposals are GENERATED; only actual backend behavior can mark VERIFIED. Both require fresh final validation. */
 @Service
@@ -74,6 +75,9 @@ public final class UnitOutputCheckpoints {
     }
 
     public void save(AgentRun run, UnitGenerator.Input input, UnitGenerator.Output output) {
+        if (input.contract().schemaVersion() == 2) {
+            throw new IllegalArgumentException("V2 output needs a complete batch receipt");
+        }
         if (run.getRequestFingerprint() == null)
             return;
         if (!input.contract().units().contains(input.unit()))
@@ -98,6 +102,9 @@ public final class UnitOutputCheckpoints {
     }
 
     public UnitGenerator.Output reuse(AgentRun run, UnitGenerator.Input input, AgentContext ctx) {
+        if (input.contract().schemaVersion() == 2) {
+            throw new IllegalArgumentException("V2 recovery needs its complete batch receipt");
+        }
         if (!run.getProjectId().equals(ctx.projectId()) || !run.getId().equals(ctx.runId())
                 || !Objects.equals(run.getUserId(), ctx.userId()) || !input.contract().units().contains(input.unit()))
             throw new IllegalStateException("Unit reuse identity changed");
@@ -135,9 +142,12 @@ public final class UnitOutputCheckpoints {
     public void verified(AgentRun run) {
         if (run.getRequestFingerprint() == null)
             return;
-        leases.guarded(run.getProjectId(), () -> tx.executeWithoutResult(s -> jdbc.update(
+        leases.guarded(run.getProjectId(), () -> {
+            requireRunning(run);
+            tx.executeWithoutResult(s -> jdbc.update(
                 "update agent_unit_outputs set state='VERIFIED' where id in (select distinct on(unit_id) id from agent_unit_outputs where run_id=? order by unit_id,created_at desc,id desc)",
-                run.getId())));
+                run.getId()));
+        });
     }
 
     public boolean canResume(AgentRun run) {
@@ -151,6 +161,20 @@ public final class UnitOutputCheckpoints {
                 (r, n) -> r.getString(1), run.getId());
         if (units.isEmpty())
             return false;
+        if (stored.contract().schemaVersion() == 2) {
+            for (String key : units) {
+                var batch = stored.contract().batches().stream().filter(value -> BatchReceipts.key(value).equals(key)).findFirst().orElse(null);
+                if (batch == null) {
+                    return false; // An old per-unit v2 row cannot prove an atomic batch.
+                }
+                var entry = latest(run.getId(), key);
+                if (!entry.contract().equals(stored.contract().id()) || !Objects.equals(entry.request(), run.getRequestFingerprint())) {
+                    return false;
+                }
+                BatchReceipts.validate(stored.contract(), batch, decodeBatch(entry));
+            }
+            return true;
+        }
         for (String id : units) {
             var entry = latest(run.getId(), id);
             if (!entry.contract().equals(stored.contract().id()) || !entry.request().equals(run.getRequestFingerprint())
@@ -159,5 +183,82 @@ public final class UnitOutputCheckpoints {
             decode(entry);
         }
         return true;
+    }
+
+    public void saveBatch(AgentRun run, List<UnitGenerator.Input> inputs, List<UnitGenerator.Output> outputs) {
+        var batch = BatchReceipts.batch(inputs);
+        var contract = inputs.getFirst().contract();
+        if (outputs.size() != inputs.size()) {
+            throw new IllegalArgumentException("Incomplete batch output");
+        }
+        var units = new ArrayList<BatchUnitGenerator.UnitOutput>();
+        for (int index = 0; index < inputs.size(); index++) {
+            units.add(new BatchUnitGenerator.UnitOutput(inputs.get(index).unit().id(), outputs.get(index).files()));
+        }
+        var receipt = new BatchUnitGenerator.Output(units);
+        BatchReceipts.validate(contract, batch, receipt);
+        for (int index = 0; index < inputs.size(); index++) {
+            if (!outputs.get(index).files().isEmpty()) {
+                UnitGenerator.validate(inputs.get(index), outputs.get(index));
+            }
+        }
+        if (run.getRequestFingerprint() == null) {
+            return;
+        }
+        String json = mapper.writeValueAsString(receipt);
+        if (json.length() > 512_000) {
+            throw new IllegalArgumentException("Batch checkpoint exceeds capacity");
+        }
+        leases.guarded(run.getProjectId(), () -> {
+            requireRunning(run);
+            requireContract(run, contract);
+            tx.executeWithoutResult(status -> jdbc.update(
+                    "insert into agent_unit_outputs(id,run_id,contract_id,unit_id,request_fingerprint,context_hash,output_json,output_hash,state) values (?,?,?,?,?,?,?,?,'GENERATED')",
+                    UUID.randomUUID(), run.getId(), contract.id(), BatchReceipts.key(batch), run.getRequestFingerprint(),
+                    BatchReceipts.context(run, inputs, props, mapper), json, ContractStore.hash(json)));
+        });
+    }
+
+    public List<UnitGenerator.Output> reuseBatch(AgentRun run, List<UnitGenerator.Input> inputs, AgentContext ctx) {
+        var batch = BatchReceipts.batch(inputs);
+        if (!run.getProjectId().equals(ctx.projectId()) || !run.getId().equals(ctx.runId()) || !Objects.equals(run.getUserId(), ctx.userId())) {
+            throw new IllegalStateException("Batch reuse identity changed");
+        }
+        var contract = inputs.getFirst().contract();
+        requireContract(run, contract);
+        var entry = latest(run.getId(), BatchReceipts.key(batch));
+        if (entry == null) {
+            return List.of();
+        }
+        if (!entry.contract().equals(contract.id()) || !Objects.equals(entry.request(), run.getRequestFingerprint())
+                || !entry.context().equals(BatchReceipts.context(run, inputs, props, mapper))) {
+            return List.of();
+        }
+        var latest = BatchReceipts.validate(contract, batch, decodeBatch(entry));
+        var original = BatchReceipts.validate(contract, batch, decodeBatch(first(run.getId(), BatchReceipts.key(batch))));
+        return BatchReceipts.replay(latest, original, ctx, files);
+    }
+
+    private BatchUnitGenerator.Output decodeBatch(Entry entry) {
+        if (entry == null || !ContractStore.hash(entry.json()).equals(entry.hash())) {
+            throw new IllegalStateException("Batch checkpoint integrity failed");
+        }
+        return mapper.readValue(entry.json(), BatchUnitGenerator.Output.class);
+    }
+
+    private void requireRunning(AgentRun run) {
+        if (jdbc.queryForObject("select count(*) from agent_runs where id=? and project_id=? and user_id=? and request_fingerprint=? "
+                + "and mode='BUILD' and status='RUNNING' and cancel_requested_at is null", Integer.class,
+                run.getId(), run.getProjectId(), run.getUserId(), run.getRequestFingerprint()) != 1) {
+            throw new IllegalStateException("Checkpoint accepted identity changed or Stop was requested");
+        }
+    }
+
+    private void requireContract(AgentRun run, BuildContract contract) {
+        var stored = contracts.forRun(run.getProjectId(), run.getId());
+        if (stored == null || !"APPROVED".equals(stored.state()) || !stored.contract().equals(contract)
+                || !stored.binding().equals(contracts.current(run.getProjectId()))) {
+            throw new IllegalStateException("Batch reuse approval changed");
+        }
     }
 }

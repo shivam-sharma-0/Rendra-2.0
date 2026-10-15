@@ -198,7 +198,9 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             for (String path : unit.ownedPaths()) {
                 if (path.toLowerCase(Locale.ROOT).startsWith(clientRoot.toLowerCase(Locale.ROOT))
                         || path.toLowerCase(Locale.ROOT).startsWith(serverRoot.toLowerCase(Locale.ROOT))
-                        || reserved(path, stack) || ownership.putIfAbsent(path, unit.id()) != null)
+                        || reserved(path, stack)
+                        || (schemaVersion == 2 && (path.equalsIgnoreCase(StaticAssets.MARKER) || path.equalsIgnoreCase("rendra.css")))
+                        || ownership.putIfAbsent(path, unit.id()) != null)
                     bad("Overlapping/coordinator file ownership");
             }
         for (String path : ownership.keySet())
