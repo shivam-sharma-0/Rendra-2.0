@@ -5,6 +5,7 @@ import com.code.pal.agent.llm.LlmCancelledException;
 import com.code.pal.agent.route.RunSize;
 import com.code.pal.agent.route.SizeTier;
 import com.code.pal.agent.validation.ValidationOperation;
+import com.code.pal.agent.validation.ValidationCheck;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.exception.WorkflowStageException;
 import com.code.pal.project.spec.ApprovedSpec;
@@ -12,6 +13,7 @@ import com.code.pal.project.spec.SpecFixtures;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -118,6 +120,53 @@ class SpecCoordinatorTest {
         verify(fixture.store, never()).create(any(), any(), any(), any());
         assertFalse(fixture.project.exists("index.html"));
         verify(fixture.validation).validateAll(ctx);
+    }
+
+    @Test
+    void attachedV2ContractRequiresItsSpecEvenAfterStageIsNoLongerEmpty() {
+        var spec = boundSpec();
+        var contract = ContractPlans.fromLayout(UUID.randomUUID(), spec,
+                new DeterministicPlan(fixture.mapper).plan(spec, budget).orElseThrow(), ContractFixtures.limits());
+        var run = fixture.run(ProjectType.BUILD);
+        fixture.project.write("index.html", "Previously generated stage");
+        var stored = new ContractStore.Stored(run.getId(), run.getProjectId(), contract, "hash", binding, "APPROVED", "BUILD_REQUEST");
+        when(fixture.store.forRun(run.getProjectId(), run.getId())).thenReturn(stored);
+        assertTrue(fixture.coordinator.needsSpecPlanning(run));
+        when(fixture.store.forRun(run.getProjectId(), run.getId())).thenReturn(null);
+        assertFalse(fixture.coordinator.needsSpecPlanning(run), "Ordinary edits must keep the existing tool-loop path");
+    }
+
+    @Test
+    void bundleAdapterReplacesLegacyCompilerAndFinalValidationCalls() {
+        var spec = boundSpec();
+        var contract = ContractPlans.fromLayout(UUID.randomUUID(), spec,
+                new DeterministicPlan(fixture.mapper).plan(spec, budget).orElseThrow(), ContractFixtures.limits());
+        var run = fixture.run(ProjectType.BUILD);
+        var ctx = fixture.context(run);
+        var approved = new ContractStore.Stored(run.getId(), run.getProjectId(), contract, "hash", binding, "APPROVED", "EXPLICIT_PLAN");
+        when(fixture.store.forRun(run.getProjectId(), run.getId())).thenReturn(approved);
+        var phases = new ArrayList<ValidationRequest.Phase>();
+        fixture.coordinator.useBundleValidation((context, owner, plan, batch, completed) -> {
+            var phase = batch == null ? ValidationRequest.Phase.FINAL : ValidationRequest.Phase.BATCH;
+            phases.add(phase);
+            var identity = new ValidationRequest(run.getId(), ctx.projectId(), contract.id(), contract.planRevision(), batch,
+                    fixture.changes.view(ctx).revision(), "source", "deps", "commands", "criteria", "caps", "validator", phase,
+                    Set.of("BUILD", "RUNTIME", "BASELINE"), completed);
+            var command = new ValidationBundle.CommandReceipt("BUILD", "identity", ValidationCheck.Outcome.PASS, "artifact");
+            var checks = List.of(new ValidationCheck("BUILD", ValidationCheck.Outcome.PASS, true, ""),
+                    new ValidationCheck("RUNTIME", ValidationCheck.Outcome.PASS, true, ""),
+                    new ValidationCheck("BASELINE", ValidationCheck.Outcome.PASS, true, ""));
+            return new ValidationBundle(identity, "sha256:" + "d".repeat(64), checks, List.of(), List.of(command), "artifact", true);
+        });
+        fixture.coordinator.execute(ctx, run, RunSize.of(SizeTier.M, List.of(), fixture.props), "build the approved plan", "map", request -> {
+            var data = fixture.mapper.readTree(request.messages().get(1).content());
+            var units = contract.units().stream().map(unit -> new BatchUnitGenerator.UnitOutput(unit.id(), unit.ownedPaths().stream()
+                    .map(path -> new UnitGenerator.Delta(path, data.path("snapshot").path(path).path("version").asString(),
+                            path.endsWith("html") ? "<h1>Solar Bakery</h1>" : "body {}" )).toList())).toList();
+            return new LlmClient.LlmResult(fixture.mapper.writeValueAsString(new BatchUnitGenerator.Output(units)), null, List.of(), null, "stop");
+        }, () -> {}, activity -> {}, new ContractCoordinator.SpecPlanning(spec, budget));
+        assertEquals(List.of(ValidationRequest.Phase.BATCH, ValidationRequest.Phase.FINAL), phases);
+        verifyNoInteractions(fixture.validation);
     }
 
     @Test

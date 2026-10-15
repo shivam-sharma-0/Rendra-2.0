@@ -13,6 +13,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.*;
+import java.util.function.UnaryOperator;
 
 /** Durable proposals are GENERATED; only actual backend behavior can mark VERIFIED. Both require fresh final validation. */
 @Service
@@ -220,6 +221,11 @@ public final class UnitOutputCheckpoints {
     }
 
     public List<UnitGenerator.Output> reuseBatch(AgentRun run, List<UnitGenerator.Input> inputs, AgentContext ctx) {
+        return reuseBatch(run, inputs, ctx, UnaryOperator.identity());
+    }
+
+    public List<UnitGenerator.Output> reuseBatch(AgentRun run, List<UnitGenerator.Input> inputs, AgentContext ctx,
+            UnaryOperator<List<UnitGenerator.Output>> repairOverlay) {
         var batch = BatchReceipts.batch(inputs);
         if (!run.getProjectId().equals(ctx.projectId()) || !run.getId().equals(ctx.runId()) || !Objects.equals(run.getUserId(), ctx.userId())) {
             throw new IllegalStateException("Batch reuse identity changed");
@@ -234,7 +240,7 @@ public final class UnitOutputCheckpoints {
                 || !entry.context().equals(BatchReceipts.context(run, inputs, props, mapper))) {
             return List.of();
         }
-        var latest = BatchReceipts.validate(contract, batch, decodeBatch(entry));
+        var latest = repairOverlay.apply(BatchReceipts.validate(contract, batch, decodeBatch(entry)));
         var original = BatchReceipts.validate(contract, batch, decodeBatch(first(run.getId(), BatchReceipts.key(batch))));
         return BatchReceipts.replay(latest, original, ctx, files);
     }

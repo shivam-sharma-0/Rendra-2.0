@@ -8,6 +8,7 @@ import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.plan.AgentPlanState;
 import com.code.pal.agent.starter.Starter;
 import com.code.pal.agent.route.*;
+import com.code.pal.agent.repair.StructuredRepair;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.validation.*;
 import com.code.pal.agent.workspace.ProjectFiles;
@@ -45,6 +46,24 @@ public final class ContractCoordinator {
     private final ObjectMapper mapper;
     private final UnitWaveExecutor waves = new UnitWaveExecutor();
     private UnitOutputCheckpoints unitCheckpoints;
+    private ContractValidation bundleValidation;
+    private StructuredRepair structuredRepair;
+    private ContractFixes deterministicFixes;
+
+    @Autowired(required = false)
+    public void useDeterministicFixes(ContractFixes adapter) {
+        this.deterministicFixes = adapter;
+    }
+
+    @Autowired(required = false)
+    public void useStructuredRepair(StructuredRepair repair) {
+        this.structuredRepair = repair;
+    }
+
+    @Autowired(required = false)
+    public void useBundleValidation(ContractValidation adapter) {
+        this.bundleValidation = adapter;
+    }
 
     @Autowired
     public void useUnitCheckpoints(UnitOutputCheckpoints checkpoints) {
@@ -101,6 +120,17 @@ public final class ContractCoordinator {
             Objects.requireNonNull(spec);
             Objects.requireNonNull(budget);
         }
+    }
+
+    /** A resumed or explicitly accepted v2 contract still needs its approved spec on a nonempty stage. */
+    public boolean needsSpecPlanning(AgentRun run) {
+        var attached = store.forRun(run.getProjectId(), run.getId());
+        if (attached != null && attached.contract().schemaVersion() == 2) {
+            return true;
+        }
+        UUID accepted = store.acceptedPlanRun(run);
+        var offered = accepted == null ? null : store.forRun(run.getProjectId(), accepted);
+        return offered != null && offered.contract().schemaVersion() == 2;
     }
 
     public boolean eligible(AgentRun run, RunSize size, String request, SpecPlanning planning) {
@@ -296,7 +326,30 @@ public final class ContractCoordinator {
             try (var scope = UnitWriteScope.wave(ctx, c, wave)) {
                 merge(ctx, outputs);
             }
+            if (c.schemaVersion() == 2 && structuredRepair != null) {
+                var ready = new HashSet<String>();
+                orderedBatches.stream().filter(batch -> completedBatches.contains(batch.id())).forEach(batch -> ready.addAll(batch.ownedPaths()));
+                wave.forEach(unit -> ready.addAll(unit.ownedPaths()));
+                beforeIo.run();
+                structuredRepair.recoverReady(ctx, run, c, ready);
+            }
             // Intermediate compiler checks never certify incomplete acceptance or a pending unit.
+            if (c.schemaVersion() == 2 && bundleValidation != null) {
+                beforeIo.run();
+                for (;;) {
+                    var report = bundleReport(ctx, run, c, orderedBatches.get(waveIndex).id(), completedBatches);
+                    if (report.changeValidationPassed()) {
+                        break;
+                    }
+                    if (report.checks().stream().anyMatch(ValidationCheck::unavailable)) {
+                        throw new WorkflowStageException("Required batch checks are unavailable");
+                    }
+                    repair(ctx, run, c, wave, request, approved.requirementsJson(), common.keySet(), report, checkedCall, beforeIo, activity);
+                    beforeIo.run();
+                }
+                completedBatches.add(orderedBatches.get(waveIndex).id());
+                continue;
+            }
             beforeIo.run();
             var report = validation.run(ctx, ValidationOperation.TYPE_CHECK, null);
             if (report.available() && !report.changeValidationPassed())
@@ -316,7 +369,8 @@ public final class ContractCoordinator {
             requireBasis(ctx, basis);
             ContractCompletion.require(c, path -> files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null);
             activity.accept("Checking required behavior");
-            var report = validation.validateAll(ctx);
+            var report = c.schemaVersion() == 2 && bundleValidation != null
+                    ? bundleReport(ctx, run, c, null, completedBatches) : validation.validateAll(ctx);
             if (report.changeValidationPassed() && c.acceptance().api().stream()
                     .anyMatch(step -> report.checks().stream().noneMatch(check -> check.id().equals("API_" + step.id())
                             && check.outcome() == ValidationCheck.Outcome.PASS)))
@@ -348,7 +402,19 @@ public final class ContractCoordinator {
             String req, Set<String> shared, ValidationReport report,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, Runnable beforeIo, Consumer<String> activity) {
         if (c.schemaVersion() == 2) {
-            throw new WorkflowStageException("Planned batch checks failed; scoped patch repair requires the S6 adapter");
+            int beforeFix = changes.view(ctx).revision();
+            if (deterministicFixes != null && deterministicFixes.tryFix(ctx, run, c, report)) {
+                if (changes.view(ctx).revision() <= beforeFix) {
+                    throw new WorkflowStageException("Deterministic fixer returned success without a staged revision change");
+                }
+                return;
+            }
+            if (structuredRepair == null) {
+                throw new WorkflowStageException("Scoped patch repair is unavailable");
+            }
+            activity.accept("Fixing the failing code");
+            structuredRepair.repair(ctx, run, c, units, report, checked, beforeIo);
+            return;
         }
         if (changes.validationProgress(ctx).repairLimitExhausted())
             throw new WorkflowStageException("Repair limit reached");
@@ -404,7 +470,7 @@ public final class ContractCoordinator {
                         if (diagnostic.message().contains("Required interaction " + id + " did not pass"))
                             ids.add(unit.id());
         }
-        if (ids.isEmpty())
+        if (ids.isEmpty() && c.schemaVersion() == 1)
             ids.addAll(c.units().stream().map(BuildContract.Unit::id).toList());
         // Shared interfaces are immutable. A dependency edge alone does not prove a dependent needs
         // regeneration; fresh whole-project validation will identify any actual downstream failure.
@@ -455,6 +521,29 @@ public final class ContractCoordinator {
             throw new WorkflowStageException("Approval/code/capabilities changed; create a current plan");
     }
 
+    private ValidationReport bundleReport(AgentContext ctx, AgentRun run, BuildContract contract, String batchId, Set<String> completed) {
+        var bundle = bundleValidation.validateBundle(ctx, run, contract, batchId, Set.copyOf(completed));
+        var identity = bundle.requestIdentity();
+        if (!identity.runId().equals(run.getId()) || !identity.projectId().equals(ctx.projectId())
+                || !identity.contractId().equals(contract.id()) || identity.planRevision() != contract.planRevision()
+                || !Objects.equals(identity.batchId(), batchId) || identity.stagedRevision() != changes.view(ctx).revision()
+                || !identity.completedBatchIds().equals(completed)
+                || batchId == null && !identity.requiredChecks().containsAll(Set.of("BUILD", "RUNTIME", "BASELINE"))
+                || identity.phase() != (batchId == null ? ValidationRequest.Phase.FINAL : ValidationRequest.Phase.BATCH)) {
+            throw new WorkflowStageException("Validation bundle does not match the staged contract revision");
+        }
+        boolean passed = bundle.checks().stream().noneMatch(check -> check.blocksSuccess()
+                || identity.requiredChecks().contains(check.id()) && check.outcome() != ValidationCheck.Outcome.PASS);
+        passed &= bundle.checks().stream().map(ValidationCheck::id).collect(Collectors.toSet()).containsAll(identity.requiredChecks());
+        passed &= bundle.diagnostics().stream().noneMatch(diagnostic -> diagnostic.severity() == DiagnosticSeverity.ERROR);
+        if (batchId == null) {
+            passed &= bundle.certifyEligible();
+        }
+        return new ValidationReport(ValidationOperation.BUILD, true, passed, passed, false, passed ? 0 : 1,
+                "bound", "validation bundle", bundle.diagnostics(), List.of(), 0, 2, identity.stagedRevision(),
+                bundle.diagnosticsRevision(), bundle.checks());
+    }
+
     private Map<String, String> render(AgentContext ctx, BuildContract contract) {
         return scaffold.render(contract, "App", path -> files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null);
     }
@@ -487,7 +576,8 @@ public final class ContractCoordinator {
         if (unitCheckpoints == null) {
             return List.of();
         }
-        var cached = unitCheckpoints.reuseBatch(run, inputs, ctx);
+        var cached = structuredRepair == null ? unitCheckpoints.reuseBatch(run, inputs, ctx)
+                : unitCheckpoints.reuseBatch(run, inputs, ctx, outputs -> structuredRepair.overlay(ctx, run, inputs.getFirst().contract(), outputs));
         return cached == null ? List.of() : cached;
     }
 
@@ -505,6 +595,9 @@ public final class ContractCoordinator {
             }
             if (unitCheckpoints != null) {
                 unitCheckpoints.saveBatch(run, frozen, generated);
+            }
+            if (structuredRepair != null) {
+                generated = structuredRepair.overlay(ctx, run, contract, generated);
             }
         }
         return generated.stream().flatMap(output -> output.files().stream()).toList();

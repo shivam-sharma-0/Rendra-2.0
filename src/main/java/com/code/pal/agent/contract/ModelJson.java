@@ -51,7 +51,7 @@ public final class ModelJson {
     }
 
     /** Contract outputs retain their stricter no-prose policy. */
-    static String object(String content) {
+    public static String object(String content) {
         requireCapacity(content);
         String text = content.strip();
         if (text.startsWith("```")) {
