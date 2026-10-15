@@ -48,7 +48,7 @@ class SpecPlanningTest {
     }
 
     @Test
-    void staticAndViteSpecPlansUseOneCallAndTheirBoundV2Grammar() {
+    void staticAndViteSpecPlansUseOneCallAndTheLeanUnitsGrammar() {
         for (var spec : List.of(SpecFixtures.approved(), SpecFixtures.browser())) {
             var contract = deterministic(spec);
             var calls = new AtomicInteger();
@@ -56,8 +56,8 @@ class SpecPlanningTest {
                 calls.incrementAndGet();
                 assertEquals(CallPurpose.PLANNER, LlmCallContext.current().purpose());
                 var schema = mapper.readTree(request.jsonSchema().schema());
-                assertEquals(2, schema.at("/properties/schemaVersion/const").asInt());
-                assertEquals(spec.specId().toString(), schema.at("/properties/specId/const").asString());
+                assertEquals(List.of("units"), mapper.convertValue(schema.path("required"), List.class));
+                assertEquals(1, schema.path("properties").size());
                 assertTrue(request.tools().isEmpty());
                 return reply(mapper.writeValueAsString(contract));
             }, ignored -> {});
@@ -90,14 +90,16 @@ class SpecPlanningTest {
     }
 
     @Test
-    void supabaseGrammarKeepsTheApprovedConnectorAndCannotRaiseCapabilities() {
+    void supabaseCapabilitiesAreCompletedByCodeAndAreNotModelWrittenFields() {
         var plain = SpecFixtures.approved();
         var spec = SpecFixtures.envelope(plain.spec(), new ApprovedSpec.Desired(ApprovedSpec.RenderStack.VITE,
                 ApprovedSpec.Storage.SUPABASE, ApprovedSpec.Auth.NONE), ApprovedSpec.Readiness.READY);
-        var schema = mapper.readTree(ContractResponseSchema.planner(input(spec, new UUID(10, 20)), mapper).schema());
-        assertEquals("VITE", schema.at("/properties/stack/const").asString());
-        assertEquals("SUPABASE", schema.at("/properties/storage/const").asString());
-        assertEquals("NONE", schema.at("/properties/auth/const").asString());
+        var actual = new ContractPlanner(mapper).plan(input(spec, new UUID(10, 20)), model,
+                request -> reply("{\"units\":[{\"ownedPaths\":[\"src/App.tsx\"]}]}"), ignored -> {});
+        assertEquals(BuildContract.Stack.VITE, actual.stack());
+        assertEquals(BuildDecisions.Storage.SUPABASE, actual.storage());
+        assertEquals(BuildDecisions.Auth.NONE, actual.auth());
+        assertEquals(Set.of("VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY"), actual.envNames());
     }
 
     @Test

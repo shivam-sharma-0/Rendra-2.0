@@ -64,10 +64,9 @@ class SpecCoordinatorTest {
                 new ContractStore.Stored(run.getId(), run.getProjectId(), call.getArgument(1), "hash", binding, "DRAFT", "EXPLICIT_PLAN"));
         fixture.coordinator.execute(ctx, run, RunSize.of(SizeTier.M, List.of(), fixture.props), "Create the bakery", "map", request -> {
             count.incrementAndGet();
-            UUID id = UUID.fromString(fixture.mapper.readTree(request.messages().get(1).content()).path("id").asString());
-            var layout = new DeterministicPlan(fixture.mapper).plan(original, budget).orElseThrow();
-            var contract = ContractPlans.fromLayout(id, spec, layout, ContractFixtures.limits());
-            return new LlmClient.LlmResult(fixture.mapper.writeValueAsString(contract), null, List.of(), null, "stop");
+            // The planner proposes only units; identity, routes, acceptance and batches are completed by code.
+            return new LlmClient.LlmResult("{\"units\":[{\"id\":\"app\",\"objective\":\"Implement the bakery\","
+                    + "\"ownedPaths\":[\"index.html\",\"styles.css\"],\"imports\":[],\"dependsOn\":[]}]}", null, List.of(), null, "stop");
         }, () -> fail("PLAN must not mutate"), activity -> {}, new ContractCoordinator.SpecPlanning(spec, budget));
         assertEquals(1, count.get());
     }

@@ -210,9 +210,10 @@ public final class ContractPlans {
                 contract.specHash(), contract.planRevision(), contract.replacesContractId(), contract.templateVersion());
     }
 
-    private static BatchBudget.Estimate estimate(BuildContract contract, List<String> ids, BatchBudget.Limits limits,
+    static BatchBudget.Estimate estimate(BuildContract contract, List<String> ids, BatchBudget.Limits limits,
             BatchBudget estimator) {
         var files = contract.units().stream().filter(unit -> ids.contains(unit.id())).flatMap(unit -> unit.ownedPaths().stream())
+                .filter(path -> contract.assets().stream().noneMatch(asset -> asset.destination().equals(path)))
                 .map(path -> new BatchBudget.Source(path, "absent", projectedCharacters(path), projectedCharacters(path))).toList();
         return estimator.estimate(files, "{}", limits);
     }

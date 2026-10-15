@@ -6,7 +6,6 @@ import java.lang.reflect.*;
 import java.util.*;
 import com.code.pal.agent.validation.BehaviorCriteria;
 import com.code.pal.project.capability.BuildDecisions;
-import com.code.pal.agent.starter.Starter;
 
 /** Provider grammar covers shape/types. Backend still verifies all ownership, DAG and behavior rules. */
 final class ContractResponseSchema {
@@ -56,21 +55,16 @@ final class ContractResponseSchema {
     }
 
     static LlmClient.JsonSchema planner(ContractPlanner.SpecInput input, ObjectMapper mapper) {
-        var schema = mapper.readValue(planner(input.base(), mapper).schema(), Map.class);
-        var fields = properties(schema);
-        fields.put("schemaVersion", Map.of("type", "integer", "const", 2));
-        fields.put("stack", Map.of("type", "string", "const", input.spec().desired().renderStack().name()));
-        fields.put("specId", Map.of("type", "string", "const", input.spec().specId().toString()));
-        fields.put("specRevision", Map.of("type", "integer", "const", input.spec().specRevision()));
-        fields.put("specHash", Map.of("type", "string", "const", input.spec().specHash()));
-        fields.put("planRevision", Map.of("type", "integer", "const", 1));
-        fields.put("replacesContractId", Map.of("type", "null"));
-        fields.put("templateVersion", Map.of("type", "string", "const", Starter.TEMPLATE_VERSION));
-        fields.put("batches", Map.of("type", "array", "minItems", 1, "maxItems", 12, "items", type(ContractBatch.class)));
-        var required = new ArrayList<>(fields.keySet());
-        required.remove("replacesContractId");
-        schema.put("required", required);
-        return new LlmClient.JsonSchema("build_contract_v2", mapper.writeValueAsString(schema));
+        var unit = type(BuildContract.Unit.class);
+        properties(unit).remove("acceptanceIds");
+        properties(unit).put("objective", Map.of("type", "string", "minLength", 1, "maxLength", 1400));
+        properties(unit).put("ownedPaths", Map.of("type", "array", "minItems", 1, "maxItems", 12,
+                "items", Map.of("type", "string", "maxLength", 240)));
+        unit.put("required", List.of("id", "objective", "ownedPaths", "imports", "dependsOn"));
+        var units = Map.of("type", "array", "minItems", 1, "maxItems", 12, "items", unit);
+        var schema = Map.of("type", "object", "additionalProperties", false, "required", List.of("units"),
+                "properties", Map.of("units", units));
+        return new LlmClient.JsonSchema("implementation_units", mapper.writeValueAsString(schema));
     }
 
     static LlmClient.JsonSchema unit(UnitGenerator.Input input, ObjectMapper mapper) {

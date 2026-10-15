@@ -15,6 +15,7 @@ import java.util.stream.Collectors;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.DeserializationFeature;
 import com.code.pal.project.spec.ApprovedSpec;
+import com.code.pal.agent.workspace.ProjectPaths;
 
 /** One logical planner invocation plus at most one schema correction. Caller owns durable call caps. */
 @Component
@@ -184,13 +185,17 @@ public final class ContractPlanner {
                 "owner", "method", "requestType", "responseType", "routerPath", "routerExport", "basePath",
                 "authenticated", "source", "destination", "fingerprint", "objective", "ownedPaths", "imports",
                 "dependsOn", "acceptanceIds", "schema", "browser", "authRequired", "crudRequired", "selector", "value",
-                "body", "status", "tokenVariable", "captureVariable", "capturePointer", "assertPointer", "assertValue");
+                "body", "status", "tokenVariable", "captureVariable", "capturePointer", "assertPointer", "assertValue",
+                "files", "specId", "specRevision", "specHash", "planRevision", "templateVersion", "replacesContractId", "batches");
         for (int depth = 0; failure != null && depth < 8; depth++, failure = failure.getCause()) {
             var trace = failure.getStackTrace();
             String origin = trace.length == 0 ? "" : trace[0].getClassName();
             if ((origin.startsWith(BuildContract.class.getName()) || origin.startsWith(BehaviorCriteria.class.getName())
                     || origin.equals(ContractPlanner.class.getName()) || origin.equals(ModelJson.class.getName())
-                    || origin.equals(ContractStore.class.getName()))
+                    || origin.equals(ContractStore.class.getName()) || origin.equals(SpecContractPlanner.class.getName())
+                    || origin.equals(SpecPlanCompletion.class.getName()) || origin.equals(SpecPlanValues.class.getName())
+                    || origin.equals(ContractPlans.class.getName()) || origin.equals(ContractBatch.class.getName())
+                    || origin.equals(ProjectPaths.class.getName()))
                     && (failure instanceof IllegalArgumentException || failure instanceof WorkflowStageException)
                     && failure.getMessage() != null
                     && failure.getMessage().matches("[A-Za-z0-9 /,;:.()\\[\\]_-]{1,180}"))
