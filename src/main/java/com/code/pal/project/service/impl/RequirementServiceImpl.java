@@ -10,6 +10,8 @@ import com.code.pal.agent.llm.LlmClient.LlmResult;
 import com.code.pal.message.dto.CreateMessageRequest;
 import com.code.pal.message.service.MessageService;
 import com.code.pal.project.brief.ProjectBriefFile;
+import com.code.pal.project.capability.BuildDecisions;
+import com.code.pal.project.capability.DecisionDefaults;
 import com.code.pal.project.domain.*;
 import com.code.pal.project.dto.RequirementDtos;
 import com.code.pal.project.artifact.ProjectArtifactService;
@@ -39,6 +41,10 @@ public class RequirementServiceImpl implements RequirementService {
      * so a slow provider must not hold the request open.
      */
     private static final java.time.Duration LLM_BUDGET = java.time.Duration.ofSeconds(30);
+    /** Section 7 target: at most two questions, none when the request is clear. */
+    private static final int MAX_QUESTIONS = 2;
+    /** Enough for three questions with options; the old cap reserved a full generation budget. */
+    private static final int QUESTION_OUTPUT_TOKENS = 1_500;
 
     private final ProjectService projects;
     private final RequirementSessionRepository sessions;
@@ -118,8 +124,8 @@ public class RequirementServiceImpl implements RequirementService {
             else try (LlmCallContext.Scope call = LlmCallContext.bind(new LlmCallContext(userId, projectId, null, CallPurpose.REQUIREMENTS, false))) {
                 generated = generate(interview.project());
             }
-            List<QuestionDraft> drafts = interview.project().attachments().isEmpty() ? generated
-                    : generated.stream().filter(draft -> !isAboutTheLook(draft)).toList();
+            // A modern default look is used (or the attached images decide it), so style is never asked.
+            List<QuestionDraft> drafts = generated.stream().filter(draft -> !isAboutTheLook(draft)).toList();
             result = tx.execute(status -> {
                 lockRequirements(projectId);
                 projects.requireCanEdit(userId, projectId);
@@ -127,8 +133,14 @@ public class RequirementServiceImpl implements RequirementService {
                 boolean current = session.getId().equals(interview.session()) && session.getAnswerRevision() == interview.revision();
                 boolean owned = coordinator == null || coordinator.finish(interview.session(), interview.revision(), "QUESTIONS", interview.claim(), current ? "COMPLETE" : "STALE");
                 if (current && owned && questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty()) {
-                    saveQuestions(session, capabilityQuestions(projectId, drafts.isEmpty() ? defaults(interview.project().initialPrompt()) : drafts));
+                    saveQuestions(session, capabilityQuestions(projectId, drafts));
                     ensureCapabilityQuestions(session);
+                    if (drafts.isEmpty()) {
+                        preselectCapabilities(session, interview.project().initialPrompt());
+                    }
+                    if (complete(session)) {
+                        session.setStatus(RequirementStatus.APPROVAL_REQUIRED);
+                    }
                 }
                 return view(session);
             });
@@ -148,9 +160,9 @@ public class RequirementServiceImpl implements RequirementService {
 
     @Override
     public RequirementDtos.Session answer(Long userId, UUID projectId, UUID questionId, RequirementDtos.AnswerRequest request) {
-        Recorded recorded = tx.execute(status -> {
+        return tx.execute(status -> {
             lockRequirements(projectId);
-            Project project = projects.requireCanEdit(userId, projectId);
+            projects.requireCanEdit(userId, projectId);
             RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
             RequirementQuestion question = questions.findByIdAndSessionId(questionId, session.getId()).orElseThrow(ProjectNotFoundException::new);
             String selected = clean(request.selectedOption(), 80);
@@ -177,88 +189,20 @@ public class RequirementServiceImpl implements RequirementService {
                 session.setProjectionId(null);
                 session.setStatus(RequirementStatus.IN_PROGRESS);
             }
-            if (!complete(session) || session.getStatus() == RequirementStatus.APPROVED || session.getStatus() == RequirementStatus.APPROVAL_REQUIRED) {
-                return new Recorded(view(session), null, null, session.getId(), session.getAnswerRevision(), null);
+            if (changed) {
+                preselectAfterProductAnswers(session);
             }
-            var claim = coordinator == null ? null : coordinator.claim(session.getId(), session.getAnswerRevision(), "ASSESSMENT", userId);
-            if (coordinator != null && claim == null) return new Recorded(view(session), null, null, session.getId(), session.getAnswerRevision(), null);
-            return new Recorded(null, ProjectBrief.of(project, List.of()), answerSummary(questions.findBySessionIdOrderBySequenceAsc(session.getId())),
-                    session.getId(), session.getAnswerRevision(), claim);
-        });
-        if (recorded.view() != null) return recorded.view();
-        Assessment assessment;
-        if (recorded.claim() != null && recorded.claim().fallback()) assessment = new Assessment(true, List.of(), true);
-        else try (LlmCallContext.Scope call = LlmCallContext.bind(new LlmCallContext(userId, projectId, null, CallPurpose.REQUIREMENTS, false))) {
-            assessment = assess(recorded.project(), recorded.summary());
-        } catch (RuntimeException error) {
-            log.warn("requirement_assessment_fallback project={} reason={}", projectId, error.getClass().getSimpleName());
-            assessment = new Assessment(true, List.of(), true);
-        }
-        Assessment verdict = assessment;
-        return tx.execute(status -> {
-            lockRequirements(projectId);
-            projects.requireCanEdit(userId, projectId);
-            RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
-            boolean current = session.getId().equals(recorded.session()) && session.getAnswerRevision() == recorded.revision()
-                    && session.getStatus() != RequirementStatus.APPROVED && complete(session);
-            boolean owned = coordinator == null || coordinator.finish(recorded.session(), recorded.revision(), "ASSESSMENT", recorded.claim(), current ? verdict.fallback() ? "FALLBACK" : "COMPLETE" : "STALE");
-            if (current && owned) refineOrApprove(session, verdict);
+            if (!complete(session) || session.getStatus() == RequirementStatus.APPROVED
+                    || session.getStatus() == RequirementStatus.APPROVAL_REQUIRED) {
+                return view(session);
+            }
+            // Complete answers go straight to approval: a second model review of the answers is not needed.
+            session.setStatus(RequirementStatus.APPROVAL_REQUIRED);
             return view(session);
         });
     }
 
     private void lockRequirements(UUID project) { if (coordinator != null) coordinator.lock(project); }
-
-    /** Applies a review of the complete answer set, adding only genuinely missing decisions. */
-    private void refineOrApprove(RequirementSession session, Assessment assessment) {
-        List<RequirementQuestion> answered = questions.findBySessionIdOrderBySequenceAsc(session.getId());
-        if (!assessment.clear() && !assessment.questions().isEmpty()) {
-            Set<String> knownKeys = answered.stream().map(RequirementQuestion::getQuestionKey)
-                    .map(key -> key.toLowerCase(Locale.ROOT)).collect(java.util.stream.Collectors.toSet());
-            int remaining = Math.max(0, 8 - answered.size());
-            List<QuestionDraft> additional = assessment.questions().stream()
-                    .filter(item -> buildDecisions == null || !isCapabilityQuestion(item))
-                    .filter(item -> knownKeys.add(item.key().toLowerCase(Locale.ROOT)))
-                    .limit(remaining)
-                    .toList();
-            if (!additional.isEmpty()) {
-                saveQuestions(session, additional, answered.size());
-                session.setStatus(RequirementStatus.IN_PROGRESS);
-                return;
-            }
-        }
-        session.setStatus(RequirementStatus.APPROVAL_REQUIRED);
-    }
-
-    private String answerSummary(List<RequirementQuestion> answered) {
-        StringBuilder summary = new StringBuilder();
-        for (RequirementQuestion question : answered) {
-            String answer = answerLabel(question);
-            summary.append("- ").append(question.getQuestionKey()).append(": ")
-                    .append(answer == null ? "Not specified" : answer).append('\n');
-        }
-        return summary.toString();
-    }
-
-    private Assessment assess(ProjectBrief project, String summary) {
-        String prompt = """
-                Return only valid JSON object with this shape:
-                {"requirementsClear":true|false,"questions":[{"key":"...","prompt":"...","required":true,"recommended":"...","options":[{"id":"...","label":"...","description":"..."}]}]}
-                Decide whether the approved product requirements are specific enough to build without guessing.
-                Set requirementsClear=true and questions=[] when they are sufficient. If not, return at most two
-                blocking questions. Every question needs at least two concrete options and an option with id "other".
-                Do not repeat a decision already answered. User's original request: %s
-                Current answers:
-                %s
-                """.formatted(project.initialPrompt(), summary);
-        AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
-        LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
-                List.of(LlmMessage.system("You are a strict product requirements reviewer."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET)
-                .withMaxTokens(properties.getLlm().getMaxOutputTokens()));
-        JsonNode root = objectMapper.readTree(stripJsonFence(result.content()));
-        if (!root.isObject()) throw new IllegalArgumentException("Requirement assessment was not an object");
-        return new Assessment(root.path("requirementsClear").asBoolean(false), parseQuestionDrafts(root.path("questions")));
-    }
 
     @Override
     public RequirementDtos.Session approve(Long userId, UUID projectId) { return approve(userId, projectId, null); }
@@ -440,6 +384,48 @@ public class RequirementServiceImpl implements RequirementService {
         }
     }
 
+    /**
+     * Once every product question is answered, storage and sign-in are inferred from the request plus those
+     * answers (answer labels only, never the model-written question text).
+     */
+    private void preselectAfterProductAnswers(RequirementSession session) {
+        List<RequirementQuestion> product = questions.findBySessionIdOrderBySequenceAsc(session.getId()).stream()
+                .filter(question -> !question.getQuestionKey().startsWith("platform_")).toList();
+        if (product.stream().filter(RequirementQuestion::isRequired).anyMatch(question -> answerLabel(question) == null)) {
+            return;
+        }
+        StringBuilder context = new StringBuilder(Optional.ofNullable(session.getSourcePrompt()).orElse(""));
+        for (RequirementQuestion question : product) {
+            String answer = answerLabel(question);
+            if (answer != null) {
+                context.append('\n').append(answer);
+            }
+        }
+        preselectCapabilities(session, context.toString());
+    }
+
+    /** Answers storage and sign-in from the request when it already says enough; the user can still change them. */
+    private void preselectCapabilities(RequirementSession session, String prompt) {
+        if (buildDecisions == null) {
+            return;
+        }
+        var inferred = DecisionDefaults.infer(prompt,
+                buildDecisions.available(session.getProjectId()).supabaseConnected());
+        for (RequirementQuestion question : questions.findBySessionIdOrderBySequenceAsc(session.getId())) {
+            if (question.getSelectedOption() != null) {
+                continue;
+            }
+            String choice = question.getQuestionKey().equals(BuildDecisions.STORAGE_KEY) && inferred.storage() != null
+                    ? inferred.storage().name()
+                    : question.getQuestionKey().equals(BuildDecisions.AUTH_KEY) && inferred.auth() != null
+                            ? inferred.auth().name()
+                            : null;
+            if (choice != null && optionExists(question, choice)) {
+                question.setSelectedOption(choice);
+            }
+        }
+    }
+
     private static boolean isCapabilityQuestion(QuestionDraft draft) {
         String key = draft.key().toLowerCase(Locale.ROOT);
         return key.equals("storage") || key.equals("database") || key.equals("backend") || key.equals("auth")
@@ -474,20 +460,22 @@ public class RequirementServiceImpl implements RequirementService {
         try {
             AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
             String prompt = """
-                    Return only valid JSON array. Create 3 to 6 requirement questions for a software project.
-                    Each item must have: key, prompt, required (boolean), recommended (option id), and options.
-                    Each option must have id, label, description. Questions must clarify product type, users,
-                    core pages/features, the data to manage, and visual direction. Keep options concrete and
-                    include an option id of other on every select question. The backend asks storage provider
-                    and sign-in separately using available services: do not generate questions for storage,
-                    database provider, backend stack or authentication and never use platform_ question keys.
-                    Do not ask questions already answered clearly by the user prompt. User prompt: %s
+                    Return only a valid JSON array of 0 to 3 blocking requirement questions for a software project.
+                    Ask only what a sensible production default cannot decide: the core purpose or main features
+                    when they are unclear, and who uses it when that changes the product. Return [] when the
+                    request is clear enough to build. Never ask about visual style (a modern default is used),
+                    storage, database, backend or sign-in (the backend decides those), and never use platform_ keys.
+                    Each item has key, prompt, required (boolean), recommended (option id) and options; each option
+                    has id, label and description, and every question includes an option with id "other".
+                    User prompt: %s
                     """.formatted(project.initialPrompt()) + attachmentNote(project.attachments());
             LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
                     List.of(LlmMessage.system("You are a product requirements analyst."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET)
-                    .withMaxTokens(properties.getLlm().getMaxOutputTokens()));
-            List<QuestionDraft> parsed = parseQuestions(result.content());
-            if (!parsed.isEmpty()) return parsed.stream().limit(8).toList();
+                    .withMaxTokens(QUESTION_OUTPUT_TOKENS));
+            String content = result.content() == null ? "" : stripJsonFence(result.content()).strip();
+            if (content.equals("[]")) return List.of();
+            List<QuestionDraft> parsed = parseQuestions(content);
+            if (!parsed.isEmpty()) return parsed.stream().filter(draft -> !isAboutTheLook(draft)).limit(MAX_QUESTIONS).toList();
         } catch (RuntimeException error) {
             log.warn("requirement_questions_fallback project={} reason={}", project.id(), error.getClass().getSimpleName());
         }
@@ -557,9 +545,6 @@ public class RequirementServiceImpl implements RequirementService {
     private static boolean nonBlank(String value) { return value != null && !value.isBlank(); }
     private record OptionDraft(String id, String label, String description) {}
     private record QuestionDraft(String key, String prompt, boolean required, String recommended, List<OptionDraft> options) {}
-    private record Assessment(boolean clear, List<QuestionDraft> questions, boolean fallback) {
-        private Assessment(boolean clear, List<QuestionDraft> questions) { this(clear, questions, false); }
-    }
     /** What the model calls need from a project, read inside a transaction and used outside it. */
     /** {@code attachments}: files attached to the opening prompt (screenshots, mock-ups). */
     private record ProjectBrief(UUID id, String initialPrompt, List<String> attachments) {
@@ -568,8 +553,6 @@ public class RequirementServiceImpl implements RequirementService {
         }
     }
     /** Result of recording an answer: the session view when no review is due, else what the review needs. */
-    private record Recorded(RequirementDtos.Session view, ProjectBrief project, String summary, UUID session, long revision,
-                            com.code.pal.project.requirement.RequirementCoordinator.Claim claim) {}
     private record Interview(ProjectBrief project, UUID session, long revision,
                              com.code.pal.project.requirement.RequirementCoordinator.Claim claim, RequirementDtos.Session view) {}
 }

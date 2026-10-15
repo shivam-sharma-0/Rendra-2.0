@@ -84,64 +84,31 @@ class RequirementCoordinationIT {
             assertEquals(1, model.calls.get());
             release.countDown();
             var completed = first.get(3, TimeUnit.SECONDS);
-            assertFalse(completed.processing()); assertFalse(completed.complete());
-            assertTrue(completed.questions().size() >= 2);
+            assertFalse(completed.processing()); assertTrue(completed.complete());
+            assertEquals(RequirementStatus.APPROVAL_REQUIRED, completed.status());
+            assertEquals(2, completed.questions().size(), "a clear request asks nothing beyond the preselected platform choices");
             assertEquals(1, jdbc.queryForObject("select count(*) from requirement_sessions where project_id=?", Integer.class, project));
             assertEquals(completed.id(), service.start(7L, project).id());
             assertEquals(1, model.calls.get());
         } finally { release.countDown(); }
     }
 
-    @Test void repeatedLastAnswerDoesNotSendASecondAssessmentAndCannotApproveWhilePending() throws Exception {
-        var session = seed(RequirementStatus.IN_PROGRESS);
-        var auth = question(BuildDecisions.AUTH_KEY); auth.setSelectedOption(null); questions.saveAndFlush(auth);
-        var entered = new CountDownLatch(1); var release = new CountDownLatch(1); model.block(entered, release, clear());
-        try (var pool = Executors.newSingleThreadExecutor()) {
-            var first = pool.submit(() -> service.answer(7L, project, auth.getId(), new RequirementDtos.AnswerRequest("NONE", null, 2L)));
-            assertTrue(entered.await(3, TimeUnit.SECONDS));
-            var pending = service.get(7L, project);
-            assertTrue(pending.processing());
-            var repeated = service.answer(7L, project, auth.getId(), new RequirementDtos.AnswerRequest("NONE", null, pending.revision()));
-            assertTrue(repeated.processing()); assertEquals(1, model.calls.get());
-            assertThrows(WorkflowStageException.class, () -> service.approve(7L, project, pending.revision()));
-            release.countDown();
-            var reviewed = first.get(3, TimeUnit.SECONDS);
-            assertEquals(RequirementStatus.APPROVAL_REQUIRED, reviewed.status());
-            assertEquals(1, model.calls.get());
-            service.answer(7L, project, auth.getId(), new RequirementDtos.AnswerRequest("NONE", null, reviewed.revision()));
-            assertEquals(1, model.calls.get());
-        } finally { release.countDown(); }
-    }
-
-    @Test void staleAssessmentCannotAddQuestionsOrApproveNewAnswers() throws Exception {
+    @Test void lastAnswerGoesStraightToApprovalWithoutAModelCall() {
         seed(RequirementStatus.IN_PROGRESS);
-        var auth = question(BuildDecisions.AUTH_KEY);
-        var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
-        model.block(entered, release, "{\"requirementsClear\":false,\"questions\":[{\"key\":\"obsolete\",\"prompt\":\"Old?\",\"options\":[{\"id\":\"a\"},{\"id\":\"b\"}]}]}");
-        model.answer(clear());
-        try (var pool = Executors.newSingleThreadExecutor()) {
-            var old = pool.submit(() -> service.answer(7L, project, auth.getId(), new RequirementDtos.AnswerRequest("NONE", null, 2L)));
-            assertTrue(entered.await(3, TimeUnit.SECONDS));
-            var newer = service.answer(7L, project, auth.getId(), new RequirementDtos.AnswerRequest("ACCOUNTS", null, 2L));
-            assertEquals(3, newer.revision()); assertEquals(RequirementStatus.APPROVAL_REQUIRED, newer.status());
-            release.countDown(); old.get(3, TimeUnit.SECONDS);
-            assertEquals(2, service.get(7L, project).questions().size());
-            assertEquals("ACCOUNTS", question(BuildDecisions.AUTH_KEY).getSelectedOption());
-            assertEquals("STALE", jdbc.queryForObject("select outcome from requirement_llm_work where session_id=? and revision=2", String.class, newer.id()));
-            assertEquals(2, model.calls.get());
-        } finally { release.countDown(); }
+        var auth = question(BuildDecisions.AUTH_KEY); auth.setSelectedOption(null); questions.saveAndFlush(auth);
+        var reviewed = service.answer(7L, project, auth.getId(), new RequirementDtos.AnswerRequest("NONE", null, 2L));
+        assertEquals(RequirementStatus.APPROVAL_REQUIRED, reviewed.status());
+        assertFalse(reviewed.processing());
+        service.answer(7L, project, auth.getId(), new RequirementDtos.AnswerRequest("NONE", null, reviewed.revision()));
+        assertEquals(RequirementStatus.APPROVAL_REQUIRED, service.get(7L, project).status());
+        assertEquals(0, model.calls.get());
     }
 
-    @Test void expiredAssessmentUsesFallbackAndRejectsTheOldCompletionWithoutAnotherSend() {
-        var session = seed(RequirementStatus.IN_PROGRESS);
-        UUID oldOwner = UUID.randomUUID(); expired(session, "ASSESSMENT", oldOwner);
+    @Test void completeSessionLeftInProgressReachesApprovalOnStartWithoutAModelCall() {
+        seed(RequirementStatus.IN_PROGRESS);
         var recovered = service.start(7L, project);
         assertEquals(RequirementStatus.APPROVAL_REQUIRED, recovered.status()); assertFalse(recovered.processing());
-        assertEquals("FALLBACK", recovered.reviewStatus());
         assertEquals(0, model.calls.get());
-        var coordinator = context.getBean(RequirementCoordinator.class);
-        var tx = new org.springframework.transaction.support.TransactionTemplate(context.getBean(org.springframework.transaction.PlatformTransactionManager.class));
-        assertFalse(Boolean.TRUE.equals(tx.execute(status -> coordinator.finish(session.getId(), 2, "ASSESSMENT", new RequirementCoordinator.Claim(oldOwner, false), "COMPLETE"))));
     }
 
     @Test void expiredQuestionGenerationUsesDefaultsAndKeepsTheOneCallRecord() {
@@ -222,22 +189,12 @@ class RequirementCoordinationIT {
         assertEquals(2, service.get(7L, project).revision()); assertEquals("NONE", question(BuildDecisions.AUTH_KEY).getSelectedOption());
     }
 
-    @Test void providerFailureDoesNotCertifyIncompatibleCapabilities() {
-        seed(RequirementStatus.IN_PROGRESS); model.fail();
+    @Test void incompatibleCapabilitiesCannotBeApprovedWithoutAnyModelReview() {
+        seed(RequirementStatus.IN_PROGRESS);
         var reviewed = service.answer(7L, project, question(BuildDecisions.AUTH_KEY).getId(), new RequirementDtos.AnswerRequest("ACCOUNTS", null, 2L));
         assertEquals(RequirementStatus.APPROVAL_REQUIRED, reviewed.status());
-        assertEquals("FALLBACK", reviewed.reviewStatus());
         assertThrows(WorkflowStageException.class, () -> service.approve(7L, project, reviewed.revision()));
-        assertEquals(0, projections()); assertEquals(1, model.calls.get());
-    }
-
-    @Test void interruptedFallbackCanRecoverAgainWithoutResendingTheModelCall() {
-        var session = seed(RequirementStatus.IN_PROGRESS);
-        expired(session, "ASSESSMENT", UUID.randomUUID());
-        jdbc.update("update requirement_llm_work set state='FALLBACK' where session_id=?", session.getId());
-        var recovered = service.start(7L, project);
-        assertEquals(RequirementStatus.APPROVAL_REQUIRED, recovered.status());
-        assertEquals("FALLBACK", recovered.reviewStatus()); assertEquals(0, model.calls.get());
+        assertEquals(0, projections()); assertEquals(0, model.calls.get());
     }
 
     @Test void failedDatabaseAcknowledgementAfterFileWritesKeepsTheBuildGated() {
@@ -281,7 +238,6 @@ class RequirementCoordinationIT {
         jdbc.update("insert into requirement_llm_work(session_id,revision,purpose,owner_id,user_id,state,expires_at) values (?,?,?, ?,7,'RUNNING',clock_timestamp()-interval '1 second')", session.getId(), session.getAnswerRevision(), purpose, owner);
     }
     private int projections() { return jdbc.queryForObject("select count(*) from requirement_projections where project_id=?", Integer.class, project); }
-    private static String clear() { return "{\"requirementsClear\":true,\"questions\":[]}"; }
 
     static class ControlledModel implements LlmClient {
         final Queue<Function<LlmRequest,LlmResult>> outcomes = new ConcurrentLinkedQueue<>();

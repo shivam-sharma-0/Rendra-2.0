@@ -30,6 +30,7 @@ import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -74,7 +75,7 @@ class RequirementServiceImplTest {
 
     @Test
     void questionsAreGeneratedOutsideAnyTransaction() {
-        modelReply = () -> "[" + question("audience") + "," + question("style") + "]";
+        modelReply = () -> "[" + question("audience") + "," + question("features") + "]";
 
         RequirementDtos.Session view = service.start(7L, projectId);
 
@@ -109,38 +110,65 @@ class RequirementServiceImplTest {
     }
 
     @Test
-    void theLastAnswerIsReviewedOutsideAnyTransaction() {
+    void completeAnswersGoStraightToApprovalWithoutAModelCall() {
         RequirementQuestion only = save("audience");
-        modelReply = () -> "{\"requirementsClear\":true,\"questions\":[]}";
 
         RequirementDtos.Session view = service.answer(7L, projectId, only.getId(), new RequirementDtos.AnswerRequest("a", null));
 
-        assertEquals(1, modelCalls.get());
-        assertEquals(0, modelCallsInsideATransaction.get(), "the model was called while a DB connection was held");
+        assertEquals(0, modelCalls.get(), "a second model review of the answers is not needed");
         assertEquals(RequirementStatus.APPROVAL_REQUIRED, view.status());
     }
 
     @Test
-    void aReviewThatFindsGapsAddsQuestions() {
-        RequirementQuestion only = save("audience");
-        modelReply = () -> "{\"requirementsClear\":false,\"questions\":[" + question("storage") + "]}";
+    void aClearRequestAsksNothingAndPreselectsStorageAndSignIn() {
+        service.setBuildDecisions(new com.code.pal.project.capability.BuildDecisions(sessions,
+                mock(com.code.pal.project.supabase.SupabaseConnectionRepository.class), new AgentProperties(), new ObjectMapper()));
+        modelReply = () -> "[]";
 
-        RequirementDtos.Session view = service.answer(7L, projectId, only.getId(), new RequirementDtos.AnswerRequest("a", null));
+        RequirementDtos.Session view = service.start(7L, projectId);
 
-        assertEquals(RequirementStatus.IN_PROGRESS, view.status());
-        assertEquals(List.of("audience", "storage"), view.questions().stream().map(RequirementDtos.Question::key).toList());
+        assertEquals(1, modelCalls.get());
+        assertEquals(List.of("platform_storage", "platform_auth"), view.questions().stream().map(RequirementDtos.Question::key).toList());
+        assertEquals(List.of("NONE", "NONE"), stored.stream().map(RequirementQuestion::getSelectedOption).toList());
+        assertEquals(RequirementStatus.APPROVAL_REQUIRED, view.status());
     }
 
     @Test
-    void aReviewDoesNotReopenASessionApprovedWhileTheModelWasThinking() {
-        RequirementQuestion only = save("audience");
-        modelReply = () -> "{\"requirementsClear\":false,\"questions\":[" + question("storage") + "]}";
-        duringModelCall = () -> session.setStatus(RequirementStatus.APPROVED);
+    void atMostTwoQuestionsAndNeverOneAboutTheLook() {
+        modelReply = () -> "[" + question("visual_style") + "," + question("audience") + "," + question("features") + ","
+                + question("data") + "," + question("pages") + "]";
 
-        RequirementDtos.Session view = service.answer(7L, projectId, only.getId(), new RequirementDtos.AnswerRequest("a", null));
+        RequirementDtos.Session view = service.start(7L, projectId);
 
-        assertEquals(RequirementStatus.APPROVED, view.status());
-        assertEquals(1, view.questions().size(), "no questions are added to an approved session");
+        assertEquals(List.of("audience", "features"), view.questions().stream().map(RequirementDtos.Question::key).toList());
+    }
+
+    @Test
+    void aFencedEmptyListMeansNoQuestions() {
+        modelReply = () -> "```json\n[]\n```";
+
+        RequirementDtos.Session view = service.start(7L, projectId);
+
+        assertTrue(view.questions().isEmpty());
+        assertEquals(1, modelCalls.get());
+    }
+
+    @Test
+    void storageIsPreselectedOnlyAfterTheLastProductAnswer() {
+        service.setBuildDecisions(new com.code.pal.project.capability.BuildDecisions(sessions,
+                mock(com.code.pal.project.supabase.SupabaseConnectionRepository.class), new AgentProperties(), new ObjectMapper()));
+        modelReply = () -> "[{\"key\":\"features\",\"prompt\":\"What should it do?\",\"required\":true,\"recommended\":\"a\","
+                + "\"options\":[{\"id\":\"a\",\"label\":\"Save my tasks\"},{\"id\":\"b\",\"label\":\"Just a page\"}]}]";
+
+        service.start(7L, projectId);
+        RequirementQuestion storage = stored.stream().filter(q -> q.getQuestionKey().equals("platform_storage")).findFirst().orElseThrow();
+        assertNull(storage.getSelectedOption(), "nothing is preselected while a product question is open");
+
+        RequirementDtos.Session view = service.answer(7L, projectId, stored.getFirst().getId(), new RequirementDtos.AnswerRequest("a", null));
+
+        assertEquals("BROWSER", storage.getSelectedOption());
+        assertEquals(RequirementStatus.APPROVAL_REQUIRED, view.status());
+        assertEquals(1, modelCalls.get());
     }
 
     @Test

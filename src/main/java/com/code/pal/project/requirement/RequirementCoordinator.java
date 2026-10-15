@@ -38,7 +38,7 @@ public class RequirementCoordinator {
     }
 
     public boolean processing(UUID session, long revision) {
-        return Boolean.TRUE.equals(jdbc.queryForObject("select exists(select 1 from requirement_llm_work where session_id=? and revision=? and state <> 'DONE')",
+        return Boolean.TRUE.equals(jdbc.queryForObject("select exists(select 1 from requirement_llm_work where session_id=? and revision=? and state <> 'DONE' and purpose <> 'ASSESSMENT')",
                 Boolean.class, session, revision));
     }
 
