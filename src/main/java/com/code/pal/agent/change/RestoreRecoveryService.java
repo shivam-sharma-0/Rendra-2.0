@@ -51,6 +51,10 @@ public class RestoreRecoveryService {
             finish(entry, "ROLLED_BACK");
             return;
         }
+        if (entry.state().equals("RECOVERY_REQUIRED")) {
+            // Back off this attempt even if its promotion proof or filesystem is unavailable below.
+            journal.state(entry.id(), "RECOVERY_REQUIRED");
+        }
 
         PromotionJournal.Entry proof = promotions.read(entry.runId());
         if (proof == null || !proof.projectId().equals(entry.projectId()) || !proof.state().equals("SAVED")) {

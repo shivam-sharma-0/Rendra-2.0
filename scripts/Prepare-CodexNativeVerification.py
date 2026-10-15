@@ -6,7 +6,7 @@ import pathlib
 import sys
 
 source = pathlib.Path(sys.argv[1]).resolve(strict=True)
-if source.name != "Code-Pal-Codex" or not (source / "pom.xml").is_file():
+if source.name not in ("Code-Pal", "Code-Pal-Codex") or not (source / "pom.xml").is_file():
     raise RuntimeError("Unexpected verification source")
 base = pathlib.Path("/tmp/codepal-codex-verification")
 if base.is_symlink():

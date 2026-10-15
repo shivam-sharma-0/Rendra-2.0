@@ -1,5 +1,7 @@
 package com.code.pal.agent.workspace;
 
+import java.util.regex.Pattern;
+
 /**
  * Path rules for every access to a project's files, whether on the host ({@link HostProjectFiles}) or
  * inside the sandbox ({@link DockerProjectEnvironment}). Paths are project-relative and '/'-separated.
@@ -7,13 +9,15 @@ package com.code.pal.agent.workspace;
 public final class ProjectPaths {
 
     public static final int MAX_PATH_LENGTH = 512;
+    private static final Pattern SHORT_NAME = Pattern.compile(".*~[0-9].*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
     private ProjectPaths() {
     }
 
     /**
      * Normalizes a project-relative path. Rejects blank, over-long, absolute and NUL-containing paths,
-     * {@code ..} anywhere, and the protected names {@code .git}, {@code .secrets} and {@code .ssh}.
+     * {@code ..} anywhere, Windows short-name aliases, and the protected names {@code .git},
+     * {@code .secrets} and {@code .ssh}.
      *
      * @param allowRoot whether {@code "."} (the project root itself) is acceptable
      */
@@ -27,6 +31,10 @@ public final class ProjectPaths {
         }
         String normalized = relativePath.replace('\\', '/');
         for (String part : normalized.split("/")) {
+            // Windows may resolve an 8.3 alias to a protected long name before filesystem access.
+            if (SHORT_NAME.matcher(part).matches()) {
+                throw new IllegalArgumentException("Windows short-name aliases are not valid project paths");
+            }
             if (!part.equals(".") && (part.endsWith(".") || part.endsWith(" "))) {
                 throw new IllegalArgumentException("Path segments must not end in a dot or space");
             }

@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -175,6 +176,19 @@ class RestoreRecoveryServiceTest {
         when(journal.read(id)).thenReturn(entry);
         sweep();
         verify(journal, never()).state(any(), any());
+        verify(sandbox, never()).removeTree(any(), any());
+    }
+
+    @Test
+    void unavailablePromotionProofStillRecordsTheQuarantineRetryBeforeReadingFiles() {
+        pending("RECOVERY_REQUIRED");
+        when(promotions.read(run)).thenThrow(new IllegalStateException("Promotion proof unavailable"));
+
+        sweep();
+
+        var order = inOrder(journal, promotions);
+        order.verify(journal).state(id, "RECOVERY_REQUIRED");
+        order.verify(promotions).read(run);
         verify(sandbox, never()).removeTree(any(), any());
     }
 }

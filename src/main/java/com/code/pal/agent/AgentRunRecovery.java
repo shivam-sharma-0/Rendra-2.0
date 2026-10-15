@@ -1,16 +1,16 @@
 package com.code.pal.agent;
 
-import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.change.RestoreRecoveryService;
-import com.code.pal.agent.lease.ProjectLeaseService;
+import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.AgentStepType;
 import com.code.pal.agent.domain.RunStatus;
+import com.code.pal.agent.lease.ProjectLeaseService;
+import com.code.pal.agent.preview.SiteBuildService;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.workspace.SandboxPort;
-import com.code.pal.agent.preview.SiteBuildService;
 import com.code.pal.message.domain.MessageStatus;
 import com.code.pal.message.dto.MessageResponse;
 import com.code.pal.message.repository.MessageRepository;
@@ -22,12 +22,15 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.concurrent.TimeUnit;
 
 /** Recovers queued deliveries lost from Redis and stops runs abandoned by a crashed worker. */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class AgentRunRecovery {
+    private static final long RECOVERY_BUDGET_NANOS = TimeUnit.SECONDS.toNanos(2);
+
     private final ProjectLeaseService leases;
     private final RestoreRecoveryService restores;
     private final AgentProperties props;
@@ -43,18 +46,32 @@ public class AgentRunRecovery {
     @Scheduled(fixedDelayString = "${app.agent.stale-sweep-interval-ms:30000}")
     public void sweep() {
         Instant now = Instant.now();
-        long recoveryDeadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
-        restores.recoverPending(recoveryDeadline);
-        if(leases!=null) for(var project:leases.pendingIoProjects()) {
-            if(System.nanoTime()>recoveryDeadline) break;
-            try { leases.recovering(project,()->{if(!leases.hasLiveLease(project)) sandbox.reconcilePendingOperations(project);}); }
-            catch(RuntimeException pending) {log.warn("trusted_operation_recovery_pending project={} errorType={}",project,pending.getClass().getSimpleName());}
+        long recoveryDeadline = nanoTime() + RECOVERY_BUDGET_NANOS;
+        for (var project : leases.pendingIoProjects()) {
+            if (nanoTime() >= recoveryDeadline) {
+                break;
+            }
+            try {
+                leases.recovering(project, () -> {
+                    if (!leases.hasLiveLease(project)) {
+                        sandbox.reconcilePendingOperations(project);
+                    }
+                });
+            } catch (RuntimeException pending) {
+                log.warn("trusted_operation_recovery_pending project={} errorType={}",
+                        project, pending.getClass().getSimpleName());
+            }
         }
 
-        if(leases!=null) for(var id:leases.pendingPromotionRuns()) {
-            if(System.nanoTime()>recoveryDeadline) break;
+        for (var id : leases.pendingPromotionRuns()) {
+            if (nanoTime() >= recoveryDeadline) {
+                break;
+            }
             runs.findById(id).ifPresent(this::failAbandoned);
         }
+
+        // Quarantines get a separate allowance after pending IO/promotions have had their turn.
+        restores.recoverPending(nanoTime() + RECOVERY_BUDGET_NANOS);
 
         // Parked runs whose project is no longer locked: the worker that held the lock died before
         // releasing them. Requeue them first so they are not counted as lost below.
@@ -81,6 +98,10 @@ public class AgentRunRecovery {
         for (AgentRun run : runs.findByStatusAndHeartbeatAtBefore(RunStatus.COMMITTING, heartbeatCutoff)) {
             if (leases!=null || !queue.isLocked(run.getProjectId())) failAbandoned(run);
         }
+    }
+
+    protected long nanoTime() {
+        return System.nanoTime();
     }
 
     private void recoverQueued(AgentRun run) {
