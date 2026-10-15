@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -38,10 +39,12 @@ class AgentUsagePolicyTest {
     @SuppressWarnings("unchecked")
     private final ValueOperations<String, String> values = mock(ValueOperations.class);
     private final AtomicLong counter = new AtomicLong();
+    private final DailyTokenBudget budget = mock(DailyTokenBudget.class);
     private final AgentUsagePolicy policy =
-            new AgentUsagePolicy(properties, runs, redis, Clock.fixed(NOW, ZoneOffset.UTC));
+            new AgentUsagePolicy(properties, runs, redis, Clock.fixed(NOW, ZoneOffset.UTC), budget);
 
     AgentUsagePolicyTest() {
+        when(budget.usage(eq(USER), any())).thenReturn(new DailyTokenBudget.Usage(0,0,0,0,0));
         when(redis.opsForValue()).thenReturn(values);
         when(values.increment(anyString())).thenAnswer(invocation -> counter.incrementAndGet());
     }
@@ -54,7 +57,7 @@ class AgentUsagePolicyTest {
     @Test
     void rejectsOnceTheDailyTokenQuotaIsUsed() {
         properties.getLimits().setDailyTokenQuota(1_000);
-        when(runs.sumTokensByUserIdSince(eq(USER), eq(Instant.parse("2026-10-03T00:00:00Z")))).thenReturn(1_000L);
+        when(budget.usage(eq(USER), any())).thenReturn(new DailyTokenBudget.Usage(1_000,0,1_000,0,0));
 
         UsageLimitExceededException rejected = assertThrows(UsageLimitExceededException.class,
                 () -> policy.requireAdmitted(USER));
@@ -66,7 +69,7 @@ class AgentUsagePolicyTest {
     @Test
     void dailyUsageReportsTokensQuotaAndNextMidnightUtc() {
         properties.getLimits().setDailyTokenQuota(50_000);
-        when(runs.sumTokensByUserIdSince(USER, Instant.parse("2026-10-03T00:00:00Z"))).thenReturn(1_234L);
+        when(budget.usage(eq(USER), any())).thenReturn(new DailyTokenBudget.Usage(1_234,0,1_234,0,0));
 
         AgentUsagePolicy.DailyUsage usage = policy.dailyUsage(USER);
 
@@ -81,12 +84,21 @@ class AgentUsagePolicyTest {
 
         assertEquals(0L, policy.dailyUsage(USER).quota());
     }
+    @Test void dailyResponseDistinguishesReportedUnknownAndActiveCapacity() {
+        properties.getLimits().setDailyTokenQuota(1000);
+        when(budget.usage(eq(USER),any())).thenReturn(new DailyTokenBudget.Usage(300,200,100,200,2));
+        var response=com.code.pal.agent.dto.DailyUsageResponse.from(policy.dailyUsage(USER));
+        assertEquals(300,response.tokensUsed());assertEquals(100,response.reportedTokens());assertEquals(200,response.unknownTokens());
+        assertEquals(200,response.reservedTokens());assertEquals(500,response.capacityUsed());assertEquals(500,response.remainingTokens());
+        properties.getLimits().setDailyTokenQuota(0);
+        assertEquals(null,com.code.pal.agent.dto.DailyUsageResponse.from(policy.dailyUsage(USER)).remainingTokens());
+    }
 
     @Test
     void quotaCountsFromMidnightUtc() {
         policy.tokensUsedToday(USER);
 
-        verify(runs).sumTokensByUserIdSince(USER, Instant.parse("2026-10-03T00:00:00Z"));
+        verify(budget).usage(USER, java.time.LocalDate.of(2026,10,3));
     }
 
     @Test
@@ -99,7 +111,7 @@ class AgentUsagePolicyTest {
 
         assertEquals("You already have 2 requests in progress. Wait for one to finish, or stop it, before sending another.",
                 rejected.getMessage());
-        verify(runs).countByUserIdAndStatusIn(USER, List.of(RunStatus.QUEUED, RunStatus.RUNNING));
+        verify(runs).countByUserIdAndStatusIn(USER, List.of(RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.COMMITTING));
     }
 
     @Test

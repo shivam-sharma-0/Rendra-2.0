@@ -96,7 +96,7 @@ class FileLayerBenchmarkIT {
         FileChangeRepository changes = mock(FileChangeRepository.class);
         when(changes.save(any())).thenAnswer(call -> call.getArgument(0));
         ChangeSetService changeSets = new ChangeSetService(changes, mock(AgentRunRepository.class),
-                new ObjectMapper(), properties, files, sandbox);
+                new ObjectMapper(), properties, files, sandbox, mock(com.code.pal.project.service.ProjectService.class));
         time("change set: start + 5 writes + commit", () -> {
             UUID runId = UUID.randomUUID();
             String stage = changeSets.start(runId, projectId);

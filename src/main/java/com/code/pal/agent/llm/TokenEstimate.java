@@ -5,7 +5,7 @@ import com.code.pal.agent.llm.LlmClient.ToolCall;
 
 import java.util.List;
 
-/** A rough upper estimate of a request's input tokens, for reserving quota before the call. */
+/** Request reservation estimate; not a token upper bound. Actual reported usage remains authoritative. */
 public final class TokenEstimate {
 
     /** What one attached image costs a vision model, roughly; its data URL is not counted as text. */
@@ -32,6 +32,7 @@ public final class TokenEstimate {
     }
 
     public static long input(LlmClient.LlmRequest request) {
-        return input(request.messages(), request.tools() == null || request.tools().isEmpty() ? 0 : request.tools().toString().length());
+        int schemaChars=request.jsonSchema()==null?0:request.jsonSchema().schema().length();
+        return input(request.messages(), schemaChars+(request.tools() == null || request.tools().isEmpty() ? 0 : request.tools().toString().length()));
     }
 }

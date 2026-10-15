@@ -1,4 +1,4 @@
-import { apiGet, apiSend, apiUpload } from '../auth/api'
+import { apiBlob, apiGet, apiSend, apiUpload } from '../auth/api'
 import { newAiMessageId, newUserMessageId } from '../lib/ids'
 
 export type ProjectType = 'BUILD' | 'CHAT' | 'PLAN'
@@ -9,7 +9,7 @@ export type DeploymentStatus = 'NONE' | 'PENDING' | 'LIVE' | 'FAILED'
 export type MessageRole = 'USER' | 'ASSISTANT' | 'SYSTEM'
 export type MessageStatus = 'PENDING' | 'STREAMING' | 'COMPLETE' | 'FAILED'
 export type WorkspaceRole = 'OWNER' | 'ADMIN' | 'MEMBER'
-export type AgentRunStatus = 'QUEUED' | 'RUNNING' | 'AWAITING_INPUT' | 'DONE' | 'FAILED' | 'CANCELLED'
+export type AgentRunStatus = 'QUEUED' | 'RUNNING' | 'COMMITTING' | 'AWAITING_INPUT' | 'DONE' | 'FAILED' | 'CANCELLED'
 export type AgentStepType = 'THINKING' | 'TOOL_CALL' | 'TOOL_RESULT' | 'ASK_USER' | 'MESSAGE' | 'STATUS'
 
 export type Workspace = { id: string; name: string; personal: boolean; role: WorkspaceRole; createdAt: string }
@@ -29,6 +29,9 @@ export type AgentRun = {
   id: string; projectId: string; messageId: string; mode: ProjectType; status: AgentRunStatus
   promptTokens: number; completionTokens: number; rollbackAvailable: boolean; conversational: boolean
   createdAt: string; updatedAt: string; respondingAt: string | null
+  saveRecoveryRequired?: boolean; codeSavedAt?: string | null; previewStatus?: 'NOT_REQUESTED' | 'BUILDING' | 'READY' | 'FAILED' | null
+  planAvailable?: boolean
+  failureReason?: 'DAILY_QUOTA_EXCEEDED' | 'RUN_TOKEN_BUDGET_EXCEEDED' | 'RUN_LIMIT_REACHED' | 'BUILD_VALIDATION_FAILED' | 'PROVIDER_REQUEST_REJECTED' | 'USER_REVIEW_REQUIRED' | 'AGENT_FAILED' | null
 }
 export type ActivityKind = 'THINKING' | 'READ' | 'CREATE' | 'EDIT' | 'DELETE' | 'MOVE' | 'PLAN' | 'CHECK' | 'REVIEW'
   | 'ATTACHMENTS' | 'SAVED' | 'PREVIEW' | 'STATUS' | 'STOPPED' | 'FAILED' | 'ASK_USER' | 'MESSAGE'
@@ -84,7 +87,7 @@ export const PROJECT_TYPES: ProjectType[] = ['BUILD', 'PLAN']
 /** The preview's build state; `version` changes whenever the served content does (realtime PREVIEW_STATUS). */
 export type PreviewStatus = { state: 'BUILDING' | 'READY' | 'FAILED'; version: string | null; error: string | null }
 /** A running build's unvalidated staged changes, built for the preview (realtime PREVIEW_DRAFT). */
-export type PreviewDraft = { runId: string; version: string; url: string }
+export type PreviewDraft = { runId: string; version: string; url: string; expiresAt: string }
 /** Realtime PREVIEW_DRAFT: a new draft (`active`) or the run ended and its draft is gone. */
 export type PreviewDraftEvent = { runId: string; version?: string; active: boolean }
 
@@ -106,12 +109,13 @@ export const projectApi = {
   get: (id: string, opts?: ReadOpts) => apiGet<Project>(`/api/projects/${id}`, opts),
   // available: something can be shown (a built site, or a static site's files); status: the latest build
   previewToken: (id: string, opts?: ReadOpts) =>
-    apiGet<{ token: string; url: string; available: boolean; status: PreviewStatus; draft: PreviewDraft | null }>(`/api/projects/${id}/preview-token`, opts),
+    apiGet<{ token: string; url: string; available: boolean; status: PreviewStatus; draft: PreviewDraft | null; expiresAt: string }>(`/api/projects/${id}/preview-token`, opts),
   uploadAttachments: (id: string, files: File[]) => apiUpload<Attachment[]>(`/api/projects/${id}/attachments`, files),
   /** Rename (and other small edits) — PATCH /api/projects/{id}. */
   update: (id: string, body: { name?: string }) => apiSend<Project>('PATCH', `/api/projects/${id}`, body),
   remove: (id: string) => apiSend<void>('DELETE', `/api/projects/${id}`),
   publish: (id: string) => apiSend<Project>('POST', `/api/projects/${id}/publish`),
+  publishCapability: (id: string) => apiGet<{ available: boolean; reason: string | null }>(`/api/projects/${id}/publish-capability`),
   unpublish: (id: string) => apiSend<Project>('POST', `/api/projects/${id}/unpublish`),
 }
 
@@ -124,16 +128,16 @@ export type RequirementQuestion = {
 }
 export type RequirementSession = {
   id: string | null; projectId: string; status: RequirementStatus; questions: RequirementQuestion[]
-  complete: boolean; approvedAt: string | null
+  complete: boolean; approvedAt: string | null; revision: number; processing: boolean; artifactStatus: 'NONE' | 'PENDING' | 'READY' | 'SUPERSEDED'; reviewStatus: 'NONE' | 'PROCESSING' | 'MODEL' | 'FALLBACK'
 }
 export type DatabaseSnapshot = { provider: string; database: string; reachable: boolean; collections: string[]; error: string | null; checkedAt: string }
 
 export const requirementsApi = {
   get: (projectId: string, opts?: ReadOpts) => apiGet<RequirementSession>(`/api/projects/${projectId}/requirements`, opts),
   start: (projectId: string) => apiSend<RequirementSession>('POST', `/api/projects/${projectId}/requirements/start`),
-  answer: (projectId: string, questionId: string, body: { selectedOption?: string | null; otherText?: string | null }) =>
+  answer: (projectId: string, questionId: string, body: { selectedOption?: string | null; otherText?: string | null; revision: number }) =>
     apiSend<RequirementSession>('PUT', `/api/projects/${projectId}/requirements/questions/${questionId}`, body),
-  approve: (projectId: string) => apiSend<RequirementSession>('POST', `/api/projects/${projectId}/requirements/approve`),
+  approve: (projectId: string, revision: number) => apiSend<RequirementSession>('POST', `/api/projects/${projectId}/requirements/approve`, { revision }),
 }
 
 export const databaseApi = {
@@ -154,13 +158,31 @@ export const messageApi = {
 }
 
 /** Timeline replay, cancel and rollback operations for the project agent. */
+export type PlanReview = {
+  id: string; hash: string; state: 'DRAFT' | 'APPROVED' | 'INVALIDATED'; storage: string; auth: string
+  units: { id: string; objective: string; ownedPaths: string[]; dependsOn: string[]; acceptanceIds: string[] }[]
+}
 export const agentApi = {
+  failedDraft: (projectId: string, runId: string, opts?: ReadOpts) => apiGet<FailedDraft>(`/api/projects/${projectId}/agent-runs/${runId}/failed-draft`, opts),
+  failedDraftFile: (projectId: string, runId: string, path: string, opts?: ReadOpts) =>
+    apiGet<{ path: string; content: string | null; binary: boolean; truncated: boolean }>(`/api/projects/${projectId}/agent-runs/${runId}/failed-draft/file?path=${encodeURIComponent(path)}`, opts),
+  downloadFailedDraft: (projectId: string, runId: string) => apiBlob(`/api/projects/${projectId}/agent-runs/${runId}/failed-draft/download`),
+  retryFailedDraft: (projectId: string, runId: string, request: { id: string; aiMessageId: string }) =>
+    apiSend<AgentRun>('POST', `/api/projects/${projectId}/agent-runs/${runId}/failed-draft/retry`, request),
+  plan: (projectId: string, runId: string, opts?: ReadOpts) => apiGet<PlanReview | null>(`/api/projects/${projectId}/agent-runs/${runId}/plan`, opts),
+  approvePlan: (projectId: string, runId: string, plan: Pick<PlanReview, 'id' | 'hash'>) =>
+    apiSend<PlanReview>('POST', `/api/projects/${projectId}/agent-runs/${runId}/plan/approve`, { contractId: plan.id, reviewedHash: plan.hash }),
   list: (projectId: string, opts?: ReadOpts) => apiGet<AgentRun[]>(`/api/projects/${projectId}/agent-runs`, opts),
   steps: (projectId: string, runId: string, afterSeq = -1, opts?: ReadOpts) =>
     apiGet<AgentStep[]>(`/api/projects/${projectId}/agent-runs/${runId}/steps?afterSeq=${afterSeq}`, opts),
   stagedFiles: (projectId: string, runId: string, opts?: ReadOpts) => apiGet<StagedFile[]>(`/api/projects/${projectId}/agent-runs/${runId}/staged-files`, opts),
   cancel: (projectId: string, runId: string) => apiSend<void>('POST', `/api/projects/${projectId}/agent-runs/${runId}/cancel`),
   rollback: (projectId: string, runId: string) => apiSend<void>('POST', `/api/projects/${projectId}/agent-runs/${runId}/rollback`),
+}
+
+export type FailedDraft = {
+  state: 'AVAILABLE' | 'UNAVAILABLE' | 'EXPIRED'; available: boolean; verified: false
+  files: { path: string; bytes: number; version: string }[]; retryRunId: string | null
 }
 
 /** Per-project sharing (Share panel). */
@@ -176,7 +198,8 @@ export const projectMemberApi = {
 
 /** The signed-in user's notification feed. */
 /** The signed-in user's AI token use today; `quota` 0 means unlimited. Resets at 00:00 UTC. */
-export type DailyUsage = { tokensUsed: number; quota: number; resetsAt: string }
+export type DailyUsage = { tokensUsed: number; quota: number; resetsAt: string; reportedTokens?: number; unknownTokens?: number;
+  reservedTokens?: number; unknownCalls?: number; capacityUsed?: number; remainingTokens?: number | null }
 
 export const usageApi = {
   daily: (opts?: ReadOpts) => apiGet<DailyUsage>('/api/usage/daily', opts),
@@ -192,6 +215,8 @@ export const notificationApi = {
 export type ProjectAnalytics = {
   totalRuns: number; completedRuns: number; failedRuns: number; totalMessages: number
   totalTokens: number; fileCount: number; deploymentStatus: DeploymentStatus
+  reportedTokens?: number; unknownTokens?: number; reservedTokens?: number; unknownCalls?: number
+  actualAttempts?: number; logicalCalls?: number; historicalAttemptRecords?: number
   createdAt: string; lastActivityAt: string
 }
 export type SecurityFinding = { severity: 'HIGH' | 'MEDIUM' | 'LOW'; title: string; file: string; detail: string }

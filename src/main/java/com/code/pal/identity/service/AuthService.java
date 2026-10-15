@@ -14,6 +14,7 @@ public interface AuthService {
     AuthResponse login(LoginRequest request);
 
     AuthResponse refresh(String refreshToken);
+    void logout(String refreshToken);
 
     /**
      * Authenticate a verified OAuth identity, provisioning the account on first sight

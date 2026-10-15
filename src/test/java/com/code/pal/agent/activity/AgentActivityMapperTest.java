@@ -26,7 +26,7 @@ class AgentActivityMapperTest {
 
     @Test
     void internalStatusesAreHidden() {
-        for (String title : List.of("Agent started", "Agent completed", "Model called", "LLM provider unavailable",
+        for (String title : List.of("Agent started", "Agent completed", "Model called",
                 "Project context prepared", "Project context usage", "Some future status")) {
             hidden(AgentStepType.STATUS, title, "{\"iteration\":3}");
         }
@@ -61,8 +61,9 @@ class AgentActivityMapperTest {
     }
 
     @Test
-    void failedFileAndPlanToolsAndBookkeepingAreHidden() {
-        hidden(AgentStepType.TOOL_RESULT, "patchFile", "{\"success\":false,\"errorCode\":\"PATCH_TARGET_NOT_FOUND\",\"path\":\"a.ts\"}");
+    void failedChangeAttemptsAreVisibleAndBookkeepingIsHidden() {
+        var failed=visible(AgentStepType.TOOL_RESULT, "patchFile", "{\"success\":false,\"errorCode\":\"PATCH_TARGET_NOT_FOUND\",\"path\":\"a.ts\"}");
+        assertEquals(Kind.STATUS,failed.kind());assertEquals(false,failed.ok());assertEquals(List.of("a.ts"),failed.paths());
         hidden(AgentStepType.TOOL_RESULT, "updatePlanStep", "{\"success\":true}");
         hidden(AgentStepType.TOOL_RESULT, "someNewTool", "{\"success\":true}");
     }
@@ -103,13 +104,13 @@ class AgentActivityMapperTest {
         assertEquals(Kind.FAILED, quota.kind());
         assertEquals("You have used today's AI quota.", quota.detail());
         assertEquals(Kind.STATUS, visible(AgentStepType.STATUS, "Queued", "{\"status\":\"QUEUED\"}").kind());
-        assertEquals(Kind.THINKING, visible(AgentStepType.THINKING, "Model reasoning", "{\"reasoning\":\"…\"}").kind());
+        assertEquals(Kind.STATUS, visible(AgentStepType.THINKING, "Model reasoning", "{\"reasoning\":\"…\"}").kind());
     }
 
     @Test
     void publicDataDropsTelemetryButKeepsWhatTheUiUses() {
         String data = mapper.publicData("{\"reasoning\":\"why\",\"toolCallCount\":2,\"modelCalls\":5,\"provider\":\"mistral\",\"changedFiles\":[\"a\"]}");
-        assertTrue(data.contains("\"reasoning\""));
+        assertFalse(data.contains("\"reasoning\""));
         assertTrue(data.contains("\"changedFiles\""));
         assertFalse(data.contains("modelCalls"));
         assertFalse(data.contains("mistral"));
@@ -117,5 +118,15 @@ class AgentActivityMapperTest {
         assertNull(mapper.publicData("{\"iterations\":3,\"modelCalls\":4}"));
         assertNull(mapper.publicData(null));
         assertNull(mapper.publicData("not json"));
+    }
+    @Test void allowlistRejectsNestedTelemetryAndWrongTypes() {
+        String json=mapper.publicData("{\"reasoning\":{\"provider\":\"private\"},\"paths\":[\"src/App.tsx\",{\"model\":\"private\"}],\"message\":[\"private\"],\"status\":\"SAVING\",\"unknown\":{\"token\":\"private\"}}");
+        assertEquals("{\"status\":\"SAVING\",\"paths\":[\"src/App.tsx\"]}",json);
+        assertNull(mapper.publicData("[\"private\"]"));
+        assertNull(mapper.publicData("{\"success\":\"true\",\"repairAttempts\":-1}"));
+    }
+    @Test void retrySaveAndRecoveryAreVisibleWithoutProviderMetadata() {
+        for(String title:List.of("LLM provider unavailable","Saving changes","Save recovery pending"))assertEquals(Kind.STATUS,visible(AgentStepType.STATUS,title,"{\"provider\":\"private\"}").kind());
+        assertNull(mapper.publicData("{\"provider\":\"private\",\"nested\":{\"model\":\"private\"}}"));
     }
 }

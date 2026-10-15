@@ -45,15 +45,19 @@ export const googleLoginUrl = () => `${BACKEND_ORIGIN}/oauth2/authorization/goog
 // ── In-memory session (no tokens in localStorage) ──────────────────────────────
 let accessToken: string | null = null
 let currentUser: AuthUser | null = null
+let authEpoch = 0
+let refreshInFlight: Promise<SessionResponse> | null = null
 
 export const session = {
   access: () => accessToken,
   user: () => currentUser,
   set(res: SessionResponse) {
+    if (currentUser?.id !== res.user.id) authEpoch++
     accessToken = res.accessToken
     currentUser = res.user
   },
   clear() {
+    authEpoch++
     accessToken = null
     currentUser = null
   },
@@ -115,17 +119,25 @@ async function postPublic<T>(path: string, body: unknown): Promise<T> {
 
 export const authApi = {
   login: (email: string, password: string) =>
-    postPublic<SessionResponse>('/api/auth/login', { email, password }),
+    postPublic<SessionResponse>('/api/auth/login', { email, password }).then(res => { authEpoch++; return res }),
 
   signup: (email: string, password: string, name?: string) =>
-    postPublic<SessionResponse>('/api/auth/signup', { email, password, name: name || null }),
+    postPublic<SessionResponse>('/api/auth/signup', { email, password, name: name || null }).then(res => { authEpoch++; return res }),
 
   /** Exchange the refresh cookie for a fresh access token (no body). */
   async refresh(): Promise<SessionResponse> {
-    const res = await fetch(`${API_BASE}/api/auth/refresh`,
-      withRequestDefaults({ method: 'POST', credentials: 'include' }))
-    if (!res.ok) throw await toError(res)
-    return res.json() as Promise<SessionResponse>
+    if (!refreshInFlight) {
+      const exchange = async () => {
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, withRequestDefaults({ method: 'POST', credentials: 'include' }))
+        if (!res.ok) throw await toError(res)
+        return res.json() as Promise<SessionResponse>
+      }
+      const operation = typeof navigator !== 'undefined' && navigator.locks
+        ? navigator.locks.request('codepal-auth-refresh', { signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS) }, exchange)
+        : exchange()
+      refreshInFlight = operation.finally(() => { refreshInFlight = null })
+    }
+    return refreshInFlight
   },
 
   /** Clear the refresh cookie server-side. */
@@ -139,6 +151,28 @@ export const authApi = {
   },
 }
 
+/** Refresh an expiring socket credential without restoring a logged-out or switched account. */
+export async function realtimeAccess(): Promise<string | null> {
+  const token = accessToken
+  const epoch = authEpoch
+  if (!token || wasExplicitlyLoggedOut()) return null
+  try {
+    const encoded = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const expiry = Number(JSON.parse(atob(encoded)).exp)
+    if (Number.isFinite(expiry) && expiry * 1000 > Date.now() + 30_000) return token
+  } catch { /* An unreadable token must be exchanged, not retried forever. */ }
+  try {
+    const refreshed = await authApi.refresh()
+    if (authEpoch !== epoch || wasExplicitlyLoggedOut()) return null
+    if (currentUser?.id !== refreshed.user.id) { session.clear(); return null }
+    session.set(refreshed)
+    return accessToken
+  } catch {
+    if (authEpoch === epoch) session.clear()
+    return null
+  }
+}
+
 /**
  * Authenticated fetch: attaches the in-memory access token and, on a 401, silently refreshes it
  * via the cookie once before retrying. Always sends credentials so the cookie rides along.
@@ -147,21 +181,24 @@ async function authFetch(path: string, init?: RequestInit, allowRetry = true): P
   const withDefaults = withRequestDefaults(init)
   const headers = withDefaults.headers as Headers
   const tokenAtStart = accessToken
+  const epochAtStart = authEpoch
   if (tokenAtStart) headers.set('Authorization', `Bearer ${tokenAtStart}`)
 
   const res = await fetch(`${API_BASE}${path}`, { ...withDefaults, credentials: 'include' })
   // Do not turn a stale request from before logout into a refresh request. A request made
   // after logout has no access token either, so it must also fail without probing /refresh.
-  if (res.status !== 401 || !allowRetry || !tokenAtStart || accessToken !== tokenAtStart) return res
+  if (res.status !== 401 || !allowRetry || !tokenAtStart || authEpoch !== epochAtStart || !accessToken) return res
+  if (accessToken !== tokenAtStart) return authFetch(path, init, false)
 
   try {
     const refreshed = await authApi.refresh()
     // Logout may have happened while the refresh request was in flight. Never let that stale
     // response restore an authenticated session after the user explicitly signed out.
-    if (accessToken !== tokenAtStart || wasExplicitlyLoggedOut()) return res
+    if (authEpoch !== epochAtStart || wasExplicitlyLoggedOut()) return res
+    if (currentUser?.id !== refreshed.user.id) { session.clear(); return res }
     session.set(refreshed)
   } catch {
-    session.clear()
+    if (authEpoch === epochAtStart) session.clear()
     return res
   }
   return authFetch(path, init, false)
@@ -172,6 +209,13 @@ export async function apiGet<T>(path: string, opts?: { signal?: AbortSignal }): 
   const res = await authFetch(path, { signal: opts?.signal })
   if (!res.ok) throw await toError(res)
   return res.json() as Promise<T>
+}
+
+/** Private downloads use the same refresh/session handling as JSON requests. */
+export async function apiBlob(path: string, opts?: { signal?: AbortSignal }): Promise<Blob> {
+  const res = await authFetch(path, { signal: opts?.signal })
+  if (!res.ok) throw await toError(res)
+  return res.blob()
 }
 
 /**

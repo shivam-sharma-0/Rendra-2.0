@@ -88,6 +88,14 @@ class AgentRunnerLlmFallbackTest {
         assertEquals(1, model.models.size(), "a second model would repeat or contradict visible text");
     }
 
+    @Test void exhaustedRoutesStopWithoutRepeatingDuplicateConfiguredModels() throws Exception {
+        for(var intent:List.of(AgentIntent.TASK,AgentIntent.CONVERSATIONAL)) {
+            ScriptedModel model=new ScriptedModel(request->{throw new com.code.pal.agent.llm.LlmHttpException(401,"Every provider key was rejected");},request->{throw new com.code.pal.agent.llm.LlmHttpException(503,"Unavailable");},request->"must not repeat");
+            Fixture fixture=new Fixture(model,intent,"Explain the project structure.",List.of("chat-a","chat-a","chat-b"));
+            assertEquals(RunStatus.FAILED,fixture.runner.run(fixture.run).status());assertEquals(List.of("chat-a","chat-b"),model.models);fixture.cancellations.shutdown();
+        }
+    }
+
     @Test
     void smallTalkFailsAfterTheConfiguredNumberOfModels() throws Exception {
         ScriptedModel model = new ScriptedModel(
@@ -144,7 +152,7 @@ class AgentRunnerLlmFallbackTest {
                 request -> "never reached");
         AgentUsagePolicy usage = mock(AgentUsagePolicy.class);
         when(usage.dailyTokenQuota()).thenReturn(1_000L);
-        when(usage.tokensUsedToday(7L)).thenReturn(997L);   // each scripted call costs 2 tokens
+        when(usage.tokensUsedToday(7L)).thenReturn(997L, 997L, 999L, 1001L);   // each scripted call costs 2 tokens
         Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.",
                 List.of("chat-a"), usage);
 
@@ -219,9 +227,9 @@ class AgentRunnerLlmFallbackTest {
         ScriptedModel model = new ScriptedModel(request -> "never reached");
         AgentUsagePolicy usage = mock(AgentUsagePolicy.class);
         when(usage.dailyTokenQuota()).thenReturn(1_000_000L);
-        when(usage.reserve(eq(7L), org.mockito.ArgumentMatchers.anyLong()))
-                .thenReturn(AgentUsagePolicy.Reservation.refused(AgentUsagePolicy.QUOTA_LOW_MESSAGE));
-        Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.", List.of("chat-a"), usage);
+
+        LlmClient refused = (request, delta) -> { throw new com.code.pal.agent.llm.LlmQuotaExceededException(AgentUsagePolicy.QUOTA_LOW_MESSAGE); };
+        Fixture fixture = new Fixture(refused, AgentIntent.TASK, "Explain the project structure.", List.of("chat-a"), usage);
 
         AgentRunResult result = fixture.runner.run(fixture.run);
 
@@ -232,20 +240,17 @@ class AgentRunnerLlmFallbackTest {
     }
 
     @Test
-    void everyModelCallIsCappedAndItsReservationReleased() throws Exception {
+    void everyModelCallIsCappedAndTheRunnerDoesNotDuplicateGatewayAccounting() throws Exception {
         ScriptedModel model = new ScriptedModel(request -> ScriptedModel.LIST_FILES, request -> "The project has no files yet.");
         AgentUsagePolicy usage = mock(AgentUsagePolicy.class);
         when(usage.dailyTokenQuota()).thenReturn(1_000_000L);
-        AgentUsagePolicy.Reservation granted = new AgentUsagePolicy.Reservation(7L, "r-1", 9_000, true, null);
-        when(usage.reserve(eq(7L), org.mockito.ArgumentMatchers.anyLong())).thenReturn(granted);
         Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.", List.of("chat-a"), usage);
 
         AgentRunResult result = fixture.runner.run(fixture.run);
 
         assertEquals(RunStatus.DONE, result.status());
         assertEquals(List.of(8_192, 8_192), model.maxTokens);
-        org.mockito.Mockito.verify(usage, org.mockito.Mockito.times(2)).reserve(eq(7L), org.mockito.ArgumentMatchers.longThat(t -> t > 8_192));
-        org.mockito.Mockito.verify(usage, org.mockito.Mockito.times(2)).release(granted);
+        org.mockito.Mockito.verify(usage, org.mockito.Mockito.never()).reserve(any(), any(), org.mockito.ArgumentMatchers.anyLong(), any(), any());
         fixture.cancellations.shutdown();
     }
 
@@ -328,9 +333,10 @@ class AgentRunnerLlmFallbackTest {
             when(runs.save(any(AgentRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
             ProjectService projects = mock(ProjectService.class);
             when(projects.requireAccessible(7L, projectId)).thenReturn(project);
+        when(projects.requireCanEdit(7L, projectId)).thenReturn(project);
             MessageRepository messages = mock(MessageRepository.class);
-            when(messages.findByProjectId(eq(projectId), any())).thenReturn(new PageImpl<>(List.of(
-                    Message.user(projectId, "user-1", prompt, ProjectType.CHAT, 7L))));
+            com.code.pal.testsupport.QueuedRequestFixture.stubOriginal(messages, run,
+                    Message.user(projectId, "user-1", prompt, ProjectType.CHAT, 7L));
             when(messages.findById("assistant-1")).thenReturn(Optional.empty());
             AgentHeartbeat heartbeat = mock(AgentHeartbeat.class);
             when(heartbeat.start(runId, projectId)).thenReturn(() -> { });

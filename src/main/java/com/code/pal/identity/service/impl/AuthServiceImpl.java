@@ -24,8 +24,8 @@ import java.time.Instant;
 
 /**
  * Core auth logic. Credentials are checked in-process (no {@code AuthenticationManager}
- * round-trip) and tokens are stateless, so the login path is a single indexed read plus
- * one BCrypt compare.
+ * round-trip). Signed tokens bind a revocable database session; refresh rotation is atomic
+ * and a reused token revokes its family.
  */
 @Slf4j
 @Service
@@ -35,6 +35,7 @@ public class AuthServiceImpl implements AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final com.code.pal.identity.security.AuthSessions sessions;
 
     @Override
     @Transactional
@@ -92,7 +93,7 @@ public class AuthServiceImpl implements AuthService {
                 .filter(User::getEnabled)
                 .orElseThrow(() -> new InvalidCredentialsException("User not found or disabled"));
 
-        return tokensFor(user);
+        return sessions.rotate(user,claims,refreshToken);
     }
 
     @Override
@@ -123,11 +124,9 @@ public class AuthServiceImpl implements AuthService {
     }
 
     private AuthResponse tokensFor(User user) {
-        return new AuthResponse(
-                jwtService.generateAccessToken(user),
-                jwtService.generateRefreshToken(user),
-                UserResponse.from(user));
+        return sessions.issue(user);
     }
+    @Override public void logout(String refreshToken){sessions.logout(refreshToken);}
 
     private static String normalize(String email) {
         return email == null ? "" : email.trim().toLowerCase();

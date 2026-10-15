@@ -21,9 +21,11 @@ public enum Starter {
     MERN("mern");
 
     private static final String BASE = "starters/";
-    private static final List<String> VITE_FILES = List.of("package.json", "tsconfig.json", "vite.config.ts",
+    public static final String TEMPLATE_VERSION = "2026-10-11.1";
+    public static final String RUNTIME_IMAGE = "node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c";
+    private static final List<String> VITE_FILES = List.of("package.json", "package-lock.json", "tsconfig.json", "vite.config.ts",
             "index.html", "src/main.tsx", "src/index.css");
-    private static final List<String> SERVER_FILES = List.of("server/package.json", "server/tsconfig.json", "server/src/index.ts");
+    private static final List<String> SERVER_FILES = List.of("server/package.json", "server/package-lock.json", "server/tsconfig.json", "server/src/index.ts");
     private static final int MAX_TITLE = 60;
 
     private final String id;
@@ -45,6 +47,8 @@ public enum Starter {
     public Map<String, String> files(String title) {
         Map<String, String> files = new LinkedHashMap<>();
         files.put(".gitignore", read("vite-react/gitignore"));
+        files.put(".nvmrc", "22.23.3\n");
+        files.put("starter-runtime.json", read("runtime.json"));
         String prefix = this == MERN ? "client/" : "";
         for (String path : VITE_FILES) files.put(prefix + path, read("vite-react/" + path));
         if (this == MERN) {

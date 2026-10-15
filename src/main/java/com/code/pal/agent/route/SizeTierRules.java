@@ -52,7 +52,7 @@ public final class SizeTierRules {
      */
     public static Decision decide(ProjectType mode, String request, String initialPrompt, boolean existingProject) {
         if (mode != ProjectType.BUILD) return new Decision(SizeTier.S, List.of("not a build"));
-        String text = signalText(request, initialPrompt).toLowerCase(Locale.ROOT);
+        String text = com.code.pal.agent.intent.RequestScope.positiveSignals(signalText(request, initialPrompt));
         Set<String> pages = matches(PAGE_WORDS, text);
         int pageCount = Math.max(pages.size(), namedPageCount(text));
         Set<String> data = matches(DATA_WORDS, text);
@@ -68,7 +68,8 @@ public final class SizeTierRules {
 
         if (existingProject && !rebuild) {
             reasons.addFirst("change to an existing project");
-            boolean feature = pageCount >= 3 || !large.isEmpty() || (!data.isEmpty() && pageCount >= 2);
+            boolean feature = pageCount >= 3 || !large.isEmpty() || (!data.isEmpty() && pageCount >= 2)
+                    || text.matches(".*\\b(crud|signup|sign up|user accounts|roles|authentication|mongodb|supabase)\\b.*");
             return new Decision(feature ? SizeTier.M : SizeTier.S, reasons);
         }
         reasons.addFirst(existingProject ? "rebuild" : "new project");
@@ -76,6 +77,17 @@ public final class SizeTierRules {
                 - (small.isEmpty() ? 0 : 2);
         SizeTier tier = score >= 6 || (pageCount >= 3 && !data.isEmpty()) ? SizeTier.L : score >= 2 ? SizeTier.M : SizeTier.S;
         return new Decision(tier, reasons);
+    }
+    public static Decision decide(ProjectType mode,String request,String initialPrompt,boolean existingProject,
+                                   com.code.pal.project.capability.BuildDecisions.Choice choice) {
+        var result=decide(mode,request,initialPrompt,existingProject);
+        if(mode==ProjectType.BUILD && !existingProject && result.tier()==SizeTier.S && choice!=null
+                && (choice.auth()==com.code.pal.project.capability.BuildDecisions.Auth.ACCOUNTS
+                || choice.storage()==com.code.pal.project.capability.BuildDecisions.Storage.MERN
+                || choice.storage()==com.code.pal.project.capability.BuildDecisions.Storage.SUPABASE)) {
+            var reasons=new ArrayList<>(result.reasons());reasons.add("approved server/auth capability");return new Decision(SizeTier.M,reasons);
+        }
+        return result;
     }
 
     /** The tier and the signals that led to it (shown in diagnostics, not to the user). */

@@ -54,6 +54,23 @@ import static org.mockito.Mockito.when;
 class AgentRunnerTest {
     @Test
     void iteratesFromSearchToReadToGroundedFinalAnswer() throws Exception {
+        exercise(false);
+    }
+
+    @Test
+    void revokedEditorNeverReachesTheProviderOrTools() throws Exception {
+        exercise(true);
+    }
+
+    @Test void restoredCountersCannotPermitAnExtraProviderCallWhenDurableAdmissionRefuses() throws Exception {
+        exercise(false,true);
+    }
+    @Test void invalidPayloadDoesNotRepeatInEitherChatPath() throws Exception {exercise(false,false,true,false);exercise(false,false,true,true);}
+    private void exercise(boolean revoked) throws Exception {exercise(revoked,false);}
+    private void exercise(boolean revoked,boolean denyDurable) throws Exception {
+        exercise(revoked,denyDurable,false,false);
+    }
+    private void exercise(boolean revoked,boolean denyDurable,boolean terminal,boolean conversational) throws Exception {
         LocalProject workspace = LocalProject.create();
         UUID projectId = workspace.projectId;
         UUID workspaceId = UUID.randomUUID();
@@ -85,8 +102,11 @@ class AgentRunnerTest {
         when(runs.save(any(AgentRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
         ProjectService projects = mock(ProjectService.class);
         when(projects.requireAccessible(7L, projectId)).thenReturn(project);
+        when(projects.requireCanEdit(7L, projectId)).thenReturn(project);
+        if (revoked) org.mockito.Mockito.doThrow(new com.code.pal.workspace.exception.WorkspaceAccessDeniedException())
+                .when(projects).requireCanEdit(7L, projectId);
         MessageRepository messages = mock(MessageRepository.class);
-        when(messages.findByProjectId(eq(projectId), any())).thenReturn(new PageImpl<>(List.of(userMessage)));
+        com.code.pal.testsupport.QueuedRequestFixture.stubOriginal(messages, run, userMessage);
         when(messages.findById("assistant-1")).thenReturn(Optional.empty());
         AgentHeartbeat heartbeat = mock(AgentHeartbeat.class);
         when(heartbeat.start(runId, projectId)).thenReturn(() -> { });
@@ -94,14 +114,33 @@ class AgentRunnerTest {
         when(queue.isCancelRequested(runId)).thenReturn(false);
 
         IntentClassifier intentClassifier = mock(IntentClassifier.class);
-        when(intentClassifier.classify(any())).thenReturn(AgentIntent.TASK);
-        AgentRunner runner = new AgentRunner(new SearchReadAnswerModel(), intentClassifier, registry, executor,
+        when(intentClassifier.classify(any())).thenReturn(conversational?AgentIntent.CONVERSATIONAL:AgentIntent.TASK);
+        var model=new SearchReadAnswerModel();
+        LlmClient selectedModel=terminal?(request,delta)->{model.calls.incrementAndGet();throw new com.code.pal.agent.llm.LlmHttpException(400,"Fixture invalid request");}:model;
+        AgentRunner runner = new AgentRunner(selectedModel, intentClassifier, registry, executor,
                 mock(AgentEvents.class), properties, new ProjectContextService(properties, new ObjectMapper()),
                 runs, projects, messages, mock(RealtimeService.class),
                 workspace.files, heartbeat, queue, new ObjectMapper(), mock(ChangeSetService.class),
                 mock(ProjectValidationService.class), mock(NotificationService.class));
 
+        if(denyDurable) {
+            var progress=mock(com.code.pal.agent.change.SequentialCheckpoints.class);
+            when(progress.configure(any(),any())).thenReturn(new com.code.pal.agent.change.SequentialCheckpoints.Progress(4,4,2,1,60_000));
+            runner.useCheckpoints(progress);
+        }
         AgentRunResult result = runner.run(run);
+        if(terminal){assertEquals(RunStatus.FAILED,result.status());assertEquals(1,model.calls.get());assertEquals(com.code.pal.agent.domain.AgentFailureReason.PROVIDER_REQUEST_REJECTED,run.getFailureReason());org.mockito.Mockito.verifyNoInteractions(executor);return;}
+        if(denyDurable) {
+            assertEquals(RunStatus.FAILED,result.status());assertEquals(4,result.modelCalls());assertEquals(0,model.calls.get());
+            org.mockito.Mockito.verifyNoInteractions(executor);return;
+        }
+
+        if (revoked) {
+            assertEquals(RunStatus.FAILED, result.status());
+            assertEquals(0, result.modelCalls());
+            org.mockito.Mockito.verifyNoInteractions(executor, intentClassifier);
+            return;
+        }
 
         assertEquals(RunStatus.DONE, result.status());
         assertEquals(3, result.modelCalls());

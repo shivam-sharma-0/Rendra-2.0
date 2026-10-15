@@ -37,6 +37,10 @@ public class AgentWorker {
     private final AgentRuntime runtime;
     private final SandboxPolicy sandboxPolicy;
 
+    private com.code.pal.agent.lease.ProjectLeaseService leases;
+    @org.springframework.beans.factory.annotation.Autowired
+    void useLeases(com.code.pal.agent.lease.ProjectLeaseService leases) { this.leases=leases; }
+
     private volatile boolean running = true;
     private ExecutorService pool;
 
@@ -77,21 +81,28 @@ public class AgentWorker {
         AgentRun run = runRepository.findById(runId).orElse(null);
         if (run == null || run.getStatus() != RunStatus.QUEUED) return; // already handled / gone
 
-        if (!queue.tryLock(run.getProjectId(), runId)) {
+        UUID lockOwner=UUID.randomUUID();
+        if (!queue.tryLock(run.getProjectId(), lockOwner)) {
             // Project busy: wait in its parked list (released when the running turn unlocks) instead
             // of re-polling. The worker thread is free for other projects immediately.
             queue.parkBehindLock(run.getProjectId(), runId);
             return;
         }
+        com.code.pal.agent.lease.RunFence fence=null;
         try {
             // A run can sit on the queue more than once (recovery requeue, park release). Another worker
             // may have executed it between our first read and taking the lock, so read it again.
             AgentRun current = runRepository.findById(runId).orElse(null);
             if (current == null || current.getStatus() != RunStatus.QUEUED) return;
-            runtime.run(current);
+            if(leases!=null) {
+                fence=leases.claim(current.getProjectId(),runId,lockOwner);
+                if(fence==null) return; // durable QUEUED intent is retried by the bounded recovery sweep
+            }
+            try(var owned=com.code.pal.agent.lease.RunFence.bind(fence)) { runtime.run(current); }
         } finally {
-            long released = queue.unlockAndReleaseParked(run.getProjectId(), runId);
-            if (released > 0) log.debug("Released {} parked run(s) for project {}", released, run.getProjectId());
+            try { if(fence!=null) leases.release(fence); }
+            finally { queue.unlockAndReleaseParked(run.getProjectId(), lockOwner); }
+
         }
     }
 }

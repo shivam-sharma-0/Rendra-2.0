@@ -56,6 +56,10 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private final Duration requestTimeout;
     private final Duration rejectedKeyCooldown;
     private final long streamIdleTimeoutNanos;
+    private boolean accountingRequired;
+
+    @jakarta.annotation.PostConstruct
+    public void requireAccountingForManagedUse() { accountingRequired = true; }
 
     public OpenAiCompatibleLlmClient(AgentProperties props, ObjectMapper objectMapper) {
         AgentProperties.Llm llm = props.getLlm();
@@ -120,7 +124,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         int keysTriedInRound = 0;
         long backoffMs = initialBackoffMs;
         while (true) {
-            if (cancellation.isCancelled()) throw new LlmCancelledException();
+            if (cancellation.isCancelled() || Thread.currentThread().isInterrupted()) throw new LlmCancelledException();
             Duration attemptTimeout = attemptTimeout(deadline, provider);
             Endpoint endpoint = pool.next();
             if (endpoint == null) {
@@ -186,26 +190,40 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
             throw new LlmException("Could not create LLM request", e);
         }
 
+        LlmRequest attemptRequest=request.budget()==null?request:new LlmRequest(request.provider(),request.model(),request.messages(),request.tools(),request.temperature(),
+                Duration.ofNanos(Math.max(1,remainingNanos(deadline))),request.toolChoice(),request.maxTokens(),request.jsonSchema());
+        return LlmAttemptScope.execute(attemptRequest,
+                () -> executePreparedRequest(httpRequest, onTextDelta, deadline, cancellation), accountingRequired);
+    }
+
+    private LlmResult executePreparedRequest(HttpRequest httpRequest, Consumer<String> onTextDelta,
+                                            long deadline, RunCancellation cancellation) {
         AtomicBoolean published = new AtomicBoolean(false);
         StreamWatchdog watchdog = null;
         try {
-            HttpResponse<InputStream> response = awaitResponse(httpRequest, cancellation);
+            HttpResponse<InputStream> response = awaitResponse(httpRequest, cancellation,deadline);
             int status = response.statusCode();
             if (status == 429) {
                 closeQuietly(response.body());
+                LlmAttemptScope.responseClosed();
                 throw RetryableLlmException.rateLimited(retryAfterMs(response));
             }
             if (status >= 500) {
                 closeQuietly(response.body());
+                LlmAttemptScope.responseClosed();
                 throw new RetryableLlmException("HTTP " + status, retryAfterMs(response));
             }
             if (status == 401) {
                 closeQuietly(response.body());
+                LlmAttemptScope.responseClosed();
                 throw new KeyRejectedException();
             }
             if (status < 200 || status >= 300) {
-                String detail = readAtMost(response.body(), 1_000);
-                throw new LlmHttpException(status, "LLM call failed: HTTP " + status + (detail.isBlank() ? "" : " - " + detail));
+                // The status proves rejection. Do not wait for an untrusted error body, expose it,
+                // or turn a known non-billed 4xx into an UNKNOWN timeout/fallback attempt.
+                closeQuietly(response.body());
+                LlmAttemptScope.responseClosed();
+                throw new LlmHttpException(status, "LLM call failed: HTTP " + status);
             }
             // The request timeout stops at the response headers; the body needs its own guard.
             watchdog = new StreamWatchdog(response.body(), streamIdleTimeoutNanos, deadline, cancellation);
@@ -223,6 +241,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
             throw new RetryableLlmException(reason, 0, e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            if(cancellation.isCancelled()) throw new LlmCancelledException();
             throw new LlmException("LLM request interrupted", e);
         } finally {
             if (watchdog != null) watchdog.stop();
@@ -236,17 +255,22 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
      * Sends the request and waits for the response headers, aborting the request when the run is
      * cancelled. Transport failures surface as IOException, as with a blocking send.
      */
-    private HttpResponse<InputStream> awaitResponse(HttpRequest httpRequest, RunCancellation cancellation)
+    private HttpResponse<InputStream> awaitResponse(HttpRequest httpRequest, RunCancellation cancellation,long deadline)
             throws IOException, InterruptedException {
+        if(remainingNanos(deadline)<=0)throw new IOException("Call time budget exhausted before headers");
         CompletableFuture<HttpResponse<InputStream>> pending = http.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
         while (true) {
             try {
                 return pending.get(CANCEL_POLL_MS, TimeUnit.MILLISECONDS);
             } catch (TimeoutException waiting) {
+                if(remainingNanos(deadline)<=0){pending.cancel(true);throw new IOException("Call time budget exhausted while waiting for headers");}
                 if (cancellation.isCancelled()) {
                     pending.cancel(true);
                     throw new LlmCancelledException();
                 }
+            } catch (InterruptedException interrupted) {
+                pending.cancel(true);
+                throw interrupted;
             } catch (ExecutionException failed) {
                 Throwable cause = failed.getCause();
                 if (cause instanceof IOException io) throw io;
@@ -344,7 +368,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                 .toList();
         log.debug("llm_stream_done reasoningChars={} contentChars={}", reasoning.length(), content.length());
         return new LlmResult(content.toString(), reasoning.isEmpty() ? null : reasoning.toString(), calls,
-                new Usage(usage.promptTokens, usage.completionTokens), finishReason[0]);
+                usage.reported ? new Usage(usage.promptTokens, usage.completionTokens) : null, finishReason[0]);
     }
 
     /** @return true when the terminal [DONE] event was received. */
@@ -357,8 +381,14 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         try {
             JsonNode root = objectMapper.readTree(data);
             JsonNode usageNode = root.path("usage");
-            usage.promptTokens = usageNode.path("prompt_tokens").asInt(usage.promptTokens);
-            usage.completionTokens = usageNode.path("completion_tokens").asInt(usage.completionTokens);
+            JsonNode prompt = usageNode.path("prompt_tokens"), completion = usageNode.path("completion_tokens");
+            if (prompt.isIntegralNumber() && completion.isIntegralNumber()
+                    && prompt.asLong() >= 0 && prompt.asLong() <= Integer.MAX_VALUE
+                    && completion.asLong() >= 0 && completion.asLong() <= Integer.MAX_VALUE) {
+                usage.promptTokens = prompt.asInt();
+                usage.completionTokens = completion.asInt();
+                usage.reported = true;
+            }
             JsonNode choices = root.path("choices");
             if (!choices.isArray() || choices.isEmpty()) return false;
             JsonNode choice = choices.get(0);
@@ -394,9 +424,14 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private Map<String, Object> buildBody(LlmRequest request) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", request.model());
-        body.put("temperature", request.temperature() > 0 ? request.temperature() : defaultTemperature);
+        body.put("temperature", request.temperature());
         body.put("stream", true);
         body.put("messages", request.messages().stream().map(this::messageToMap).toList());
+        if(request.jsonSchema()!=null) {
+            var schema=objectMapper.readTree(request.jsonSchema().schema());
+            if(!schema.isObject())throw new IllegalArgumentException("Response schema must be an object");
+            body.put("response_format",Map.of("type","json_schema","json_schema",Map.of("name",request.jsonSchema().name(),"schema",schema,"strict",true)));
+        }
         if (request.tools() != null && !request.tools().isEmpty()) {
             body.put("tools", request.tools().stream().map(this::toolToMap).toList());
             body.put("tool_choice", request.toolChoice() == null ? "auto" : request.toolChoice());
@@ -494,11 +529,11 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         }
     }
 
-    private static final class UsageBuilder { private int promptTokens; private int completionTokens; }
+    private static final class UsageBuilder { private int promptTokens; private int completionTokens; private boolean reported; }
 
     /** HTTP 401 for one key; the call goes on with the provider's other keys. */
-    private static final class KeyRejectedException extends LlmException {
-        KeyRejectedException() { super("HTTP 401"); }
+    private static final class KeyRejectedException extends LlmHttpException {
+        KeyRejectedException() { super(401,"HTTP 401"); }
     }
 
     private static final class EndpointPool {

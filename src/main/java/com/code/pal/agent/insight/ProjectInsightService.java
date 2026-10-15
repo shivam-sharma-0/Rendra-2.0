@@ -49,20 +49,23 @@ public class ProjectInsightService {
     private final AgentRunRepository runs;
     private final MessageRepository messages;
     private final WorkspaceBrowser browser;
+    private final com.code.pal.agent.usage.DailyTokenBudget budget;
 
     public ProjectAnalytics analytics(Long userId, UUID projectId) {
         ProjectResponse p = projects.get(userId, projectId); // authorizes (accessible)
         int fileCount = countFiles(browser.tree(projectId));
+        var usage=budget.projectUsage(projectId);
         return new ProjectAnalytics(
                 runs.countByProjectId(projectId),
                 runs.countByProjectIdAndStatus(projectId, RunStatus.DONE),
                 runs.countByProjectIdAndStatus(projectId, RunStatus.FAILED),
                 messages.countByProjectId(projectId),
-                runs.sumTokensByProjectId(projectId),
+                usage.chargedTokens(),
                 fileCount,
                 p.deploymentStatus().name(),
                 p.createdAt(),
-                p.lastActivityAt());
+                p.lastActivityAt(),usage.reportedTokens(),usage.unknownTokens(),usage.reservedTokens(),usage.unknownCalls(),
+                usage.actualAttempts(),usage.logicalCalls(),usage.historicalAttemptRecords());
     }
 
     public SecurityScanResult securityScan(Long userId, UUID projectId) {

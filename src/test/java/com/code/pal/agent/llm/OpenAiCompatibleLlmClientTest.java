@@ -14,8 +14,16 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class OpenAiCompatibleLlmClientTest {
+    @Test void sendsBackendResponseGrammarThroughAttemptBudgetCopy() throws Exception {
+        var mapper=new ObjectMapper();server=HttpServer.create(new InetSocketAddress("localhost",0),0);
+        server.createContext("/v1/chat/completions",exchange->{var body=mapper.readTree(exchange.getRequestBody().readAllBytes());assertEquals("json_schema",body.at("/response_format/type").asString());assertEquals("sample",body.at("/response_format/json_schema/name").asString());assertEquals("object",body.at("/response_format/json_schema/schema/type").asString());exchange.getResponseHeaders().set("content-type","text/event-stream");exchange.sendResponseHeaders(200,0);exchange.getResponseBody().write("data: {\"choices\":[{\"delta\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));exchange.close();});server.start();
+        var props=new AgentProperties();props.getLlm().setBaseUrl("http://localhost:"+server.getAddress().getPort());props.getLlm().setApiKey("test");
+        var request=new LlmClient.LlmRequest("openrouter","test",List.of(LlmClient.LlmMessage.user("JSON")),List.of(),0,java.time.Duration.ofSeconds(5)).withJsonSchema(new LlmClient.JsonSchema("sample","{\"type\":\"object\"}"));
+        assertEquals("{}",new OpenAiCompatibleLlmClient(props,mapper).chat(request).content());
+    }
     private HttpServer server;
 
     @AfterEach
@@ -67,6 +75,33 @@ class OpenAiCompatibleLlmClientTest {
 
         assertEquals(true, bodies.get(0).contains("\"max_tokens\":77"), bodies.get(0));
         assertEquals(false, bodies.get(1).contains("max_tokens"), bodies.get(1));
+    }
+
+    @Test
+    void missingPartialOrInvalidUsageIsUnknownButReportedZeroIsKnown() throws Exception {
+        List<String> frames = List.of("", "{\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}",
+                "{\"usage\":{\"prompt_tokens\":3}}", "{\"usage\":{\"prompt_tokens\":-1,\"completion_tokens\":2}}");
+        AtomicInteger index = new AtomicInteger();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            String frame = frames.get(index.getAndIncrement());
+            String body = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n"
+                    + (frame.isEmpty() ? "" : "data: " + frame + "\n\n") + "data: [DONE]\n\n";
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (var output = exchange.getResponseBody()) { output.write(bytes); }
+        });
+        server.start();
+        var props = new AgentProperties();
+        props.getLlm().setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
+        props.getLlm().setApiKey("fixture");
+        var client = new OpenAiCompatibleLlmClient(props, new ObjectMapper());
+        var request = new LlmClient.LlmRequest("fake", List.of(), List.of(), 0);
+        assertNull(client.chat(request).usage());
+        assertEquals(new LlmClient.Usage(0,0), client.chat(request).usage());
+        assertNull(client.chat(request).usage());
+        assertNull(client.chat(request).usage());
     }
 
     private static void respond(HttpExchange exchange, int attempt) throws IOException {

@@ -17,7 +17,7 @@ public record AgentStepResponse(int seq, AgentStepType type, String content, Str
     /** The step as the user sees it, or empty for an internal step (model calls, counters, …). */
     public static Optional<AgentStepResponse> visible(AgentStep step, AgentActivityMapper activities) {
         return activities.map(step.getType(), step.getContent(), step.getData())
-                .map(activity -> new AgentStepResponse(step.getSeq(), step.getType(), step.getContent(),
+                .map(activity -> new AgentStepResponse(step.getSeq(), step.getType(), activities.publicContent(step.getType(),step.getContent(),activity),
                         activities.publicData(step.getData()), step.getCreatedAt(), activity));
     }
 }

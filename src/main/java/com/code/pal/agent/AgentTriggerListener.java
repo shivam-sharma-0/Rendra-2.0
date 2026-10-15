@@ -1,9 +1,7 @@
 package com.code.pal.agent;
 
-import com.code.pal.agent.domain.AgentRun;
-import com.code.pal.agent.domain.AgentStepType;
-import com.code.pal.agent.domain.RunStatus;
-import com.code.pal.agent.queue.AgentJobQueue;
+import com.code.pal.agent.dispatch.AgentDispatchService;
+import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.project.event.AssistantTurnRequested;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -11,34 +9,25 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
-import java.util.Map;
-
-/**
- * Creates a durable run and publishes its queued status after the user turn has
- * committed.
- */
-@Slf4j
-@Component
-@RequiredArgsConstructor
+/** Accept atomically before commit; dispatch after commit, with durable replay. */
+@Slf4j @Component @RequiredArgsConstructor
 public class AgentTriggerListener {
-    private final AgentRunCreator runCreator;
-    private final AgentJobQueue queue;
-    private final AgentEvents events;
+    private final AgentRunCreator creator;
+    private final AgentRunRepository runs;
+    private final AgentDispatchService dispatcher;
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onAssistantTurn(AssistantTurnRequested event) {
+        creator.create(event);
+    }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void onAssistantTurn(AssistantTurnRequested event) {
-        AgentRun run = runCreator.create(event);
-        events.emit(run, AgentStepType.STATUS, "Queued", Map.of("status", RunStatus.QUEUED.name()));
+    public void afterAcceptance(AssistantTurnRequested event) {
         try {
-            queue.enqueue(run.getId());
-        } catch (RuntimeException redisUnavailable) {
-            // The run is durable in the database as QUEUED; AgentRunRecovery requeues it once Redis is
-            // reachable again (app.agent.queued-recovery-ms). The user's message is already saved.
-            log.warn("agent_enqueue_failed runId={} project={} reason={}; recovery will requeue it",
-                    run.getId(), event.projectId(), redisUnavailable.getMessage());
-            return;
+            runs.findFirstByProjectIdAndMessageIdOrderByCreatedAtAsc(event.projectId(), event.assistantMessageId())
+                    .ifPresent(run -> dispatcher.dispatch(run.getId()));
+        } catch (RuntimeException unavailable) {
+            log.warn("agent_dispatch_deferred project={}; durable outbox will retry", event.projectId());
         }
-        log.debug("Agent run queued id={} project={} msg={}", run.getId(), event.projectId(),
-                event.assistantMessageId());
     }
 }

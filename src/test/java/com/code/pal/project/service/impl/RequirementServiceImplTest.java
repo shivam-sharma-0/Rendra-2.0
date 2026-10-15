@@ -173,6 +173,54 @@ class RequirementServiceImplTest {
                 .optionsJson("[{\"id\":\"a\",\"label\":\"A\"},{\"id\":\"b\",\"label\":\"B\"}]").recommendedOption("a").build());
     }
 
+    @Test void capabilitiesReplaceModelCloudChoicesAndApprovalUsesTheExplicitSelection() {
+        var decisions = new com.code.pal.project.capability.BuildDecisions(sessions,
+                mock(com.code.pal.project.supabase.SupabaseConnectionRepository.class),
+                new AgentProperties(), new ObjectMapper());
+        service.setBuildDecisions(decisions);
+        modelReply = () -> "[" + question("storage") + "," + question("audience") + "]";
+        var view = service.start(7L, projectId);
+        assertEquals(List.of("audience", "platform_storage", "platform_auth"), view.questions().stream().map(RequirementDtos.Question::key).toList());
+        var storage = stored.stream().filter(q -> q.getQuestionKey().equals("platform_storage")).findFirst().orElseThrow();
+        assertFalse(storage.getOptionsJson().contains("SUPABASE") || storage.getOptionsJson().contains("MERN") || storage.getOptionsJson().contains("saved_database"));
+        stored.forEach(q -> q.setSelectedOption(q.getQuestionKey().equals("audience") ? "a" : q.getQuestionKey().equals("platform_storage") ? "BROWSER" : "NONE"));
+        service.approve(7L, projectId);
+        assertTrue(session.getBuildDecisionJson().contains("BROWSER"));
+    }
+
+    @Test void modelCannotSupplyPlatformOptionIdsOrActivateAnUnavailableConnection() {
+        var decisions = new com.code.pal.project.capability.BuildDecisions(sessions,
+                mock(com.code.pal.project.supabase.SupabaseConnectionRepository.class), new AgentProperties(), new ObjectMapper());
+        service.setBuildDecisions(decisions);
+        modelReply = () -> "[" + question("platform_storage") + "]";
+        service.start(7L, projectId);
+        var storage = stored.stream().filter(q -> q.getQuestionKey().equals("platform_storage")).findFirst().orElseThrow();
+        assertThrows(com.code.pal.project.exception.InvalidRequirementAnswerException.class,
+                () -> service.answer(7L, projectId, storage.getId(), new RequirementDtos.AnswerRequest("SUPABASE", null)));
+        assertThrows(com.code.pal.project.exception.InvalidRequirementAnswerException.class,
+                () -> service.answer(7L, projectId, storage.getId(), new RequirementDtos.AnswerRequest("BROWSER", "Cloud")));
+        assertEquals(1, modelCalls.get());
+    }
+
+    @Test void legacyCloudApprovalReopensForAnExplicitDecision() {
+        save("storage").setSelectedOption("a");
+        session.setStatus(RequirementStatus.APPROVED);
+        service.setBuildDecisions(new com.code.pal.project.capability.BuildDecisions(sessions,
+                mock(com.code.pal.project.supabase.SupabaseConnectionRepository.class), new AgentProperties(), new ObjectMapper()));
+        var view = service.start(7L, projectId);
+        assertEquals(RequirementStatus.IN_PROGRESS, view.status());
+        assertFalse(view.complete());
+        assertEquals(0, modelCalls.get());
+    }
+
+    @Test void malformedModelQuestionsCannotOverflowPersistentKeysOrCreateAmbiguousOptions() {
+        modelReply = () -> "[" + question("x".repeat(81)) + "," + question("audience") + "," + question("AUDIENCE") + "]";
+        var view = service.start(7L, projectId);
+        assertEquals(1, view.questions().size());
+        assertEquals("audience", view.questions().getFirst().key());
+        assertEquals(1, modelCalls.get());
+    }
+
     private static String question(String key) {
         return "{\"key\":\"" + key + "\",\"prompt\":\"" + key + "?\",\"required\":true,\"recommended\":\"a\","
                 + "\"options\":[{\"id\":\"a\",\"label\":\"A\"},{\"id\":\"other\",\"label\":\"Other\"}]}";

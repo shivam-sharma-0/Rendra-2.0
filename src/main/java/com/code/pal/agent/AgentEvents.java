@@ -22,8 +22,8 @@ import java.util.Optional;
  * events. This is the single place the agent surfaces progress (thoughts, tool calls, results).
  *
  * <p>Every step is stored; only steps that mean something to the user ({@link AgentActivityMapper}) are
- * broadcast, each with its {@code activity}. Model calls, provider fallbacks and counters stay in the
- * store and the logs.
+ * broadcast, each with its {@code activity}. Model details, reasoning and counters stay in the
+ * store and the logs; retries have a generic public activity.
  */
 @Slf4j
 @Service
@@ -63,7 +63,7 @@ public class AgentEvents {
         Map<String, Object> payload = new HashMap<>();
         payload.put("runId", run.getId().toString());
         payload.put("seq", seq);
-        payload.put("content", content);
+        payload.put("content", activities.publicContent(type,content,activity.get()));
         String visibleData = activities.publicData(dataJson);
         payload.put("data", visibleData == null ? null : objectMapper.readTree(visibleData));
         payload.put("activity", activity.get());

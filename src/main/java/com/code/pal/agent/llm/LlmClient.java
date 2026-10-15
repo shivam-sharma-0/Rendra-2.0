@@ -25,7 +25,10 @@ public interface LlmClient {
      *                   It also bounds what a call can cost, which the daily quota reserves in advance.
      */
     record LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools,
-                      double temperature, Duration budget, String toolChoice, Integer maxTokens) {
+                      double temperature, Duration budget, String toolChoice, Integer maxTokens, JsonSchema jsonSchema) {
+        public LlmRequest(String provider,String model,List<LlmMessage> messages,List<ToolSpec> tools,double temperature,Duration budget,String toolChoice,Integer maxTokens) {
+            this(provider,model,messages,tools,temperature,budget,toolChoice,maxTokens,null);
+        }
         public LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools,
                           double temperature, Duration budget, String toolChoice) {
             this(provider, model, messages, tools, temperature, budget, toolChoice, null);
@@ -37,8 +40,9 @@ public interface LlmClient {
         }
 
         public LlmRequest withMaxTokens(Integer cap) {
-            return new LlmRequest(provider, model, messages, tools, temperature, budget, toolChoice, cap);
+            return new LlmRequest(provider, model, messages, tools, temperature, budget, toolChoice, cap,jsonSchema);
         }
+        public LlmRequest withJsonSchema(JsonSchema schema){return new LlmRequest(provider,model,messages,tools,temperature,budget,toolChoice,maxTokens,schema);}
 
         public LlmRequest(String provider, String model, List<LlmMessage> messages, List<ToolSpec> tools, double temperature) {
             this(provider, model, messages, tools, temperature, null);
@@ -48,6 +52,10 @@ public interface LlmClient {
         public LlmRequest(String model, List<LlmMessage> messages, List<ToolSpec> tools, double temperature) {
             this("openrouter", model, messages, tools, temperature, null);
         }
+    }
+    /** Backend-authored response grammar. It is data, not permission to mutate or raise limits. */
+    record JsonSchema(String name,String schema) {
+        public JsonSchema {if(name==null || !name.matches("[A-Za-z][A-Za-z0-9_]{0,63}") || schema==null || schema.length()>32_000)throw new IllegalArgumentException("Invalid response schema");}
     }
 
     /** {@code images}: data URLs ({@code data:image/png;base64,...}) sent with a user message to a vision model. */

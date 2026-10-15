@@ -20,8 +20,30 @@ import static org.mockito.Mockito.*;
 class ChangeSetServiceTest {
     private final LocalProject project = LocalProject.create();
     private final FileChangeRepository changes = mock(FileChangeRepository.class);
-    private final ChangeSetService service = new ChangeSetService(changes, mock(AgentRunRepository.class),
-            new ObjectMapper(), project.properties, project.files, project.sandbox);
+    private final com.code.pal.project.service.ProjectService permissions = mock(com.code.pal.project.service.ProjectService.class);
+    private final AgentRunRepository runs=mock(AgentRunRepository.class);
+    private final ChangeSetService service = new ChangeSetService(changes, runs,
+            new ObjectMapper(), project.properties, project.files, project.sandbox, permissions);
+
+    ChangeSetServiceTest() {
+        when(runs.beginCommit(any(),any(),any())).thenReturn(1);
+        when(runs.recordCodeSaved(any(),any())).thenReturn(1);
+        when(runs.recordSnapshot(any(),any())).thenReturn(1);
+    }
+    @Test
+    void revokedEditorCannotPromoteValidatedFiles() {
+        project.write("src/settings.ts", "export const theme = 'light';\n");
+        UUID runId = UUID.randomUUID();
+        AgentContext context = context(runId, service.start(runId, project.projectId), "Patch", "Validate");
+        service.patch(context, "src/settings.ts", project.files.version(project.projectId, context.root(), "src/settings.ts"), "'light'", "'dark'");
+        assertTrue(service.validate(context).valid());
+        service.recordProjectValidation(context, true, List.of());
+        doThrow(new com.code.pal.workspace.exception.WorkspaceAccessDeniedException()).when(permissions)
+                .requireCanEdit(context.userId(), project.projectId);
+        assertThrows(com.code.pal.workspace.exception.WorkspaceAccessDeniedException.class,
+                () -> service.commit(context, run(runId)));
+        assertEquals("export const theme = 'light';\n", project.read("src/settings.ts"));
+    }
 
     @Test
     void stagesExactPatchAndLeavesLiveFileUntouchedUntilValidatedCommit() {

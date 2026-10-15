@@ -147,7 +147,7 @@ public class LocalProjectEnvironment implements SandboxPort {
             process.descendants().forEach(ProcessHandle::destroyForcibly);
             process.destroyForcibly();
             Thread.currentThread().interrupt();
-            return new CommandResult(false, -1, "", "Sandbox command interrupted");
+            return new CommandResult(false, -1, "", CommandResult.CANCELLED);
         }
     }
 

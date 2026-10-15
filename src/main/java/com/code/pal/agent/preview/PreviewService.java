@@ -150,6 +150,7 @@ public class PreviewService {
 
     /** A servable project path, or {@code index.html} for anything invalid or protected. */
     static String safePath(String path) {
+        if (com.code.pal.project.brief.ProjectBriefFile.privatePath(path)) throw notFound();
         String normalized;
         try {
             normalized = ProjectPaths.normalize(path, false).replaceAll("^(\\./)+", "");

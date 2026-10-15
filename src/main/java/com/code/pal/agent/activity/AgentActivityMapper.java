@@ -26,9 +26,11 @@ public class AgentActivityMapper {
     private static final int MAX_PATHS = 50;
     private static final int MAX_TEXT = 300;
     private static final Set<String> CHECK_TOOLS = Set.of("runTypeCheck", "runBuild", "runTests", "validateChanges", "getDiagnostics");
-    /** Run telemetry that stays out of what the UI receives. */
-    private static final Set<String> INTERNAL_KEYS = Set.of("iteration", "iterations", "modelCall", "modelCalls", "toolCalls",
-            "toolCallCount", "contextChars", "remainingContextChars", "compactedChars", "phase", "provider", "model", "retryable", "argumentNames");
+    private static final Set<String> PUBLIC_TEXT = Set.of("path","sourcePath","targetPath","status","message","errorCode","operation","planStatus","validationOutcome");
+    private static final Set<String> PUBLIC_ARRAYS = Set.of("paths","files","changedFiles","steps");
+    private static final Set<String> PUBLIC_BOOLEANS = Set.of("success","validationPassed");
+    private static final Set<String> PUBLIC_COUNTS = Set.of("introducedDiagnosticCount","preExistingDiagnosticCount","repairAttempts","repairAttemptsRemaining","stepId");
+    private static final Set<String> CHANGE_TOOLS = Set.of("createFile","createFiles","patchFile","deleteFile","renameFile","copyFile","startProject","refreshDependencies","setPlan");
 
     private final ObjectMapper objectMapper;
 
@@ -41,7 +43,7 @@ public class AgentActivityMapper {
         if (type == null) return Optional.empty();
         JsonNode data = parse(dataJson);
         return Optional.ofNullable(switch (type) {
-            case THINKING -> activity(Kind.THINKING, "Thinking", List.of(), null, null);
+            case THINKING -> activity(Kind.STATUS, "Reviewing the request", List.of(), null, null);
             case TOOL_CALL -> toolCall(content);
             case TOOL_RESULT -> toolResult(content, data);
             case STATUS -> status(content, data);
@@ -52,14 +54,26 @@ public class AgentActivityMapper {
 
     /**
      * A user-facing step's data without run telemetry (counters, provider and model names, argument
-     * names); null when nothing is left. Reasoning, file paths, changed files and diagnostics stay.
+     * names); null when nothing is left. Only explicitly typed public fields remain; nested payloads and reasoning are omitted.
      */
     public String publicData(String dataJson) {
         JsonNode data = parse(dataJson);
-        if (!(data instanceof ObjectNode object)) return data.isMissingNode() || data.isNull() || data.isEmpty() ? null : dataJson;
-        ObjectNode copy = object.deepCopy();
-        INTERNAL_KEYS.forEach(copy::remove);
+        if (!data.isObject()) return null;
+        ObjectNode copy = objectMapper.createObjectNode();
+        for(String key:PUBLIC_TEXT)if(data.path(key).isString()) {
+            String value=data.path(key).asString();int max=MAX_TEXT;
+            copy.put(key,value.substring(0,Math.min(value.length(),max)));
+        }
+        for(String key:PUBLIC_ARRAYS)if(data.path(key).isArray()) {
+            var array=copy.putArray(key);for(String value:strings(data.path(key)))array.add(value);
+        }
+        for(String key:PUBLIC_BOOLEANS)if(data.path(key).isBoolean())copy.set(key,data.path(key));
+        for(String key:PUBLIC_COUNTS)if(data.path(key).isIntegralNumber() && data.path(key).asLong()>=0)copy.set(key,data.path(key));
         return copy.isEmpty() ? null : objectMapper.writeValueAsString(copy);
+    }
+    /** Old persisted thinking text may contain raw provider reasoning; only the public action is replayed. */
+    public String publicContent(AgentStepType type,String content,AgentActivity activity) {
+        return type==AgentStepType.THINKING?activity.title():content;
     }
 
     /** Only slow checks show while they run; every other tool shows once, with its result. */
@@ -72,23 +86,30 @@ public class AgentActivityMapper {
         boolean ok = data.path("success").asBoolean(false);
         if (CHECK_TOOLS.contains(tool)) {
             boolean passed = data.has("validationPassed") ? data.path("validationPassed").asBoolean(ok) : ok;
+            if("SKIPPED".equals(data.path("validationOutcome").asString()))return activity(Kind.CHECK,"Required check could not run",List.of(),false,null);
             return activity(Kind.CHECK, checkDone(tool), List.of(), passed, problems(data));
         }
-        // A failed file or plan tool is the model's to retry; the user sees the attempt that worked.
-        if (!ok || tool == null) return null;
+        if(tool==null)return null;
+        if(!ok)return CHANGE_TOOLS.contains(tool)
+                ? activity(Kind.STATUS,"Change attempt failed",paths(data),false,"Checking before retrying") : null;
         List<String> paths = paths(data);
         return switch (tool) {
             case "readFile", "getFileSummary" -> activity(Kind.READ, paths.isEmpty() ? "Read a file" : "Read", paths, true, null);
             case "listFiles" -> activity(Kind.READ, "Looked through the project files", List.of(), true, null);
-            case "searchCode" -> activity(Kind.READ, "Searched the code", List.of(), true, null);
+            case "searchCode", "findProjectFiles" -> activity(Kind.READ, "Searched the code", List.of(), true, null);
+            case "getApprovedRequirement" -> activity(Kind.READ, "Read the approved requirements", List.of(), true, null);
             case "getProjectMetadata" -> activity(Kind.READ, "Read the project settings", List.of(), true, null);
             case "createFile", "createFiles" -> activity(Kind.CREATE, "Created", paths, true, null);
             case "startProject" -> activity(Kind.CREATE, "Set up the project", paths, true, null);
+            case "refreshDependencies" -> activity(Kind.CREATE, "Updated dependencies", paths, true, null);
             case "patchFile" -> activity(Kind.EDIT, "Edited", paths, true, null);
             case "deleteFile" -> activity(Kind.DELETE, "Deleted", paths, true, null);
             case "renameFile" -> activity(Kind.MOVE, "Renamed", paths, true, null);
             case "copyFile" -> activity(Kind.MOVE, "Copied", paths, true, null);
             case "setPlan" -> plan(data);
+            case "updatePlanStep" -> data.path("stepId").isIntegralNumber() && data.path("planStatus").isString()
+                    ? activity(Kind.PLAN,"Updated plan step "+data.path("stepId").asInt(),List.of(),null,
+                        "COMPLETED".equals(data.path("planStatus").asString())?"Completion reported; verification required":clip(data.path("planStatus"))) : null;
             default -> null;   // updatePlanStep and anything new: bookkeeping, not progress
         };
     }
@@ -97,8 +118,11 @@ public class AgentActivityMapper {
         if (title == null) return null;
         return switch (title) {
             case "Queued" -> activity(Kind.STATUS, "Waiting to start", List.of(), null, null);
+            case "LLM provider unavailable" -> activity(Kind.STATUS,"AI service unavailable; trying another configured option",List.of(),null,null);
+            case "Saving changes" -> activity(Kind.STATUS,"Saving changes",List.of(),null,null);
+            case "Save recovery pending" -> activity(Kind.STATUS,"Checking an interrupted save",List.of(),false,null);
             case "Reading attachments" -> activity(Kind.ATTACHMENTS, "Looking at the attached images", strings(data.path("files")), null, null);
-            case "Final validation" -> activity(Kind.CHECK, "Checked the app", List.of(),
+            case "Final validation" -> activity(Kind.CHECK, "SKIPPED".equals(data.path("validationOutcome").asString())?"Required check could not run":"Checked the app", List.of(),
                     data.path("validationPassed").asBoolean(false), problems(data));
             case "Polish check" -> activity(Kind.REVIEW, "Reviewing the first version", List.of(), null, null);
             case "Change set committed" -> {
@@ -109,6 +133,7 @@ public class AgentActivityMapper {
             case "Preview build failed" -> activity(Kind.PREVIEW, "The preview could not be built", List.of(), false, null);
             case "Agent cancelled" -> activity(Kind.STOPPED, "Stopped", List.of(), false, null);
             case "Agent failed" -> activity(Kind.FAILED, "Something went wrong", List.of(), false, null);
+            case "Agent stopped: run budget" -> activity(Kind.FAILED,"This run reached its AI budget",List.of(),false,clip(data.path("message")));
             case "Agent validation failed", "Agent stopped: daily quota" ->
                     activity(Kind.FAILED, title.startsWith("Agent stopped") ? "Daily AI limit reached" : "The changes did not pass the checks",
                             List.of(), false, clip(data.path("message")));

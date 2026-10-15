@@ -9,4 +9,5 @@ public interface RequirementService {
     RequirementDtos.Session start(Long userId, UUID projectId);
     RequirementDtos.Session answer(Long userId, UUID projectId, UUID questionId, RequirementDtos.AnswerRequest request);
     RequirementDtos.Session approve(Long userId, UUID projectId);
+    RequirementDtos.Session approve(Long userId, UUID projectId, Long revision);
 }

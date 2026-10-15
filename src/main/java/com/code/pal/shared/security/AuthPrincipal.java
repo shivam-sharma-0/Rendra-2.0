@@ -11,6 +11,8 @@ package com.code.pal.shared.security;
  * @param publicId the user's external UUID (safe to echo in API responses)
  * @param email    the authenticated user's email (JWT subject)
  * @param role     the user's role name (without the {@code ROLE_} prefix)
+ * @param sessionId the revocable session from the verified access token
  */
-public record AuthPrincipal(Long userId, java.util.UUID publicId, String email, String role) {
+public record AuthPrincipal(Long userId, java.util.UUID publicId, String email, String role,java.util.UUID sessionId) {
+    public AuthPrincipal(Long userId,java.util.UUID publicId,String email,String role){this(userId,publicId,email,role,null);}
 }

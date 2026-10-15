@@ -30,7 +30,7 @@ type ChatColumnProps = {
   onSend: (prompt: string, mode: ProjectType, files?: File[]) => Promise<void>
   onFeedback: (messageId: string, feedback: MessageFeedback | null) => void
   onEdit: (text: string) => void
-  onOpenDetails: () => void
+  onOpenDetails: (runId?: string) => void
   onOpenPreview: () => void
   onOpenThinking: (reasoning: string, seconds: number) => void
   /** The project was renamed. */
@@ -52,6 +52,7 @@ export function ChatColumn({
   const bottomRef = useRef<HTMLDivElement>(null)
   const chatInnerRef = useRef<HTMLDivElement>(null)
   const ordered = useMemo(() => orderMessages(messages), [messages])
+  const latestSavedRun = useMemo(() => [...runs].filter(run => run.codeSavedAt).sort((a, b) => Date.parse(b.codeSavedAt!) - Date.parse(a.codeSavedAt!))[0]?.id, [runs])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
@@ -94,8 +95,8 @@ export function ChatColumn({
                 const msgRun = m.role === 'ASSISTANT' ? runs.find((r) => r.messageId === m.id) : undefined
                 const msgSteps = msgRun ? stepsByRun[msgRun.id] ?? [] : []
                 return (
-                  <ChatMessage key={m.id} message={m} run={msgRun} steps={msgSteps}
-                    onOpenDetails={onOpenDetails} onOpenPreview={onOpenPreview} onOpenThinking={onOpenThinking}
+                  <ChatMessage key={m.id} message={m} run={msgRun} steps={msgSteps} currentPreview={msgRun?.id === latestSavedRun}
+                    onOpenDetails={() => onOpenDetails(msgRun?.id)} onOpenPreview={onOpenPreview} onOpenThinking={onOpenThinking}
                     onFeedback={(feedback) => onFeedback(m.id, feedback)} onEdit={onEdit} />
                 )
               })}

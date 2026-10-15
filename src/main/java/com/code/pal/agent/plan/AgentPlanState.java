@@ -40,17 +40,16 @@ public final class AgentPlanState {
         return snapshot();
     }
 
-    /**
-     * Marks every step not completed or skipped as completed: the build was committed, so the model does
-     * not need a call per step just to tick them off.
-     */
-    public synchronized Snapshot completeRemaining() {
-        steps = steps.stream().map(step -> step.status() == StepStatus.COMPLETED || step.status() == StepStatus.SKIPPED ? step
-                : new PlanStep(step.id(), step.description(), StepStatus.COMPLETED, step.note())).toList();
-        updatedAt = Instant.now();
-        return snapshot();
+    public synchronized void restore(Snapshot saved) {
+        if(saved==null || saved.version()<1 || saved.steps()==null || saved.steps().isEmpty() || saved.steps().size()>100)
+            throw new IllegalArgumentException("Invalid saved plan");
+        for(int i=0;i<saved.steps().size();i++) {
+            var step=saved.steps().get(i);
+            if(step.id()!=i+1 || step.description()==null || step.description().isBlank() || step.status()==null)
+                throw new IllegalArgumentException("Invalid saved plan step");
+        }
+        version=saved.version();revisionReason=saved.revisionReason();updatedAt=saved.updatedAt();steps=List.copyOf(saved.steps());
     }
-
     public synchronized boolean exists() { return version > 0 && !steps.isEmpty(); }
     public synchronized Snapshot snapshot() { return new Snapshot(version, revisionReason, updatedAt, steps); }
 

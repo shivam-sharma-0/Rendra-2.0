@@ -45,6 +45,7 @@ public final class ConversationCompactor {
         Map<String, ToolCall> calls = new HashMap<>();
         int resultChars = 0;
         int argumentChars = 0;
+        Set<String> omittedReads=new java.util.LinkedHashSet<>();
         for (int i = 0; i < cutoff; i++) {
             LlmMessage message = messages.get(i);
             if (message.toolCalls() != null && !message.toolCalls().isEmpty()) {
@@ -58,17 +59,22 @@ public final class ConversationCompactor {
             } else if ("tool".equals(message.role()) && message.content() != null && message.content().length() >= minChars
                     && !message.content().startsWith(STUB_PREFIX)) {
                 ToolCall call = calls.get(message.toolCallId());
-                String stub = stub(call);
-                resultChars += message.content().length() - stub.length();
-                messages.set(i, new LlmMessage("tool", stub, null, message.toolCallId(), null));
+                String stub = new ToolResultMemory(objectMapper).compact(message.content(),call,"Earlier tool body compacted");
+                int saved=message.content().length()-stub.length();
+                if(saved>0) {
+                    resultChars+=saved;
+                    messages.set(i,new LlmMessage("tool",stub,null,message.toolCallId(),message.images()));
+                    if(call!=null && call.name().equals("readFile")){String path=argument(call,"path");if(path!=null)omittedReads.add(path);}
+                }
             }
         }
-        return new Saved(resultChars, argumentChars);
+        return new Saved(resultChars, argumentChars,Set.copyOf(omittedReads));
     }
 
     /** Characters a compaction removed: from tool results (counted in the run's context budget) and from call arguments. */
-    public record Saved(int resultChars, int argumentChars) {
-        public static final Saved NONE = new Saved(0, 0);
+    public record Saved(int resultChars, int argumentChars,Set<String> omittedReadPaths) {
+        public static final Saved NONE = new Saved(0, 0,Set.of());
+        public Saved(int resultChars,int argumentChars){this(resultChars,argumentChars,Set.of());}
 
         public int total() { return resultChars + argumentChars; }
     }
@@ -81,22 +87,17 @@ public final class ConversationCompactor {
         for (int i = messages.size() - 1; i >= 0; i--) {
             LlmMessage message = messages.get(i);
             if ("assistant".equals(message.role()) && message.toolCalls() != null && !message.toolCalls().isEmpty()) {
-                if (++seen == keepTurns) return i;
+                if (++seen == keepTurns) {
+                    // A call/result pair may cross this cutoff only in malformed/interleaved input.
+                    Set<String> laterResults=new java.util.HashSet<>();
+                    for(int later=i;later<messages.size();later++) if(messages.get(later).toolCallId()!=null)laterResults.add(messages.get(later).toolCallId());
+                    for(int earlier=0;earlier<i;earlier++)if(messages.get(earlier).toolCalls()!=null)
+                        for(var call:messages.get(earlier).toolCalls())if(laterResults.contains(call.id()))return earlier;
+                    return i;
+                }
             }
         }
         return -1;
-    }
-
-    private String stub(ToolCall call) {
-        ObjectNode stub = objectMapper.createObjectNode();
-        stub.put("compacted", true);
-        if (call != null) {
-            stub.put("tool", call.name());
-            String path = argument(call, "path");
-            if (path != null) stub.put("path", path);
-        }
-        stub.put("note", "Earlier result left out to keep the conversation short; call the tool again if you need it.");
-        return objectMapper.writeValueAsString(stub);
     }
 
     /** A write call with its file contents replaced by their length; other calls unchanged. */
@@ -125,7 +126,7 @@ public final class ConversationCompactor {
             if (value != null && value.isValueNode() && !value.isNull()) {
                 String text = value.asText();
                 if (text.length() > 40 && !text.startsWith("[omitted")) {
-                    node.put(field, "[omitted: " + text.length() + " characters, already written]");
+                    node.put(field, "[omitted: " + text.length() + " characters; argument body, outcome is in the tool result]");
                     changed = true;
                 }
             }

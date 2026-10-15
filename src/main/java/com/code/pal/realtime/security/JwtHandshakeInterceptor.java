@@ -36,9 +36,11 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
     /** Session-attribute keys. */
     public static final String PRINCIPAL = "principal";
     public static final String PROJECT_ID = "projectId";
+    public static final String EXPIRES_AT="expiresAt";
 
     private final JwtService jwtService;
     private final ProjectService projectService;
+    private final com.code.pal.identity.security.AuthSessions sessions;
 
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
@@ -57,9 +59,11 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
             if (!JwtService.ACCESS.equals(jwtService.tokenType(claims))) {
                 return reject(response, "not an access token");
             }
+            if(!sessions.accessAllowed(claims))return reject(response,"revoked session");
             principal = jwtService.toPrincipal(claims);
+            attributes.put(EXPIRES_AT,claims.getExpiration().toInstant());
         } catch (JwtException | IllegalArgumentException e) {
-            return reject(response, "invalid token: " + e.getMessage());
+            return reject(response, "invalid token");
         }
 
         final UUID projectId;

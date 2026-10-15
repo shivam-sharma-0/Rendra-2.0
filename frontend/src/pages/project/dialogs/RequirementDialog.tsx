@@ -16,7 +16,7 @@ export function RequirementAnswerCard({ session, onPreview }: { projectName?: st
     <article className="rq-card">
       <header>
         <span className="rq-card__mark" aria-hidden><AppIcon name="check" /></span>
-        <b>Requirements approved</b>
+        <b>{session.artifactStatus === 'PENDING' ? 'Requirements approved; preparing build' : 'Requirements approved'}</b>
         <small>{session.questions.length} answers</small>
       </header>
       {expanded && (
@@ -43,11 +43,12 @@ export function RequirementWaiting() {
 }
 
 /** Options as shown: any "other" / "write your own" option becomes one free-text choice at the end. */
+const customOption = (option: Question['options'][number]) => option.id === 'other' || /^(other|write your own|custom)/i.test(option.label.trim())
 function visibleOptions(question: Question) {
   return question.options.reduce<Question['options']>((result, option) => {
-    const custom = option.id === 'other' || /^(other|write your own|custom)/i.test(option.label.trim())
+    const custom = customOption(option)
     if (custom) {
-      if (!result.some((item) => item.id === 'other')) result.push({ ...option, id: 'other', label: 'Write your own…' })
+      if (!result.some(customOption)) result.push({ ...option, label: 'Write your own…' })
     } else result.push(option)
     return result
   }, [])
@@ -85,20 +86,21 @@ export function RequirementDialog({
     setOther(question?.otherText ?? '')
   }, [question?.id, question?.selectedOption, question?.otherText, question?.recommendedOption, question?.options])
 
-  if (!question) return null
+  if (!question) return <div role="status" aria-live="polite">Preparing requirement questions...</div>
   const total = session.questions.length
   const last = index === total - 1
-  const isOther = selected === 'other'
-  const answered = !!selected && (selected !== 'other' || !!other.trim())
+  const isOther = question.options.some((option) => option.id === selected && customOption(option))
+  const answered = !!selected && (!isOther || !!other.trim())
+  const unchanged = selected === question.selectedOption && (isOther ? other.trim() || null : null) === (question.otherText?.trim() || null)
+  const readyToApprove = session.complete && session.status === 'APPROVAL_REQUIRED' && !session.processing && unchanged
 
   const choose = (optionId: string) => {
     setSelected(optionId)
-    if (optionId !== 'other') setOther('')
+    if (!question.options.some((option) => option.id === optionId && customOption(option))) setOther('')
   }
   const saveAndContinue = async () => {
-    await onAnswer(question.id, isOther ? 'other' : selected, isOther ? other : null)
-    if (last) await onApprove()
-    else setIndex((value) => Math.min(value + 1, total - 1))
+    await onAnswer(question.id, selected, isOther ? other : null)
+    if (!last) setIndex((value) => Math.min(value + 1, total - 1))
   }
 
   return (
@@ -119,13 +121,15 @@ export function RequirementDialog({
           </NeuIconButton>
           <span className="rq-grow" />
           <NeuButton onClick={() => void onSkipAll()} disabled={busy}>Skip all</NeuButton>
-          <NeuButton variant="accent" onClick={() => void saveAndContinue()} disabled={busy || !answered}>{busy ? 'Saving…' : last ? 'Submit' : 'Next'}</NeuButton>
+          <NeuButton variant="accent" onClick={() => void (readyToApprove ? onApprove() : saveAndContinue())} disabled={busy || session.processing || !answered}>{busy ? 'Saving…' : session.processing ? 'Reviewing...' : readyToApprove ? 'Approve requirements' : last ? 'Review answers' : 'Next'}</NeuButton>
         </>
       )}
     >
       <ol className="rq-progress" aria-label={`Question ${index + 1} of ${total}`}>
         {session.questions.map((q, i) => <li key={q.id} className={cx(i < index && 'is-done', i === index && 'is-current')} />)}
       </ol>
+      {readyToApprove && <dl>{session.questions.map((q) => <div key={q.id}><dt>{q.prompt}</dt><dd>{answerOf(q) ?? 'Not specified'}</dd></div>)}</dl>}
+      {session.reviewStatus === 'FALLBACK' && <p role="status">Automatic review was unavailable. Check these answers before approving.</p>}
 
       <div className="rq-options" role="radiogroup" aria-label={question.prompt}>
         {visibleOptions(question).map((option) => {
@@ -136,11 +140,11 @@ export function RequirementDialog({
                 <span className="rq-radio" aria-hidden />
                 <span className="rq-option__text">
                   <b>{option.label}</b>
-                  {option.id !== 'other' && option.description && <small>{option.description}</small>}
+                  {!customOption(option) && option.description && <small>{option.description}</small>}
                 </span>
                 {option.recommended && <em>Recommended</em>}
               </button>
-              {option.id === 'other' && checked && (
+              {customOption(option) && checked && (
                 <input className="neu-input rq-other" value={other} placeholder="Tell us what you have in mind" aria-label="Your own answer"
                   onChange={(e) => setOther(e.target.value)} autoFocus disabled={busy} />
               )}

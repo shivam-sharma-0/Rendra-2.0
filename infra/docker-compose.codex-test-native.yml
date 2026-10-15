@@ -1,0 +1,30 @@
+# Explicit native-loopback fallback for trusted disposable services only; no published/LAN ports.
+# Use scripts/Run-CodexIntegration.ps1 -UseWslMaven -UseHostLoopback.
+services:
+  postgres:
+    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    network_mode: host
+    environment:
+      POSTGRES_DB: codepal_codex_it
+      POSTGRES_USER: codepal_codex_it
+      POSTGRES_PASSWORD: disposable-test-only
+      PGPORT: ${CODEPAL_CODEX_PG_PORT:?owned test port required}
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-p", "${CODEPAL_CODEX_PG_PORT:?owned test port required}"]
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p $$PGPORT -U codepal_codex_it -d codepal_codex_it"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7-bookworm@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85
+    network_mode: host
+    command: ["redis-server", "--bind", "127.0.0.1", "--port", "${CODEPAL_CODEX_REDIS_PORT:?owned test port required}", "--save", "", "--appendonly", "no"]
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "127.0.0.1", "-p", "${CODEPAL_CODEX_REDIS_PORT:?owned test port required}", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

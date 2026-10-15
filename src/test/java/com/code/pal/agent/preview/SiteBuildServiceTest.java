@@ -40,6 +40,7 @@ class SiteBuildServiceTest {
     private final PreviewService preview = new PreviewService(project.files, sites, published);
 
     SiteBuildServiceTest() {
+        published.useStacks(new StackPacks(new ObjectMapper()));
         when(dependencies.prepare(any(), anyString())).thenReturn(new DependencyService.Preparation(true, false, null));
         // Stands in for `vite build`: writes dist/ in the build's working copy, or fails.
         doAnswer(call -> {
@@ -103,7 +104,7 @@ class SiteBuildServiceTest {
     }
 
     @Test
-    void theNewSiteReplacesTheOldOneAndOnlyThePreviousIsKept() {
+    void theNewSiteReplacesTheOldOneAndOlderReferencedArtifactsAreRetained() {
         project.write("package.json", VITE);
         for (String version : List.of("v1", "v2", "v3")) {
             nextBuildOutput = "<h1>" + version + "</h1>";
@@ -112,7 +113,7 @@ class SiteBuildServiceTest {
 
         assertEquals("<h1>v3</h1>", text(preview.serve(project.projectId, "")));
         long kept = project.files.list(project.projectId, ".codepal/site", 1).stream().filter(entry -> entry.directory()).count();
-        assertEquals(2, kept, "current plus the previous one");
+        assertEquals(3, kept, "retain old artifacts until maintenance proves readers and servers stopped");
     }
 
     @Test

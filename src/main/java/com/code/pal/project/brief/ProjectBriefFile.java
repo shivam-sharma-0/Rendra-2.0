@@ -7,12 +7,22 @@ import java.util.List;
  * {@code RENDRA.md}: the project brief Rendra keeps at the project root — what the project is, its
  * approved requirements and the lasting decisions made since. It is an ordinary project file, so it is
  * versioned, committed and restored with the code; the agent reads it before every change (as a project
- * instruction file) and updates it when a lasting decision is made; the user can edit it. It is left out
- * of served and published sites.
+ * instruction file). The backend replaces its managed approval/snapshot blocks; user notes outside
+ * those blocks remain editable. Approved decisions come from durable revisions, not arbitrary file text.
+ * Named brief paths are blocked by every public static/preview/published route.
  */
 public final class ProjectBriefFile {
 
     public static final String NAME = "RENDRA.md";
+    /** Includes nested/case/Windows trailing-dot aliases and backup copies of the private brief. */
+    public static boolean privatePath(String path) {
+        if (path == null) return false;
+        for (String part : path.replace('\\', '/').split("/")) {
+            String name = part.toLowerCase(java.util.Locale.ROOT).stripTrailing();
+            if (name.equals("rendra.md") || name.startsWith("rendra.md.") || name.startsWith("rendra.md;")) return true;
+        }
+        return false;
+    }
 
     private static final int MAX_SUMMARY = 600;
     private static final int MAX_ANSWER = 400;

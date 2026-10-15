@@ -7,10 +7,16 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 const siteDir = path.resolve(process.argv[2] ?? "/site");
 const settleMs = Number(process.argv[3] ?? 1500);
 const MAX_ISSUES = 20;
+const relayDir = process.argv[5] ? path.resolve(process.argv[5]) : null;
+const API_BYTES = 1024 * 1024;
+let apiCalls = 0, activeApiCalls = 0;
+const acceptanceActions = process.argv[4] ? JSON.parse(Buffer.from(process.argv[4], 'base64').toString('utf8')).actions : [];
+if (!Array.isArray(acceptanceActions) || acceptanceActions.length > 24) throw new Error('Invalid acceptance data');
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css",
   ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
   ".gif": "image/gif", ".webp": "image/webp", ".ico": "image/x-icon", ".woff2": "font/woff2", ".woff": "font/woff",
@@ -37,9 +43,43 @@ const finish = (extra) => {
   process.exit(0);
 };
 
-// Static server with SPA fallback, like the real preview.
+// Private file relay to one backend-selected candidate. Chromium has no network access.
+async function candidateApi(request, response) {
+  let responseFile;
+  if (++apiCalls > 128 || activeApiCalls >= 8) {
+    add('api-unavailable', 'Candidate API validation capacity exceeded', null);
+    response.writeHead(503, {'Content-Type':'application/json'}).end('{"error":"Validation capacity exceeded"}');return;
+  }
+  activeApiCalls++;
+  try {
+    if (!relayDir) throw new Error('Candidate API relay unavailable');
+    const chunks = []; let size = 0;
+    for await (const chunk of request) { size += chunk.length; if (size > API_BYTES) throw new Error('Request too large'); chunks.push(chunk); }
+    const id = randomUUID().replaceAll('-', '');
+    const requestFile = path.join(relayDir, id + '.request.json');
+    responseFile = path.join(relayDir, id + '.response.json');
+    const temporary = path.join(relayDir, id + '.tmp');
+    const headers = Object.fromEntries(['content-type', 'accept', 'authorization'].filter(key => typeof request.headers[key] === 'string').map(key => [key, request.headers[key]]));
+    fs.writeFileSync(temporary, JSON.stringify({method:request.method, path:request.url, headers, body:Buffer.concat(chunks).toString('base64')}), {flag:'wx'});
+    fs.renameSync(temporary, requestFile);
+    const deadline = Date.now() + 12000;
+    while (!fs.existsSync(responseFile)) { if (Date.now() >= deadline) throw new Error('Relay timeout'); await new Promise(resolve => setTimeout(resolve, 15)); }
+    const reply = JSON.parse(fs.readFileSync(responseFile, 'utf8'));
+    const body = Buffer.from(reply.body, 'base64');
+    if (!Number.isInteger(reply.status) || reply.status < 100 || reply.status > 599 || body.length > API_BYTES) throw new Error('Invalid response');
+    if (reply.unavailable) add('api-unavailable', 'Candidate API transport was unavailable', null);
+    response.writeHead(reply.status, {'Content-Type':reply.headers['content-type'], 'Cache-Control':'no-store'});
+    response.end(body);
+  } catch {
+    add('api-unavailable', 'Candidate API validation was unavailable; saved API was not used', null);
+    if (!response.headersSent) response.writeHead(503, {'Content-Type':'application/json'});
+    response.end(JSON.stringify({error:'Candidate API validation unavailable'}));
+  } finally { activeApiCalls--; if (responseFile && fs.existsSync(responseFile)) fs.unlinkSync(responseFile); }
+}
+// SPA fallback applies to pages, never API requests.
 const server = http.createServer((request, response) => {
   const url = new URL(request.url, "http://localhost");
+  if (url.pathname === '/api' || url.pathname.startsWith('/api/')) { void candidateApi(request, response); return; }
   let file = path.join(siteDir, decodeURIComponent(url.pathname));
   if (!file.startsWith(siteDir)) { response.writeHead(403).end(); return; }
   if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, "index.html");
@@ -189,7 +229,7 @@ const visibleNow = async () => {
   return (check.result?.result?.value ?? 1) > 0;
 };
 const interactions = [];
-if (!blank && loaded) {
+if (!blank && loaded && acceptanceActions.length === 0) {
   const deadline = Date.now() + 6_000;
   for (let index = 0; index < 20 && Date.now() < deadline; index++) {
     const named = await send("Runtime.evaluate", { returnByValue: true, expression: ACT(index, false) }, sessionId);
@@ -206,7 +246,50 @@ if (!blank && loaded) {
   }
 }
 
+const acceptance = [];
+for (const expected of acceptanceActions) {
+  if (!loaded || blank) { acceptance.push({ id: expected.id, passed: false }); continue; }
+  if (expected.kind === 'RELOAD') {
+    loaded = false;
+    await send('Page.reload', {ignoreCache:true}, sessionId);
+    const deadline = Date.now() + 10000;
+    while (!loaded && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+    acceptance.push({id:expected.id, passed:loaded});
+    await new Promise(resolve => setTimeout(resolve, 150));
+    continue;
+  }
+  const expression = `(() => {
+    const a = ${JSON.stringify(expected)};
+    if (a.kind === 'ASSERT_ROUTE') return location.pathname === a.value;
+    if (a.kind === 'ASSERT_COUNT') return document.querySelectorAll(a.selector).length === Number(a.value);
+    const el = document.querySelector(a.selector); if (!el) return false;
+    if (a.kind === 'ASSERT_TEXT') return (el.textContent ?? '').includes(a.value);
+    if (a.kind === 'CLICK') { if (typeof el.click !== 'function') return false; el.click(); return true; }
+    if (a.kind === 'FILL' || a.kind === 'SELECT') {
+      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
+      if (!setter) return false; setter.call(el, a.value);
+      el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); return true;
+    }
+    return false;
+  })()`;
+  let passed = false;
+  const until = Date.now() + 5000;
+  do {
+    const result = await send('Runtime.evaluate', { returnByValue: true, expression }, sessionId);
+    passed = result.result?.result?.value === true;
+    if (passed) break;
+    await new Promise(r => setTimeout(r, 100));
+  } while (Date.now() < until);
+  acceptance.push({ id: expected.id, passed });
+  if (!passed) {
+    // Preserve required coverage and the first actionable failure instead of spending the whole
+    // probe deadline on controls that cannot exist after an earlier prerequisite failed.
+    for (const remaining of acceptanceActions.slice(acceptance.length)) acceptance.push({id:remaining.id, passed:false, prerequisiteFailed:true});
+    break;
+  }
+  await new Promise(r => setTimeout(r, 150));
+}
 clearTimeout(timer);
 chrome.kill("SIGKILL");
 server.close();
-finish({ loaded, page, interactions });
+finish({ loaded, page, interactions, acceptance });

@@ -3,7 +3,7 @@ import { AppIcon } from '../../../components/icons'
 import { EmptyState } from '../../../components/ui/States'
 import { cx } from '../../../lib/cx'
 import { RunTimeline } from '../chat/RunProgress'
-import { runStatus, runWhen } from '../runUtils'
+import { runOutcome, runWhen } from '../runUtils'
 
 const STAGES = [
   ['REQUIREMENTS', 'Requirements'], ['DESIGN', 'Design'], ['BUILDING', 'Build'],
@@ -51,7 +51,7 @@ function RequirementSummary({ session }: { session: RequirementSession }) {
 export function DetailsPanel({ run, steps, stage, requirements }: { run: AgentRun | undefined; steps: AgentStep[]; stage?: Project['lifecycleStage']; requirements: RequirementSession | null }) {
   if (!run && requirements) return <div className="pv-page"><ProcessRail stage={stage} /><RequirementSummary session={requirements} /></div>
   if (!run) return <EmptyState title="No build to show yet" hint="Start a build and its details appear here." />
-  const status = runStatus(run.status)
+  const status = runOutcome(run)
   return (
     <div className="pv-page">
       <header className="pv-head">

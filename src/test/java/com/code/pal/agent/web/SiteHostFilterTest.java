@@ -29,12 +29,15 @@ class SiteHostFilterTest {
     private final DraftPreviewService drafts = mock(DraftPreviewService.class);
     private final FilterChain chain = mock(FilterChain.class);
     private final com.code.pal.agent.runtime.AppServerService servers = mock(com.code.pal.agent.runtime.AppServerService.class);
+    private final com.code.pal.agent.preview.PreviewGrants grants=mock(com.code.pal.agent.preview.PreviewGrants.class);
     private final SiteHostFilter filter = new SiteHostFilter(sites,
-            new SiteContentPolicy(List.of("http://localhost:5173"), ""), projects, preview, drafts, servers);
+            new SiteContentPolicy(List.of("http://localhost:5173"), ""), projects, preview, drafts, servers,grants);
 
     SiteHostFilterTest() {
         when(projects.resolvePreviewKey("abc123")).thenReturn(projectId);
         when(projects.resolvePreviewKey("unknown")).thenThrow(new ProjectNotFoundException());
+        when(grants.resolve("abc123")).thenReturn(new com.code.pal.agent.preview.PreviewGrants.Grant(UUID.randomUUID(),projectId,7L,UUID.randomUUID(),null,java.time.Instant.now().plusSeconds(60)));
+        when(grants.resolve("unknown")).thenThrow(new ProjectNotFoundException());
         when(preview.serve(eq(projectId), any())).thenAnswer(call ->
                 new PreviewService.PreviewFile(("preview:" + call.getArgument(1)).getBytes(StandardCharsets.UTF_8), "text/html"));
         when(projects.resolvePublishedProject("bakery-1a2b")).thenReturn(projectId);
@@ -47,7 +50,7 @@ class SiteHostFilterTest {
         assertEquals("preview:index.html", body(get("pv--abc123.sites.localhost", "/")));
         assertEquals("preview:menu/today", body(get("pv--abc123.sites.localhost", "/menu/today")), "client-side routes reach the app");
         MockHttpServletResponse api = get("pv--abc123.sites.localhost", "/api/auth/refresh");
-        assertEquals("preview:api/auth/refresh", api.getContentAsString(), "the API path is just a site path here");
+        assertEquals(404,api.getStatus());assertEquals("application/json",api.getContentType());assertFalse(api.getContentAsString().contains("preview:"),"API routes never receive SPA HTML");
         assertTrue(api.getHeader("Content-Security-Policy").contains("frame-ancestors 'self' http://localhost:5173"));
         verify(chain, never()).doFilter(any(), any());
     }
@@ -68,6 +71,28 @@ class SiteHostFilterTest {
         verify(chain).doFilter(any(), any());
         assertEquals("http://pv--abc123.sites.localhost:8080/", sites.previewHostUrl("abc123"));
         assertEquals("http://bakery-1a2b.sites.localhost:8080/", sites.publishedUrl("bakery-1a2b"));
+    }
+
+    @Test void privateBriefRequestsNeverReachStaticServingOrGeneratedServer() throws Exception {
+        when(servers.hasServer(projectId)).thenReturn(true);
+        for(String host:List.of("pv--abc123.sites.localhost","dr--abc123.sites.localhost","bakery-1a2b.sites.localhost"))
+            for(String path:List.of("/RENDRA.md","/nested/%52ENDRA.md","/api/RENDRA.md","/RENDRA.md.bak")) {
+                assertEquals(404,request("GET",host,path).getStatus());
+                assertEquals(404,request("HEAD",host,path).getStatus());
+            }
+        verify(servers,never()).proxy(any(),any(),any());
+        verify(preview,never()).serve(any(),any());verify(preview,never()).servePublished(any(),any());verify(preview,never()).serveSite(any(),any(),any());
+    }
+
+    @Test void draftAndPublishedApiNeverReachTheSavedServer() throws Exception {
+        when(servers.hasServer(projectId)).thenReturn(true);
+        for (String method : List.of("GET", "POST", "PUT", "DELETE")) {
+            assertEquals(503, request(method, "dr--abc123.sites.localhost", "/api/items").getStatus());
+            assertEquals(404, request(method, "bakery-1a2b.sites.localhost", "/api/items").getStatus());
+        }
+        verify(servers, never()).proxy(any(), any(), any());
+        assertEquals(200, request("GET", "pv--abc123.sites.localhost", "/api/items").getStatus());
+        verify(servers).proxy(eq(projectId), any(), any());
     }
 
     private MockHttpServletResponse get(String host, String path) throws Exception {

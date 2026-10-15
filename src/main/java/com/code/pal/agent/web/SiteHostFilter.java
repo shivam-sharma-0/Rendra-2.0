@@ -39,6 +39,7 @@ public class SiteHostFilter extends OncePerRequestFilter {
     private final PreviewService preview;
     private final DraftPreviewService drafts;
     private final com.code.pal.agent.runtime.AppServerService servers;
+    private final com.code.pal.agent.preview.PreviewGrants grants;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
@@ -52,9 +53,23 @@ public class SiteHostFilter extends OncePerRequestFilter {
         }
         response.setHeader("Content-Security-Policy", policy.header());
         response.setHeader("X-Content-Type-Options", "nosniff");
-        response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+        response.setHeader("Referrer-Policy", "no-referrer");
+        response.setHeader(HttpHeaders.CACHE_CONTROL,"no-store");
+        // Apply before generated-server proxying as well as static/draft serving.
+        try {
+            if (com.code.pal.project.brief.ProjectBriefFile.privatePath(path(request))) {
+                response.setStatus(HttpStatus.NOT_FOUND.value()); return;
+            }
+        } catch (IllegalArgumentException invalidPath) { response.setStatus(HttpStatus.NOT_FOUND.value()); return; }
         // A MERN project's API: every method, forwarded to its server.
         if (isApi(request.getRequestURI())) {
+            // A draft has no candidate API lease; a published static release has no API.
+            // Never silently route either to the current saved project's server.
+            if (!label.startsWith(SitesOrigin.PREVIEW_LABEL)) {
+                response.setStatus(label.startsWith(SitesOrigin.DRAFT_LABEL) ? 503 : 404);
+                response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+                return;
+            }
             UUID projectId;
             try {
                 projectId = project(label);
@@ -66,6 +81,7 @@ public class SiteHostFilter extends OncePerRequestFilter {
                 servers.proxy(projectId, request, response);
                 return;
             }
+            response.setStatus(404);response.setContentType("application/json");response.getWriter().write("{\"error\":\"Application API is unavailable\"}");return;
         }
         if (!"GET".equals(request.getMethod()) && !"HEAD".equals(request.getMethod())) {
             response.setStatus(HttpStatus.METHOD_NOT_ALLOWED.value());
@@ -88,12 +104,11 @@ public class SiteHostFilter extends OncePerRequestFilter {
 
     private PreviewService.PreviewFile serve(String label, String path) {
         if (label.startsWith(SitesOrigin.PREVIEW_LABEL)) {
-            return preview.serve(projects.resolvePreviewKey(label.substring(SitesOrigin.PREVIEW_LABEL.length())), path);
+            return preview.serve(privateGrant(label).projectId(), path);
         }
         if (label.startsWith(SitesOrigin.DRAFT_LABEL)) {
-            UUID projectId = projects.resolvePreviewKey(label.substring(SitesOrigin.DRAFT_LABEL.length()));
-            DraftPreviewService.ActiveDraft draft = drafts.activeDraft(projectId);
-            String site = draft == null ? null : drafts.draftSite(projectId, draft.runId());
+            var grant=privateGrant(label);UUID projectId=grant.projectId();
+            String site = drafts.draftSite(projectId,grant.draftRunId());
             if (site == null) throw new IllegalStateException("No draft");
             return preview.serveSite(projectId, site, path);
         }
@@ -101,9 +116,13 @@ public class SiteHostFilter extends OncePerRequestFilter {
     }
 
     private UUID project(String label) {
-        if (label.startsWith(SitesOrigin.PREVIEW_LABEL)) return projects.resolvePreviewKey(label.substring(SitesOrigin.PREVIEW_LABEL.length()));
-        if (label.startsWith(SitesOrigin.DRAFT_LABEL)) return projects.resolvePreviewKey(label.substring(SitesOrigin.DRAFT_LABEL.length()));
+        if (label.startsWith(SitesOrigin.PREVIEW_LABEL) || label.startsWith(SitesOrigin.DRAFT_LABEL)) return privateGrant(label).projectId();
         return projects.resolvePublishedProject(label);
+    }
+    private com.code.pal.agent.preview.PreviewGrants.Grant privateGrant(String label) {
+        boolean draft=label.startsWith(SitesOrigin.DRAFT_LABEL);
+        var grant=grants.resolve(label.substring(draft?SitesOrigin.DRAFT_LABEL.length():SitesOrigin.PREVIEW_LABEL.length()));
+        if(draft!=(grant.draftRunId()!=null))throw new IllegalStateException("Preview mode changed");return grant;
     }
 
     private static boolean isApi(String uri) {

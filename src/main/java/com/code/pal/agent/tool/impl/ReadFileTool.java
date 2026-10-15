@@ -68,7 +68,7 @@ public class ReadFileTool implements AgentTool {
      * Secret/credential files whose contents must never reach the model. Blocks reads only: the
      * agent can still reference config by name or scaffold a {@code .env.example}.
      */
-    private static boolean isSecretFile(String fileName) {
+    public static boolean isSecretFile(String fileName) {
         String lower = fileName.toLowerCase(Locale.ROOT);
         if (lower.equals(".env") || (lower.startsWith(".env.") && !lower.endsWith(".example"))) return true;
         if (lower.endsWith(".pem") || lower.endsWith(".key") || lower.endsWith(".p12") || lower.endsWith(".pfx")) return true;

@@ -67,6 +67,44 @@ public class DependencyService {
         }
     }
 
+    /** Resolve npm locks in disposable dependency sets; never writes the calling workspace. */
+    public java.util.Map<String, String> refreshNpmLocks(UUID projectId, String root) {
+        var lock = locks.computeIfAbsent(projectId, id -> new java.util.concurrent.locks.ReentrantLock());
+        lock.lock();
+        try {
+            var packages = stacks.detect(files, projectId, root).packageRoots(files, projectId, root);
+            if (packages.isEmpty() || packages.size() > 3) throw new IllegalArgumentException("Unsupported package layout");
+            var commands = new java.util.LinkedHashMap<String, List<String>>();
+            for (String pkg : packages) {
+                String packageRoot = pkg.equals(".") ? root : ProjectPaths.combine(root, pkg);
+                var stack = stacks.detect(files, projectId, packageRoot);
+                var command = new ArrayList<>(stack.installCommand(files, projectId, packageRoot));
+                if (!(stack instanceof NodePack) || command.size() < 2 || !command.getFirst().equals("npm"))
+                    throw new IllegalArgumentException("Lock refresh supports npm Node/MERN packages only");
+                command.set(1, "install"); // Fixed backend command, scripts disabled; preserves compatible locked versions.
+                commands.put(pkg, List.copyOf(command));
+            }
+            var resolved = new java.util.LinkedHashMap<String, String>();
+            for (var entry : commands.entrySet()) {
+                String packageRoot = entry.getKey().equals(".") ? root : ProjectPaths.combine(root, entry.getKey());
+                var stack = stacks.detect(files, projectId, packageRoot);
+                String set = STORE + "/" + key(stack, entry.getValue(), projectId, packageRoot);
+                if (!files.regularFile(projectId, set, COMPLETE)) {
+                    String error = install(stack, entry.getValue(), projectId, packageRoot, set);
+                    if (error != null) throw new IllegalStateException(error);
+                }
+                String content = new String(files.readBytes(projectId, set, "package-lock.json", 1_000_000), StandardCharsets.UTF_8);
+                var mapper = new tools.jackson.databind.ObjectMapper();
+                var generated = mapper.readTree(content).path("packages").path("");
+                var manifest = mapper.readTree(new String(files.readBytes(projectId, packageRoot, "package.json", 1_000_000), StandardCharsets.UTF_8));
+                if (generated.isMissingNode()) throw new IllegalStateException("Resolved npm lock lacks its package root");
+                if (!NpmLockfiles.matches(manifest, generated)) throw new IllegalStateException("Resolved npm lock does not match the package manifest");
+                resolved.put(entry.getKey().equals(".") ? "package-lock.json" : entry.getKey() + "/package-lock.json", content);
+            }
+            return java.util.Collections.unmodifiableMap(resolved);
+        } finally { lock.unlock(); }
+    }
+
     private Preparation prepareLocked(UUID projectId, String root) {
         StackPack project = stacks.detect(files, projectId, root);
         List<String> packages = project.packageRoots(files, projectId, root);
@@ -164,7 +202,7 @@ public class DependencyService {
     }
 
     private String key(StackPack stack, List<String> command, UUID projectId, String root) {
-        String material = stack.id() + "\n" + String.join(" ", command) + "\n" + stack.dependencyFingerprint(files, projectId, root);
+        String material = stack.id() + "\n" + properties.getSandbox().getImage() + "\n" + String.join(" ", command) + "\n" + stack.dependencyFingerprint(files, projectId, root);
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(material.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest, 0, 16);

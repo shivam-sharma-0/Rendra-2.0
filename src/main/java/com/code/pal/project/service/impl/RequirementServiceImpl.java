@@ -54,6 +54,21 @@ public class RequirementServiceImpl implements RequirementService {
      * and call the model between them, with no transaction open.
      */
     private final TransactionTemplate tx;
+    private com.code.pal.project.capability.BuildDecisions buildDecisions;
+    private com.code.pal.project.requirement.RequirementCoordinator coordinator;
+    private com.code.pal.project.requirement.RequirementProjection projection;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setCoordination(com.code.pal.project.requirement.RequirementCoordinator coordinator,
+                                com.code.pal.project.requirement.RequirementProjection projection) {
+        this.coordinator = java.util.Objects.requireNonNull(coordinator);
+        this.projection = java.util.Objects.requireNonNull(projection);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setBuildDecisions(com.code.pal.project.capability.BuildDecisions buildDecisions) {
+        this.buildDecisions = java.util.Objects.requireNonNull(buildDecisions);
+    }
 
     public RequirementServiceImpl(ProjectService projects, RequirementSessionRepository sessions,
                                   RequirementQuestionRepository questions, LlmClient llm, AgentProperties properties,
@@ -68,6 +83,8 @@ public class RequirementServiceImpl implements RequirementService {
         this.artifacts = artifacts;
         this.messages = messages;
         this.tx = new TransactionTemplate(transactionManager);
+        this.tx.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.tx.setTimeout(10);
     }
 
     @Override
@@ -80,69 +97,117 @@ public class RequirementServiceImpl implements RequirementService {
 
     @Override
     public RequirementDtos.Session start(Long userId, UUID projectId) {
-        // Without a transaction: generating questions calls the model (see {@link #tx}).
-        ProjectBrief needsQuestions = tx.execute(status -> {
+        Interview interview = tx.execute(status -> {
+            lockRequirements(projectId);
             Project project = projects.requireCanEdit(userId, projectId);
-            RequirementSession session = sessions.findByProjectId(projectId).orElseGet(() -> sessions.save(
+            RequirementSession session = sessions.findByProjectId(projectId).orElseGet(() -> sessions.saveAndFlush(
                     RequirementSession.builder().projectId(projectId).sourcePrompt(Optional.ofNullable(project.getInitialPrompt()).orElse("")).build()));
-            return questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty()
-                    ? ProjectBrief.of(project, messages.openingAttachments(projectId)) : null;
-        });
-        List<QuestionDraft> generated;
-        try (LlmCallContext.Scope call = LlmCallContext.bind(new LlmCallContext(userId, projectId, null, CallPurpose.REQUIREMENTS, false))) {
-            generated = needsQuestions == null ? List.of() : generate(needsQuestions);
-        }
-        // The attached images decide the look; asking about it anyway would contradict them.
-        List<QuestionDraft> withoutLook = needsQuestions == null || needsQuestions.attachments().isEmpty() ? generated
-                : generated.stream().filter(draft -> !isAboutTheLook(draft)).toList();
-        List<QuestionDraft> drafts = withoutLook.isEmpty() ? generated : withoutLook;
-        return tx.execute(status -> {
-            RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
-            // A concurrent start may have saved its questions meanwhile; the first set wins.
-            if (!drafts.isEmpty() && questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty()) {
-                saveQuestions(session, drafts);
+            if (!questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty()) {
+                ensureCapabilityQuestions(session);
+                return new Interview(null, session.getId(), session.getAnswerRevision(), null, view(session));
             }
-            if (session.getStatus() == RequirementStatus.DRAFT) session.setStatus(RequirementStatus.IN_PROGRESS);
-            return view(session);
+            var claim = coordinator == null ? null : coordinator.claim(session.getId(), session.getAnswerRevision(), "QUESTIONS", userId);
+            session.setStatus(RequirementStatus.IN_PROGRESS);
+            return new Interview(coordinator != null && claim == null ? null : ProjectBrief.of(project, messages.openingAttachments(projectId)),
+                    session.getId(), session.getAnswerRevision(), claim, view(session));
         });
+        RequirementDtos.Session result = interview.view();
+        if (interview.project() != null) {
+            List<QuestionDraft> generated;
+            if (interview.claim() != null && interview.claim().fallback()) generated = defaults(interview.project().initialPrompt());
+            else try (LlmCallContext.Scope call = LlmCallContext.bind(new LlmCallContext(userId, projectId, null, CallPurpose.REQUIREMENTS, false))) {
+                generated = generate(interview.project());
+            }
+            List<QuestionDraft> drafts = interview.project().attachments().isEmpty() ? generated
+                    : generated.stream().filter(draft -> !isAboutTheLook(draft)).toList();
+            result = tx.execute(status -> {
+                lockRequirements(projectId);
+                projects.requireCanEdit(userId, projectId);
+                RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
+                boolean current = session.getId().equals(interview.session()) && session.getAnswerRevision() == interview.revision();
+                boolean owned = coordinator == null || coordinator.finish(interview.session(), interview.revision(), "QUESTIONS", interview.claim(), current ? "COMPLETE" : "STALE");
+                if (current && owned && questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty()) {
+                    saveQuestions(session, capabilityQuestions(projectId, drafts.isEmpty() ? defaults(interview.project().initialPrompt()) : drafts));
+                    ensureCapabilityQuestions(session);
+                }
+                return view(session);
+            });
+        }
+        // Poll/reload can recover an expired assessment without another provider send.
+        if (coordinator != null && result.complete() && result.status() == RequirementStatus.IN_PROGRESS) {
+            RequirementDtos.Question last = result.questions().getLast();
+            return answer(userId, projectId, last.id(), new RequirementDtos.AnswerRequest(last.selectedOption(), last.otherText(), result.revision()));
+        }
+        if (projection != null && "PENDING".equals(result.artifactStatus())) {
+            UUID id = tx.execute(status -> sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new).getProjectionId());
+            projection.tryProject(id);
+            return tx.execute(status -> view(sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new)));
+        }
+        return result;
     }
 
     @Override
     public RequirementDtos.Session answer(Long userId, UUID projectId, UUID questionId, RequirementDtos.AnswerRequest request) {
-        // Without a transaction: the last answer triggers a model review (see {@link #tx}).
         Recorded recorded = tx.execute(status -> {
+            lockRequirements(projectId);
             Project project = projects.requireCanEdit(userId, projectId);
             RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
             RequirementQuestion question = questions.findByIdAndSessionId(questionId, session.getId()).orElseThrow(ProjectNotFoundException::new);
             String selected = clean(request.selectedOption(), 80);
             String other = clean(request.otherText(), 4_000);
-            if (question.isRequired() && (selected == null || selected.isBlank()) && (other == null || other.isBlank())) {
-                throw new InvalidRequirementAnswerException("This requirement question needs an answer");
+            if (selected != null && !optionExists(question, selected)) throw new InvalidRequirementAnswerException("Choose an option offered by this question");
+            if (question.getQuestionKey().startsWith("platform_") && other != null) throw new InvalidRequirementAnswerException("Storage and sign-in need a supported option");
+            if (question.isRequired() && selected == null && other == null) throw new InvalidRequirementAnswerException("This requirement question needs an answer");
+            boolean changed = !Objects.equals(question.getSelectedOption(), selected) || !Objects.equals(question.getOtherText(), other);
+            if (coordinator != null && (request.revision() == null || request.revision() != session.getAnswerRevision())) {
+                throw new WorkflowStageException("Requirements changed; reload before editing answers");
             }
-            question.setSelectedOption(selected);
-            question.setOtherText(other);
-            session.setStatus(RequirementStatus.IN_PROGRESS);
-            if (!complete(session)) return new Recorded(view(session), null, null);
-            return new Recorded(null, ProjectBrief.of(project, List.of()), answerSummary(questions.findBySessionIdOrderBySequenceAsc(session.getId())));
+            if (changed) {
+                if (session.getStatus() == RequirementStatus.APPROVED && coordinator != null) {
+                    coordinator.requireNoActiveBuild(projectId);
+                    projects.advanceLifecycle(userId, projectId, ProjectStage.REQUIREMENTS);
+                }
+                question.setSelectedOption(selected);
+                question.setOtherText(other);
+                session.setAnswerRevision(Math.addExact(session.getAnswerRevision(), 1));
+                session.setBuildDecisionJson(null);
+                session.setApprovedRevision(null);
+                session.setApprovedAt(null);
+                session.setApprovedBy(null);
+                session.setProjectionId(null);
+                session.setStatus(RequirementStatus.IN_PROGRESS);
+            }
+            if (!complete(session) || session.getStatus() == RequirementStatus.APPROVED || session.getStatus() == RequirementStatus.APPROVAL_REQUIRED) {
+                return new Recorded(view(session), null, null, session.getId(), session.getAnswerRevision(), null);
+            }
+            var claim = coordinator == null ? null : coordinator.claim(session.getId(), session.getAnswerRevision(), "ASSESSMENT", userId);
+            if (coordinator != null && claim == null) return new Recorded(view(session), null, null, session.getId(), session.getAnswerRevision(), null);
+            return new Recorded(null, ProjectBrief.of(project, List.of()), answerSummary(questions.findBySessionIdOrderBySequenceAsc(session.getId())),
+                    session.getId(), session.getAnswerRevision(), claim);
         });
         if (recorded.view() != null) return recorded.view();
-
         Assessment assessment;
-        try (LlmCallContext.Scope call = LlmCallContext.bind(new LlmCallContext(userId, projectId, null, CallPurpose.REQUIREMENTS, false))) {
+        if (recorded.claim() != null && recorded.claim().fallback()) assessment = new Assessment(true, List.of(), true);
+        else try (LlmCallContext.Scope call = LlmCallContext.bind(new LlmCallContext(userId, projectId, null, CallPurpose.REQUIREMENTS, false))) {
             assessment = assess(recorded.project(), recorded.summary());
         } catch (RuntimeException error) {
-            // The user can still review the complete answer set when the assessment provider is unavailable.
-            log.warn("Requirement assessment fell back to approval project={}: {}", projectId, error.getMessage());
-            assessment = new Assessment(true, List.of());
+            log.warn("requirement_assessment_fallback project={} reason={}", projectId, error.getClass().getSimpleName());
+            assessment = new Assessment(true, List.of(), true);
         }
         Assessment verdict = assessment;
         return tx.execute(status -> {
+            lockRequirements(projectId);
+            projects.requireCanEdit(userId, projectId);
             RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
-            // Answers may have changed (or been approved) while the model was reviewing them.
-            if (session.getStatus() != RequirementStatus.APPROVED && complete(session)) refineOrApprove(session, verdict);
+            boolean current = session.getId().equals(recorded.session()) && session.getAnswerRevision() == recorded.revision()
+                    && session.getStatus() != RequirementStatus.APPROVED && complete(session);
+            boolean owned = coordinator == null || coordinator.finish(recorded.session(), recorded.revision(), "ASSESSMENT", recorded.claim(), current ? verdict.fallback() ? "FALLBACK" : "COMPLETE" : "STALE");
+            if (current && owned) refineOrApprove(session, verdict);
             return view(session);
         });
     }
+
+    private void lockRequirements(UUID project) { if (coordinator != null) coordinator.lock(project); }
 
     /** Applies a review of the complete answer set, adding only genuinely missing decisions. */
     private void refineOrApprove(RequirementSession session, Assessment assessment) {
@@ -152,6 +217,7 @@ public class RequirementServiceImpl implements RequirementService {
                     .map(key -> key.toLowerCase(Locale.ROOT)).collect(java.util.stream.Collectors.toSet());
             int remaining = Math.max(0, 8 - answered.size());
             List<QuestionDraft> additional = assessment.questions().stream()
+                    .filter(item -> buildDecisions == null || !isCapabilityQuestion(item))
                     .filter(item -> knownKeys.add(item.key().toLowerCase(Locale.ROOT)))
                     .limit(remaining)
                     .toList();
@@ -195,31 +261,63 @@ public class RequirementServiceImpl implements RequirementService {
     }
 
     @Override
-    @Transactional
-    public RequirementDtos.Session approve(Long userId, UUID projectId) {
-        Project project = projects.requireCanEdit(userId, projectId);
-        RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
-        if (session.getStatus() == RequirementStatus.APPROVED) return view(session);
-        if (!complete(session)) throw new WorkflowStageException("Answer all required requirement questions first");
-        session.setStatus(RequirementStatus.APPROVED);
-        session.setApprovedAt(Instant.now());
-        session.setApprovedBy(userId);
-        List<RequirementQuestion> answered = questions.findBySessionIdOrderBySequenceAsc(session.getId());
-        projects.advanceLifecycle(userId, projectId, ProjectStage.DESIGN);
-        String suffix = UUID.randomUUID().toString().replace("-", "");
-        // Post first: it applies the usage limits, and a rejection rolls this whole transaction back
-        // before anything is written to the workspace. The build run starts only after commit.
-        // Images attached to the opening prompt go with the build, which reads them (vision) and can use them.
-        List<String> attachments = messages.openingAttachments(projectId);
-        messages.post(userId, projectId, new CreateMessageRequest(
-                "req_" + suffix.substring(0, 27), approvedBuildPrompt(answered), ProjectType.BUILD,
-                "ai_" + UUID.randomUUID().toString().replace("-", "").substring(0, 27), attachments.isEmpty() ? null : attachments));
-        artifacts.writeRequirements(projectId, session.getId(), answered);
-        // The brief keeps the approved requirements in every later run's context, however long the chat gets.
-        artifacts.writeBriefIfAbsent(projectId, ProjectBriefFile.initial(project.getName(), project.getInitialPrompt(),
-                answered.stream().map(q -> new ProjectBriefFile.Requirement(q.getPrompt(), answerLabel(q))).toList(),
-                java.time.LocalDate.now(java.time.ZoneOffset.UTC)));
-        return view(session);
+    public RequirementDtos.Session approve(Long userId, UUID projectId) { return approve(userId, projectId, null); }
+
+    @Override
+    public RequirementDtos.Session approve(Long userId, UUID projectId, Long revision) {
+        RequirementDtos.Session approved = tx.execute(status -> {
+            lockRequirements(projectId);
+            Project project = projects.requireCanEdit(userId, projectId);
+            RequirementSession session = sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new);
+            if (coordinator != null && (revision == null || revision != session.getAnswerRevision())) {
+                throw new WorkflowStageException("Requirements changed; review the current answers before approving");
+            }
+            if (session.getStatus() == RequirementStatus.APPROVED) return view(session);
+            if (!complete(session)) throw new WorkflowStageException("Answer all required requirement questions first");
+            if (coordinator != null && session.getStatus() != RequirementStatus.APPROVAL_REQUIRED) {
+                throw new WorkflowStageException("Wait for review of this answer revision before approving");
+            }
+            if (coordinator != null) coordinator.requireNoActiveBuild(projectId);
+            List<RequirementQuestion> answered = questions.findBySessionIdOrderBySequenceAsc(session.getId());
+            if (buildDecisions != null) {
+                var choice = buildDecisions.approve(answered, buildDecisions.available(projectId));
+                session.setBuildDecisionJson(buildDecisions.encode(choice));
+            }
+            session.setStatus(RequirementStatus.APPROVED);
+            session.setApprovedRevision(session.getAnswerRevision());
+            session.setApprovedAt(Instant.now());
+            session.setApprovedBy(userId);
+            projects.advanceLifecycle(userId, projectId, ProjectStage.DESIGN);
+            String brief = ProjectBriefFile.initial(project.getName(), project.getInitialPrompt(),
+                    answered.stream().map(q -> new ProjectBriefFile.Requirement(q.getPrompt(), answerLabel(q))).toList(),
+                    java.time.LocalDate.now(java.time.ZoneOffset.UTC));
+            if (projection != null) {
+                sessions.flush();
+                Map<String,Object> manifest = new LinkedHashMap<>();
+                manifest.put("kind", "requirements"); manifest.put("sessionId", session.getId());
+                manifest.put("revision", session.getAnswerRevision()); manifest.put("buildDecision", objectMapper.readTree(session.getBuildDecisionJson()));
+                manifest.put("answers", answered.stream().map(q -> new ProjectBriefFile.Requirement(q.getPrompt(), answerLabel(q))).toList());
+                session.setProjectionId(projection.enqueue(session.getId(), projectId, session.getAnswerRevision(),
+                        new com.code.pal.project.requirement.RequirementProjection.Payload(write(manifest), brief)));
+                sessions.flush();
+            }
+            String suffix = UUID.randomUUID().toString().replace("-", "");
+            List<String> attachments = messages.openingAttachments(projectId);
+            messages.post(userId, projectId, new CreateMessageRequest(
+                    "req_" + suffix.substring(0, 27), approvedBuildPrompt(answered), ProjectType.BUILD,
+                    "ai_" + UUID.randomUUID().toString().replace("-", "").substring(0, 27), attachments.isEmpty() ? null : attachments));
+            if (projection == null) { // focused constructor fixture only; managed approval never writes files in its DB transaction
+                artifacts.writeRequirements(projectId, session.getId(), answered);
+                artifacts.writeBriefIfAbsent(projectId, brief);
+            }
+            return view(session);
+        });
+        if (projection != null) {
+            UUID id = tx.execute(status -> sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new).getProjectionId());
+            projection.tryProject(id);
+            return tx.execute(status -> view(sessions.findByProjectId(projectId).orElseThrow(ProjectNotFoundException::new)));
+        }
+        return approved;
     }
 
     private String approvedBuildPrompt(List<RequirementQuestion> answered) {
@@ -246,7 +344,8 @@ public class RequirementServiceImpl implements RequirementService {
     }
 
     private boolean complete(RequirementSession session) {
-        return questions.findBySessionIdOrderBySequenceAsc(session.getId()).stream()
+        List<RequirementQuestion> answered = questions.findBySessionIdOrderBySequenceAsc(session.getId());
+        return !answered.isEmpty() && answered.stream()
                 .filter(RequirementQuestion::isRequired)
                 .allMatch(q -> (q.getSelectedOption() != null && !q.getSelectedOption().isBlank())
                         || (q.getOtherText() != null && !q.getOtherText().isBlank()));
@@ -255,7 +354,10 @@ public class RequirementServiceImpl implements RequirementService {
     private RequirementDtos.Session view(RequirementSession session) {
         List<RequirementDtos.Question> result = questions.findBySessionIdOrderBySequenceAsc(session.getId()).stream().map(this::question).toList();
         return new RequirementDtos.Session(session.getId(), session.getProjectId(), session.getStatus(), result,
-                result.stream().filter(RequirementDtos.Question::required).allMatch(q -> nonBlank(q.selectedOption()) || nonBlank(q.otherText())), session.getApprovedAt());
+                !result.isEmpty() && result.stream().filter(RequirementDtos.Question::required).allMatch(q -> nonBlank(q.selectedOption()) || nonBlank(q.otherText())), session.getApprovedAt(),
+                session.getAnswerRevision(), coordinator != null && coordinator.processing(session.getId(), session.getAnswerRevision()),
+                coordinator == null ? "NONE" : coordinator.projectionState(session.getProjectionId()),
+                coordinator == null ? "NONE" : coordinator.reviewState(session.getId(), session.getAnswerRevision()));
     }
 
     private RequirementDtos.Question question(RequirementQuestion q) {
@@ -276,6 +378,72 @@ public class RequirementServiceImpl implements RequirementService {
 
     private void saveQuestions(RequirementSession session, List<QuestionDraft> drafts) {
         saveQuestions(session, drafts, 0);
+    }
+
+    private boolean optionExists(RequirementQuestion question, String selected) {
+        try {
+            JsonNode options = objectMapper.readTree(question.getOptionsJson());
+            if (options.isArray()) for (JsonNode option : options) {
+                if (selected.equals(option.path("id").asText())) return true;
+            }
+        } catch (RuntimeException ignored) { }
+        return false;
+    }
+
+    private List<QuestionDraft> capabilityQuestions(UUID projectId, List<QuestionDraft> generated) {
+        if (buildDecisions == null) return generated; // constructor-only focused fixture; managed wiring is mandatory
+        List<QuestionDraft> result = new ArrayList<>(generated.stream()
+                .filter(draft -> !isCapabilityQuestion(draft)).limit(6).toList());
+        var available = buildDecisions.available(projectId);
+        List<OptionDraft> storage = new ArrayList<>(List.of(
+                o("NONE", "No saved data", "Data lasts only during this visit"),
+                o("BROWSER", "This browser only", "Saved locally on this device; no shared accounts or cross-device sync")));
+        if (available.supabaseConnected()) storage.add(o("SUPABASE", "Connected Supabase", "Use this project's connected database; schema changes need your approval"));
+        if (available.mernConfigured()) storage.add(o("MERN", "App backend + MongoDB", "React and Express with a project database; server/database readiness will be checked"));
+        result.add(q(com.code.pal.project.capability.BuildDecisions.STORAGE_KEY,
+                "Where should data be saved? Cloud storage needs a specific connected service or app backend.", true, "BROWSER", List.copyOf(storage)));
+        result.add(q(com.code.pal.project.capability.BuildDecisions.AUTH_KEY, "Should people sign in with real accounts?", true, "NONE",
+                List.of(o("NONE", "No sign-in", "Use the app without accounts"),
+                        o("ACCOUNTS", "Real accounts", "Requires connected Supabase or the app backend; browser-only sign-in is insufficient"))));
+        return List.copyOf(result);
+    }
+
+    private void ensureCapabilityQuestions(RequirementSession session) {
+        if (buildDecisions == null) return;
+        List<RequirementQuestion> existing = questions.findBySessionIdOrderBySequenceAsc(session.getId());
+        Set<String> keys = existing.stream().map(RequirementQuestion::getQuestionKey).collect(java.util.stream.Collectors.toSet());
+        List<QuestionDraft> canonical = capabilityQuestions(session.getProjectId(), List.of());
+        boolean invalid = false;
+        for (QuestionDraft draft : canonical) {
+            for (RequirementQuestion question : existing) {
+                if (!draft.key().equals(question.getQuestionKey())) continue;
+                question.setOptionsJson(write(draft.options()));
+                question.setRecommendedOption(draft.recommended());
+                if (question.getSelectedOption() != null && !optionExists(question, question.getSelectedOption())) {
+                    question.setSelectedOption(null);
+                    invalid = true;
+                }
+            }
+        }
+        List<QuestionDraft> missing = canonical.stream()
+                .filter(draft -> !keys.contains(draft.key())).toList();
+        if (!missing.isEmpty() || invalid || (session.getStatus() == RequirementStatus.APPROVED
+                && buildDecisions.requiresConfirmation(session.getProjectId()))) {
+            saveQuestions(session, missing, existing.stream().mapToInt(RequirementQuestion::getSequence).max().orElse(0));
+            session.setAnswerRevision(Math.addExact(session.getAnswerRevision(), 1));
+            session.setStatus(RequirementStatus.IN_PROGRESS);
+            session.setBuildDecisionJson(null);
+            session.setApprovedRevision(null);
+            session.setProjectionId(null);
+            session.setApprovedAt(null);
+            session.setApprovedBy(null);
+        }
+    }
+
+    private static boolean isCapabilityQuestion(QuestionDraft draft) {
+        String key = draft.key().toLowerCase(Locale.ROOT);
+        return key.equals("storage") || key.equals("database") || key.equals("backend") || key.equals("auth")
+                || key.equals("authentication") || key.equals("sign_in") || key.startsWith("platform_");
     }
 
     private void saveQuestions(RequirementSession session, List<QuestionDraft> drafts, int sequenceOffset) {
@@ -306,16 +474,13 @@ public class RequirementServiceImpl implements RequirementService {
         try {
             AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
             String prompt = """
-                    Return only valid JSON array. Create 5 to 7 requirement questions for a software project;
-                    for a to-do or task app, create exactly the four questions specified below.
+                    Return only valid JSON array. Create 3 to 6 requirement questions for a software project.
                     Each item must have: key, prompt, required (boolean), recommended (option id), and options.
                     Each option must have id, label, description. Questions must clarify product type, users,
-                    core pages/features, authentication, data, and visual direction. Keep options concrete and
-                    include an option id of other on every select question. For a to-do or task app, use these
-                    question prompts and option labels exactly: users (Just for me, Shared with accounts,
-                    Learning/demo project), features (Bare minimum, Standard, Full-featured), storage (Saved
-                    database (Cloud), This device only), and visual style (Clean & minimal, Calm & warm,
-                    Bold & structured, Dark & moody). Add Write your own... as the final option for each.
+                    core pages/features, the data to manage, and visual direction. Keep options concrete and
+                    include an option id of other on every select question. The backend asks storage provider
+                    and sign-in separately using available services: do not generate questions for storage,
+                    database provider, backend stack or authentication and never use platform_ question keys.
                     Do not ask questions already answered clearly by the user prompt. User prompt: %s
                     """.formatted(project.initialPrompt()) + attachmentNote(project.attachments());
             LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
@@ -324,7 +489,7 @@ public class RequirementServiceImpl implements RequirementService {
             List<QuestionDraft> parsed = parseQuestions(result.content());
             if (!parsed.isEmpty()) return parsed.stream().limit(8).toList();
         } catch (RuntimeException error) {
-            log.warn("Requirement question generation fell back to defaults project={}: {}", project.id(), error.getMessage());
+            log.warn("requirement_questions_fallback project={} reason={}", project.id(), error.getClass().getSimpleName());
         }
         return defaults(project.initialPrompt());
     }
@@ -337,16 +502,24 @@ public class RequirementServiceImpl implements RequirementService {
     private List<QuestionDraft> parseQuestionDrafts(JsonNode root) {
         if (root == null || !root.isArray()) return List.of();
         List<QuestionDraft> result = new ArrayList<>();
+        Set<String> keys = new HashSet<>();
         for (JsonNode node : root) {
+            if (result.size() >= 8) break;
             String key = node.path("key").asText("").replaceAll("[^a-zA-Z0-9_-]", "");
             String prompt = node.path("prompt").asText("").trim();
-            if (key.isBlank() || prompt.isBlank() || !node.path("options").isArray()) continue;
+            if (key.isBlank() || key.length() > 80 || prompt.isBlank() || prompt.length() > 2_000
+                    || keys.contains(key.toLowerCase(Locale.ROOT)) || !node.path("options").isArray()) continue;
             List<OptionDraft> options = new ArrayList<>();
+            Set<String> optionIds = new HashSet<>();
             for (JsonNode option : node.path("options")) {
+                if (options.size() >= 12) break;
                 String id = option.path("id").asText("").replaceAll("[^a-zA-Z0-9_-]", "");
-                if (!id.isBlank()) options.add(new OptionDraft(id, option.path("label").asText(id), option.path("description").asText("")));
+                if (!id.isBlank() && id.length() <= 80 && optionIds.add(id)) options.add(new OptionDraft(id,
+                        Optional.ofNullable(clean(option.path("label").asText(id), 300)).orElse(id),
+                        Optional.ofNullable(clean(option.path("description").asText(""), 1_000)).orElse("")));
             }
             if (options.size() >= 2) {
+                keys.add(key.toLowerCase(Locale.ROOT));
                 String recommended = node.path("recommended").asText("").trim();
                 boolean validRecommendation = options.stream().anyMatch(option -> option.id().equals(recommended));
                 result.add(new QuestionDraft(key, prompt, node.path("required").asBoolean(true),
@@ -367,14 +540,12 @@ public class RequirementServiceImpl implements RequirementService {
             return List.of(
                     q("audience", "Who will use it?", true, "just_me", List.of(o("just_me", "Just for me", "A personal tool or a game for yourself"), o("public", "Friends or customers", "Other people will use it, so it should be polished and self-explanatory"), o("learning_demo", "Learning/demo project", "Exploring what the product can do"), o("other", "Write your own...", "Describe who will use it and why"))),
                     q("scope", "How complete should the first version be?", true, "standard", List.of(o("core", "Simple core", "Only the main feature, done well"), o("standard", "Standard", "The main feature plus the obvious extras users expect"), o("full_featured", "Full-featured", "Everything that makes it feel like a finished product"), o("other", "Write your own...", "Describe the features you need"))),
-                    q("storage", "Should it remember anything between visits?", true, "device_only", List.of(o("nothing", "No", "Nothing needs to be saved"), o("device_only", "This device only", "Saved in the browser; simple, no account"), o("saved_database", "Saved database (Cloud)", "Persists across devices; supports logins later"), o("other", "Write your own...", "Describe what should be saved"))),
                     q("visual_direction", "What visual style should it have?", true, "clean_minimal", List.of(o("clean_minimal", "Clean & minimal", "Light, airy, generous whitespace"), o("calm_warm", "Calm & warm", "Soothing colors, soft shapes, friendly tone"), o("bold_colorful", "Bold & colorful", "Vivid colors and big, playful elements"), o("dark_moody", "Dark & moody", "Dark background with vibrant accents"), o("other", "Write your own...", "Describe the visual style")))
             );
         }
         return List.of(
                 q("audience", "Who will use this to-do app, and for what kind of tasks?", true, "just_me", List.of(o("just_me", "Just for me", "You use it alone to track daily tasks"), o("shared_accounts", "Shared with accounts", "Multiple people sign in and each manages their own tasks"), o("learning_demo", "Learning/demo project", "Exploring what the product can do"), o("other", "Write your own...", "Describe who will use it and why"))),
                 q("features", "Beyond adding and completing tasks, which features matter?", true, "bare_minimum", List.of(o("bare_minimum", "Bare minimum", "Add, check off, delete - nothing else"), o("standard", "Standard", "Due dates, priorities, and categories/projects"), o("full_featured", "Full-featured", "Due dates, priorities, subtasks, search, and filters"), o("other", "Write your own...", "Describe the features you need"))),
-                q("storage", "Where should your tasks be saved?", true, "saved_database", List.of(o("saved_database", "Saved database (Cloud)", "Tasks persist across devices and browser sessions; supports logins later"), o("device_only", "This device only", "Lives in the browser only; simpler, no account"), o("other", "Write your own...", "Describe where the data should live"))),
                 q("visual_direction", "What visual style should it have?", true, "dark_moody", List.of(o("clean_minimal", "Clean & minimal", "Light, airy, generous whitespace - Things/Todoist style"), o("calm_warm", "Calm & warm", "Soothing colors, soft shapes, friendly tone"), o("bold_structured", "Bold & structured", "Dense information layout, sharp edges, productivity-tool vibe"), o("dark_moody", "Dark & moody", "Dark background with vibrant accents"), o("other", "Write your own...", "Describe the visual style")))
         );
     }
@@ -386,7 +557,9 @@ public class RequirementServiceImpl implements RequirementService {
     private static boolean nonBlank(String value) { return value != null && !value.isBlank(); }
     private record OptionDraft(String id, String label, String description) {}
     private record QuestionDraft(String key, String prompt, boolean required, String recommended, List<OptionDraft> options) {}
-    private record Assessment(boolean clear, List<QuestionDraft> questions) {}
+    private record Assessment(boolean clear, List<QuestionDraft> questions, boolean fallback) {
+        private Assessment(boolean clear, List<QuestionDraft> questions) { this(clear, questions, false); }
+    }
     /** What the model calls need from a project, read inside a transaction and used outside it. */
     /** {@code attachments}: files attached to the opening prompt (screenshots, mock-ups). */
     private record ProjectBrief(UUID id, String initialPrompt, List<String> attachments) {
@@ -395,5 +568,8 @@ public class RequirementServiceImpl implements RequirementService {
         }
     }
     /** Result of recording an answer: the session view when no review is due, else what the review needs. */
-    private record Recorded(RequirementDtos.Session view, ProjectBrief project, String summary) {}
+    private record Recorded(RequirementDtos.Session view, ProjectBrief project, String summary, UUID session, long revision,
+                            com.code.pal.project.requirement.RequirementCoordinator.Claim claim) {}
+    private record Interview(ProjectBrief project, UUID session, long revision,
+                             com.code.pal.project.requirement.RequirementCoordinator.Claim claim, RequirementDtos.Session view) {}
 }

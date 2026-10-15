@@ -23,17 +23,18 @@ type PanelContentProps = {
   onCloseThinking: () => void
   onRestoreRun: (runId: string) => void
   rollingBackId: string | null
+  onRetried: (run: AgentRun) => void
   preview: { update: PreviewStatus | null; draftUpdate: PreviewDraftEvent | null; reloadRequest: number; device: Device; onUrlChange: (url: string | null) => void }
 }
 
 /** The body of the panel for the selected tab (Preview is the fallback). */
-export function PanelContent({ tab, projectId, project, activeRunId, runs, selectedRun, steps, requirements, thinking, onCloseThinking, onRestoreRun, rollingBackId, preview }: PanelContentProps) {
+export function PanelContent({ tab, projectId, project, activeRunId, runs, selectedRun, steps, requirements, thinking, onCloseThinking, onRestoreRun, rollingBackId, onRetried, preview }: PanelContentProps) {
   return (
     <div key={tab} className="pv-root">
       {tab === 'thinking' && thinking ? <ThinkingPanel reasoning={thinking.reasoning} seconds={thinking.seconds} onBack={onCloseThinking} />
         : tab === 'files' ? <FilesPanel projectId={projectId} activeRunId={activeRunId} />
         : tab === 'code' ? <CodePanel projectId={projectId} activeRunId={activeRunId} />
-        : tab === 'history' ? <HistoryPanel runs={runs} onRestore={onRestoreRun} rollingBackId={rollingBackId} />
+        : tab === 'history' ? <HistoryPanel projectId={projectId} runs={runs} onRestore={onRestoreRun} rollingBackId={rollingBackId} onRetried={onRetried} />
         : tab === 'details' ? <DetailsPanel run={selectedRun} steps={steps} stage={project?.lifecycleStage} requirements={requirements} />
         : tab === 'analytics' ? <AnalyticsPanel projectId={projectId} active />
         : tab === 'security' ? <SecurityPanel projectId={projectId} active />

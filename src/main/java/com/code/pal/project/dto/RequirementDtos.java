@@ -15,6 +15,14 @@ public final class RequirementDtos {
                            boolean required, List<Option> options, String recommendedOption,
                            String selectedOption, String otherText) {}
     public record Session(UUID id, UUID projectId, RequirementStatus status, List<Question> questions,
-                          boolean complete, Instant approvedAt) {}
-    public record AnswerRequest(String selectedOption, String otherText) {}
+                          boolean complete, Instant approvedAt, long revision, boolean processing, String artifactStatus, String reviewStatus) {
+        public Session(UUID id, UUID projectId, RequirementStatus status, List<Question> questions, boolean complete, Instant approvedAt) {
+            this(id, projectId, status, questions, complete, approvedAt, 0, false, "NONE", "NONE");
+        }
+    }
+    public record ApprovalRequest(@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.PositiveOrZero Long revision) {}
+    public record AnswerRequest(String selectedOption, String otherText,
+                                @jakarta.validation.constraints.NotNull @jakarta.validation.constraints.PositiveOrZero Long revision) {
+        public AnswerRequest(String selectedOption, String otherText) { this(selectedOption, otherText, null); }
+    }
 }

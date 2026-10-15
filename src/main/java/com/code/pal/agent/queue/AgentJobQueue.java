@@ -64,8 +64,8 @@ public class AgentJobQueue {
     }
 
     /** Extend the lease only while this worker still owns the lock (fencing against a stale renewal). */
-    public void renewLock(UUID projectId, UUID runId) {
-        redis.execute(RENEW_IF_OWNER, List.of(LOCK_PREFIX + projectId), runId.toString(), String.valueOf(props.leaseMs()));
+    public boolean renewLock(UUID projectId, UUID runId) {
+        return Long.valueOf(1).equals(redis.execute(RENEW_IF_OWNER, List.of(LOCK_PREFIX + projectId), runId.toString(), String.valueOf(props.leaseMs())));
     }
 
     /** True while some worker holds this project's lock â€” used as a secondary "worker alive" guard. */

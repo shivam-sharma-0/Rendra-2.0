@@ -55,7 +55,8 @@ public class AuthController {
     /** Clear the refresh cookie. Idempotent — safe to call without a session. */
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void logout(HttpServletResponse response) {
+    public void logout(@CookieValue(name=AuthCookieService.REFRESH_COOKIE,required=false) String refreshToken,HttpServletResponse response) {
+        authService.logout(refreshToken);
         response.addHeader(HttpHeaders.SET_COOKIE, cookies.clear().toString());
     }
 

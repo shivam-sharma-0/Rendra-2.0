@@ -2,7 +2,7 @@ import { type AgentRun, type AgentStep, type Message, type Project } from '../..
 import { FILE_CHANGE_KINDS } from './activity'
 
 export function isActive(run: AgentRun) {
-  return run.status === 'QUEUED' || run.status === 'RUNNING' || run.status === 'AWAITING_INPUT'
+  return run.status === 'QUEUED' || run.status === 'RUNNING' || run.status === 'COMMITTING' || run.status === 'AWAITING_INPUT'
 }
 
 export function needsRequirementInterview(project: Project | null): boolean {
@@ -69,12 +69,21 @@ export type StatusTone = 'ok' | 'busy' | 'wait' | 'failed' | 'idle'
 export const RUN_STATUS_META: Record<string, { label: string; tone: StatusTone }> = {
   DONE: { label: 'Complete', tone: 'ok' },
   RUNNING: { label: 'Running', tone: 'busy' },
+  COMMITTING: { label: 'Saving', tone: 'busy' },
   QUEUED: { label: 'Queued', tone: 'wait' },
   AWAITING_INPUT: { label: 'Awaiting input', tone: 'wait' },
   FAILED: { label: 'Failed', tone: 'failed' },
   CANCELLED: { label: 'Cancelled', tone: 'idle' },
 }
 export const runStatus = (status: string) => RUN_STATUS_META[status] ?? { label: status, tone: 'idle' as StatusTone }
+
+export function runOutcome(run: AgentRun) {
+  if (run.saveRecoveryRequired) return { label: 'Save needs recovery verification', tone: 'wait' as StatusTone }
+  if (run.codeSavedAt && run.previewStatus === 'FAILED') return { label: 'Code saved; preview failed', tone: 'failed' as StatusTone }
+  if (run.codeSavedAt && run.previewStatus === 'BUILDING') return { label: 'Code saved; preparing preview', tone: 'busy' as StatusTone }
+  if (run.codeSavedAt && run.previewStatus !== 'READY') return { label: 'Code saved; preview not ready', tone: 'wait' as StatusTone }
+  return runStatus(run.status)
+}
 
 export function runWhen(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })

@@ -6,4 +6,5 @@ public class LlmQuotaExceededException extends LlmException {
     public LlmQuotaExceededException(String message) {
         super(message);
     }
+    public boolean runBudget(){return getMessage()!=null && getMessage().contains("run's token budget");}
 }

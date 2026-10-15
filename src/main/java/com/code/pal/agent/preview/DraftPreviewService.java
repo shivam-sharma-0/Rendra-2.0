@@ -107,6 +107,12 @@ public class DraftPreviewService {
     }
 
     private void build(Draft draft) {
+        try(var fence=com.code.pal.agent.lease.RunFence.bind(draft.fence);
+            var stop=com.code.pal.agent.runtime.RunCancellation.bind(draft.cancellation);
+            var context=com.code.pal.agent.llm.LlmCallContext.bind(draft.context)) { buildOwned(draft); }
+    }
+
+    private void buildOwned(Draft draft) {
         synchronized (draft) {
             if (draft.finished) return;
             if (draft.building) {
@@ -143,7 +149,7 @@ public class DraftPreviewService {
             return;
         }
         if (error == null) {
-            if (replaced != null) removeQuietly(draft.projectId, replaced);
+            // Keep replaced drafts while requests may still hold the old path.
             log.info("draft_preview_built projectId={} runId={} elapsedMs={}", draft.projectId, draft.runId,
                     (System.nanoTime() - started) / 1_000_000);
             try {
@@ -170,15 +176,7 @@ public class DraftPreviewService {
 
     /** Drafts of runs this process no longer knows (a crash or restart) are only taking space. */
     private void pruneOtherRuns(UUID projectId, UUID runId) {
-        try {
-            if (!files.exists(projectId, ".", DRAFTS)) return;
-            for (ProjectFiles.Entry entry : files.list(projectId, DRAFTS, 1)) {
-                if (!entry.directory() || entry.path().equals(runId.toString())) continue;
-                if (!drafts.containsKey(parse(entry.path()))) removeQuietly(projectId, DRAFTS + "/" + entry.path());
-            }
-        } catch (RuntimeException error) {
-            log.warn("draft_preview_prune_failed projectId={} reason={}", projectId, error.getMessage());
-        }
+        // Local absence cannot prove a different backend instance has abandoned a run.
     }
 
     private static UUID parse(String name) {
@@ -204,6 +202,9 @@ public class DraftPreviewService {
     }
 
     private static final class Draft {
+        final com.code.pal.agent.lease.RunFence fence=com.code.pal.agent.lease.RunFence.current();
+        final com.code.pal.agent.runtime.RunCancellation cancellation=com.code.pal.agent.runtime.RunCancellation.current();
+        final com.code.pal.agent.llm.LlmCallContext context=com.code.pal.agent.llm.LlmCallContext.current();
         final UUID projectId;
         final UUID runId;
         final String stagedRoot;

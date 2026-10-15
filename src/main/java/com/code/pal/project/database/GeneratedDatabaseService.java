@@ -16,6 +16,35 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class GeneratedDatabaseService {
     private final AppDatabaseConnection connection;
+    private final java.util.concurrent.ConcurrentMap<String,ValidationDatabase> validationDatabases=new java.util.concurrent.ConcurrentHashMap<>();
+    public record ValidationDatabase(UUID projectId,UUID runId,String name,String uri) {
+        @Override public String toString(){return "ValidationDatabase[project="+projectId+",run="+runId+",credentials=redacted]";}
+    }
+    /** Each attempt owns independent data and credentials; concurrent validations never rotate each other's user. */
+    public ValidationDatabase openValidation(UUID projectId,UUID runId,String address) {
+        java.util.Objects.requireNonNull(projectId);java.util.Objects.requireNonNull(runId);
+        if(address==null || !address.matches("[A-Za-z0-9_.-]+:[0-9]{1,5}"))throw new IllegalArgumentException("Invalid trusted database address");
+        String name="codepal_check_"+projectId.toString().substring(0,8)+"_"+UUID.randomUUID().toString().replace("-","");
+        String password=randomPassword();var lease=new ValidationDatabase(projectId,runId,name,
+                "mongodb://app:"+password+"@"+address+"/"+name+"?authSource="+name);
+        validationDatabases.put(name,lease);
+        try {
+            connection.client().getDatabase(name).runCommand(new Document("createUser","app").append("pwd",password)
+                    .append("roles",List.of(new Document("role","readWrite").append("db",name))));
+            connection.client().getDatabase(name).getCollection("_codepal_validation_lease").insertOne(
+                    new Document("_id","lease").append("projectId",projectId.toString()).append("runId",runId.toString())
+                            .append("createdAt",Instant.now().toString()).append("retention","REQUIRE_PROVEN_PROCESS_STOP"));
+            return lease;
+        }catch(RuntimeException unavailable){try{closeValidation(lease);}catch(RuntimeException cleanup){unavailable.addSuppressed(new IllegalStateException("Scratch database cleanup remains pending"));}throw new IllegalStateException("Validation database is unavailable",unavailable);}
+    }
+    public void closeValidation(ValidationDatabase lease) {
+        if(lease==null)return;
+        if(validationDatabases.get(lease.name())!=lease)throw new IllegalArgumentException("Unknown validation database ownership");
+        var db=connection.client().getDatabase(lease.name());
+        db.runCommand(new Document("dropAllUsersFromDatabase",1));db.drop();
+        if(db.listCollectionNames().iterator().hasNext())throw new IllegalStateException("Validation database cleanup did not complete");
+        validationDatabases.remove(lease.name(),lease);
+    }
 
     public DatabaseSnapshot inspect(UUID projectId) {
         String database = databaseName(projectId);
@@ -71,13 +100,10 @@ public class GeneratedDatabaseService {
     }
 
     private void drop(String database) {
-        try {
-            var db = connection.client().getDatabase(database);
-            try { db.runCommand(new Document("dropAllUsersFromDatabase", 1)); } catch (RuntimeException none) { }
-            db.drop();
-        } catch (RuntimeException error) {
-            // Best effort: an unreachable database keeps its data until the next cleanup.
-        }
+        var db = connection.client().getDatabase(database);
+        db.runCommand(new Document("dropAllUsersFromDatabase", 1));
+        db.drop();
+        if(db.listCollectionNames().iterator().hasNext())throw new IllegalStateException("Project database cleanup did not complete");
     }
 
     private static String randomPassword() {

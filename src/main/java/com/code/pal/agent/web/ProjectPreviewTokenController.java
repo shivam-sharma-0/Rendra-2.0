@@ -31,30 +31,35 @@ public class ProjectPreviewTokenController {
     private final PreviewService preview;
     private final SiteBuildService builds;
     private final DraftPreviewService drafts;
+    private final com.code.pal.agent.preview.PreviewGrants grants;
 
     @GetMapping
     public PreviewTokenResponse token(@AuthenticationPrincipal AuthPrincipal principal,
                                       @PathVariable UUID projectId) {
         projects.requireAccessible(principal.userId(), projectId);
-        String token = jwt.generatePreviewToken(projectId);
-        // Host-per-site: the project's own stable preview host; otherwise a short-lived path token.
-        String key = sites.hostPerSite() ? projects.previewKey(projectId) : null;
+        var grant=grants.issue(principal,projectId,null);
+        String token = jwt.generatePreviewToken(projectId,null,grant.id());
+        String key = sites.hostPerSite() ? grant.key() : null;
         DraftPreviewService.ActiveDraft active = drafts.activeDraft(projectId);
         Draft draft = null;
         if (active != null) {
-            String draftUrl = key != null ? sites.draftHostUrl(key)
-                    : sites.previewUrl(jwt.generatePreviewToken(projectId, active.runId()));
-            draft = new Draft(active.runId(), active.version(), draftUrl);
+            var draftGrant=grants.issue(principal,projectId,active.runId());
+            String draftUrl = key != null ? sites.draftHostUrl(draftGrant.key())
+                    : sites.previewUrl(jwt.generatePreviewToken(projectId, active.runId(),draftGrant.id()));
+            draft = new Draft(active.runId(), active.version(), draftUrl, draftGrant.expiresAt());
         }
         String url = key != null ? sites.previewHostUrl(key) : sites.previewUrl(token);
-        return new PreviewTokenResponse(token, url, preview.available(projectId), builds.status(projectId), draft);
+        return new PreviewTokenResponse(token, url, preview.available(projectId), builds.status(projectId), draft, grant.expiresAt());
     }
+    @org.springframework.web.bind.annotation.DeleteMapping
+    @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+    public void revoke(@AuthenticationPrincipal AuthPrincipal actor,@PathVariable UUID projectId){grants.revoke(actor,projectId);}
 
     /**
      * {@code available}: there is something to show (a built site, or a static site's own files).
      * {@code draft}: the running build's unvalidated changes, while there are some to show.
      */
-    public record PreviewTokenResponse(String token, String url, boolean available, SiteBuildService.PreviewStatus status, Draft draft) {}
+    public record PreviewTokenResponse(String token, String url, boolean available, SiteBuildService.PreviewStatus status, Draft draft, java.time.Instant expiresAt) {}
 
-    public record Draft(UUID runId, String version, String url) {}
+    public record Draft(UUID runId, String version, String url, java.time.Instant expiresAt) {}
 }

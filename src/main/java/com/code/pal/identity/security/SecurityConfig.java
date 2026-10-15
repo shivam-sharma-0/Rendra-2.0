@@ -71,8 +71,8 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                // Stateless JWT: no server session cookie to protect, so CSRF is disabled. CORS is
-                // explicit (origin allow-list below) since the SPA is served from a different origin.
+                // Bearer routes do not use browser cookies. Cookie refresh/logout mutations are
+                // protected by CookieMutationOriginFilter's explicit allowed-origin check.
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

@@ -6,7 +6,10 @@ import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.llm.LlmException;
 import com.code.pal.agent.llm.LlmQuotaExceededException;
 import com.code.pal.agent.llm.OpenAiCompatibleLlmClient;
-import com.code.pal.agent.llm.TokenEstimate;
+import com.code.pal.agent.llm.LlmAccountingException;
+import com.code.pal.agent.runtime.RunCancellation;
+import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.llm.LlmAttemptScope;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
@@ -15,86 +18,113 @@ import org.springframework.stereotype.Component;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
-/**
- * The model gateway the application uses: every call goes through the provider client and is recorded
- * in the call ledger ({@link ModelCall}) with who it was for ({@link LlmCallContext}), its tokens,
- * duration and outcome. Calls whose tokens no run total includes (intent, vision, requirements) also
- * reserve their worst case in the user's daily quota here; the agent loop reserves its own calls.
- */
+/** Primary gateway: every call owns durable capacity, including calls displayed in run totals. */
 @Slf4j
 @Primary
 @Component
 public class MeteredLlmClient implements LlmClient {
 
-    private static final int MAX_ERROR = 300;
-
+    private com.code.pal.agent.lease.ProjectLeaseService leases;
     private final LlmClient delegate;
-    private final ModelCallRepository calls;
     private final AgentUsagePolicy usage;
+    private final AgentProperties properties;
+    private ProviderScheduler scheduler;
+    @Autowired void useScheduler(ProviderScheduler scheduler){this.scheduler=scheduler;}
 
     @Autowired
-    public MeteredLlmClient(OpenAiCompatibleLlmClient delegate, ModelCallRepository calls, AgentUsagePolicy usage) {
-        this((LlmClient) delegate, calls, usage);
+    public MeteredLlmClient(OpenAiCompatibleLlmClient delegate, AgentUsagePolicy usage, AgentProperties properties,com.code.pal.agent.lease.ProjectLeaseService leases) {
+        this((LlmClient)delegate,usage,properties);this.leases=leases;
     }
 
-    MeteredLlmClient(LlmClient delegate, ModelCallRepository calls, AgentUsagePolicy usage) {
+    public MeteredLlmClient(OpenAiCompatibleLlmClient delegate, AgentUsagePolicy usage, AgentProperties properties) {
+        this((LlmClient) delegate, usage, properties);
+    }
+
+    MeteredLlmClient(LlmClient delegate, AgentUsagePolicy usage, AgentProperties properties) {
         this.delegate = delegate;
-        this.calls = calls;
         this.usage = usage;
+        this.properties = properties;
     }
 
     @Override
-    public LlmResult chatStreaming(LlmRequest request, Consumer<String> onTextDelta) {
+    public LlmResult chatStreaming(LlmRequest original, Consumer<String> onTextDelta) {
+        if (RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted()) throw new LlmCancelledException();
         LlmCallContext context = LlmCallContext.current();
-        long estimate = TokenEstimate.input(request);
-        int cap = request.maxTokens() == null ? 0 : request.maxTokens();
-        AgentUsagePolicy.Reservation reservation = null;
-        if (!context.countedInRun() && context.userId() != null) {
-            reservation = usage.reserve(context.userId(), estimate + cap);
-            if (!reservation.granted()) {
-                record(context, request, estimate, 0, "REFUSED", reservation.refusal(), null);
-                throw new LlmQuotaExceededException(reservation.refusal());
+        if (context.userId() == null) throw new LlmAccountingException("This model call has no accounting owner");
+        int cap = original.maxTokens() == null ? properties.getLlm().getMaxOutputTokens() : original.maxTokens();
+        String provider = original.provider() == null || original.provider().isBlank() ? "openrouter" : original.provider().trim().toLowerCase(java.util.Locale.ROOT);
+        LlmRequest request = new LlmRequest(provider, original.model(), original.messages(), original.tools(),
+                original.temperature(), original.budget(), original.toolChoice(), cap,original.jsonSchema());
+        java.util.UUID logicalId = java.util.UUID.randomUUID();
+        if (delegate instanceof OpenAiCompatibleLlmClient) {
+            try (var ignored = LlmAttemptScope.bind((attempt, transmission) ->
+                    executeAttempt(context, attempt, logicalId, transmission))) {
+                return delegate.chatStreaming(request, onTextDelta);
             }
         }
+        return executeAttempt(context, request, logicalId, () -> delegate.chatStreaming(request, onTextDelta));
+    }
+
+    private LlmResult executeAttempt(LlmCallContext context, LlmRequest request, java.util.UUID logicalId,
+                                     java.util.function.Supplier<LlmResult> transmission) {
+        if (RunCancellation.current().isCancelled()) throw new LlmCancelledException();
+        if(leases!=null && context.runId()!=null) leases.checkCurrent(context.projectId());
+        long estimate = VerifiedTokenBounds.reservationInput(properties, request);
+        long admissionStarted=System.nanoTime();
+        try(var permit=scheduler==null?null:scheduler.acquire(context,request);
+            var closed=LlmAttemptScope.onResponseClosed(()->{if(permit!=null)permit.completed();})) {
+        if(request.budget()!=null && System.nanoTime()-admissionStarted>=request.budget().toNanos())throw new LlmException("Scheduling exhausted the attempt budget before reservation/transmission");
+        DailyTokenBudget.Grant grant = usage.reserve(context, request, estimate, logicalId, java.util.UUID.randomUUID());
+        if (!grant.granted()) throw new LlmQuotaExceededException(grant.refusal());
+        try {
+            if (RunCancellation.current().isCancelled()) {
+                usage.releaseUnsent(grant.id());
+                throw new LlmCancelledException();
+            }
+            usage.markSent(grant.id());
+            if(permit!=null)permit.sent();
+        } catch (LlmCancelledException cancelled) { throw cancelled; }
+        catch (RuntimeException unavailable) {
+            // A stale reservation or midnight refusal is safe to release only while durably unsent.
+            try { usage.releaseUnsent(grant.id()); } catch (RuntimeException ambiguous) { /* keep held */ }
+            if(unavailable instanceof LlmQuotaExceededException refused) throw refused;
+            throw new LlmAccountingException(unavailable);
+        }
         long started = System.nanoTime();
-        try {
-            LlmResult result = delegate.chatStreaming(request, onTextDelta);
-            record(context, request, estimate, started, "OK", null, result.usage());
-            return result;
-        } catch (LlmCancelledException cancelled) {
-            record(context, request, estimate, started, "CANCELLED", null, null);
+        LlmResult result;
+        try { result = transmission.get();if(permit!=null)permit.completed(); }
+        catch (LlmCancelledException cancelled) {
+            finish(grant, started, "CANCELLED", null, null);
             throw cancelled;
-        } catch (LlmException failed) {
-            record(context, request, estimate, started, "FAILED", failed.getMessage(), null);
+        } catch (RuntimeException failed) {
+            if(permit!=null && failed instanceof com.code.pal.agent.llm.LlmHttpException)permit.completed();
+            boolean rejected=failed instanceof com.code.pal.agent.llm.LlmHttpException http && java.util.Set.of(400,401,403,404,405,410,413,415,422,429).contains(http.status())
+                    || failed instanceof com.code.pal.agent.llm.RetryableLlmException retry && retry.rateLimited();
+            finish(grant, started, "FAILED", failureCode(failed), rejected?new Usage(0,0):null);
             throw failed;
-        } finally {
-            // After the ledger row is saved, so the call's tokens are never counted nowhere in between.
-            usage.release(reservation);
+        }
+        finish(grant, started, "OK", null, result.usage());
+        if (usage.boundExceeded(grant.id()))
+            throw new LlmAccountingException("Provider usage exceeded its verified limit; new calls are suspended");
+        return result;
         }
     }
 
-    /** Never fails the call: a ledger that cannot be written is logged and skipped. */
-    private void record(LlmCallContext context, LlmRequest request, long estimate, long startedNanos, String outcome,
-                        String error, Usage used) {
+    private void finish(DailyTokenBudget.Grant grant, long started, String outcome, String error, Usage report) {
         try {
-            calls.save(ModelCall.builder()
-                    .userId(context.userId()).projectId(context.projectId()).runId(context.runId())
-                    .purpose(context.purpose().name()).provider(request.provider()).model(request.model())
-                    .promptTokens(used == null ? 0 : used.promptTokens())
-                    .completionTokens(used == null ? 0 : used.completionTokens())
-                    .estimatedInputTokens((int) Math.min(Integer.MAX_VALUE, estimate))
-                    .maxTokens(request.maxTokens())
-                    .durationMs(startedNanos == 0 ? 0 : (int) TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos))
-                    .outcome(outcome).error(clip(error)).countedInRun(context.countedInRun())
-                    .build());
-        } catch (RuntimeException e) {
-            log.warn("model_call_ledger_failed purpose={} outcome={} reason={}", context.purpose(), outcome, e.getMessage());
+            usage.finishAttempt(grant.id(), report, outcome, error,
+                    (int) Math.min(Integer.MAX_VALUE, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)));
+        } catch (RuntimeException unavailable) {
+            // Retaining the full bound is safe even if the ledger write or settlement failed/was ambiguous.
+            try { usage.retainUnknown(grant.id()); }
+            catch (RuntimeException stillUnavailable) { log.warn("model_attempt_accounting_pending attemptId={}", grant.id()); }
+            throw new LlmAccountingException(unavailable);
         }
     }
 
-    private static String clip(String value) {
-        if (value == null || value.isBlank()) return null;
-        String trimmed = value.strip();
-        return trimmed.length() <= MAX_ERROR ? trimmed : trimmed.substring(0, MAX_ERROR);
+    private static String failureCode(RuntimeException failure) {
+        if(failure instanceof com.code.pal.agent.llm.RetryableLlmException retry && retry.rateLimited())return "HTTP 429";
+        if (failure instanceof com.code.pal.agent.llm.LlmHttpException http) return "HTTP " + http.status();
+        return failure.getClass().getSimpleName(); // No upstream response bodies, prompts or credentials in the ledger.
     }
 }

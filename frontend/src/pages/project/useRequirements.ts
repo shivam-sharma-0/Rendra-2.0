@@ -22,32 +22,52 @@ export function useRequirements(id: string, project: Project | null, setProject:
     })
   }, [id, project])
 
+  useEffect(() => {
+    if (!requirements?.processing && requirements?.artifactStatus !== 'PENDING') return
+    let active = true
+    let inFlight = false
+    const timer = window.setInterval(() => {
+      if (inFlight || requirementsBusy) return
+      inFlight = true
+      void requirementsApi.start(id).then((latest) => {
+        if (active) setRequirements(latest)
+      }).catch((error) => {
+        if (active) setRequirementsError(error instanceof Error ? error.message : 'Requirements update is pending.')
+      }).finally(() => { inFlight = false })
+    }, 1500)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [id, requirements?.processing, requirements?.artifactStatus, requirementsBusy])
+
   const answerRequirement = useCallback(async (questionId: string, selectedOption: string | null, otherText: string | null) => {
     setRequirementsBusy(true)
     setRequirementsError('')
     try {
-      setRequirements(await requirementsApi.answer(id, questionId, { selectedOption, otherText }))
+      if (!requirements) return
+      setRequirements(await requirementsApi.answer(id, questionId, { selectedOption, otherText, revision: requirements.revision }))
     } catch (error) {
       setRequirementsError(error instanceof Error ? error.message : 'Could not save this answer.')
+      try { setRequirements(await requirementsApi.get(id)) } catch { /* Retain the visible state if refresh is unavailable. */ }
       throw error
     } finally {
       setRequirementsBusy(false)
     }
-  }, [id])
+  }, [id, requirements])
 
   const approveRequirements = useCallback(async () => {
     setRequirementsBusy(true)
     setRequirementsError('')
     try {
-      setRequirements(await requirementsApi.approve(id))
+      if (!requirements) return
+      setRequirements(await requirementsApi.approve(id, requirements.revision))
       setProject((current) => current ? { ...current, lifecycleStage: 'DESIGN' } : current)
       onApproved()
     } catch (error) {
       setRequirementsError(error instanceof Error ? error.message : 'Could not approve requirements.')
+      try { setRequirements(await requirementsApi.get(id)) } catch { /* Keep the approval error visible. */ }
     } finally {
       setRequirementsBusy(false)
     }
-  }, [id, setProject, onApproved])
+  }, [id, requirements, setProject, onApproved])
 
   const skipRequirements = useCallback(async () => {
     if (!requirements) return
@@ -61,11 +81,11 @@ export function useRequirements(id: string, project: Project | null, setProject:
           ?? question.options.find((option) => option.recommended)?.id
           ?? question.options[0]?.id
         if (!recommended) continue
-        latest = await requirementsApi.answer(id, question.id, { selectedOption: recommended, otherText: null })
+        latest = await requirementsApi.answer(id, question.id, { selectedOption: recommended, otherText: null, revision: latest.revision })
       }
       setRequirements(latest)
-      if (latest.complete) {
-        const approved = await requirementsApi.approve(id)
+      if (latest.complete && latest.status === 'APPROVAL_REQUIRED' && !latest.processing) {
+        const approved = await requirementsApi.approve(id, latest.revision)
         setRequirements(approved)
         setProject((current) => current ? { ...current, lifecycleStage: 'DESIGN' } : current)
         onApproved()

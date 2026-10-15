@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { session } from '../auth/api'
+import { realtimeAccess } from '../auth/api'
 
 /** One frame on the realtime socket — mirrors the backend {@code RealtimeMessage} envelope. */
 export type RealtimeMessage = { type: string; payload?: unknown }
@@ -68,9 +68,9 @@ export function useRealtime({ projectId, enabled = true, onMessage, onStatusChan
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined
     let pingTimer: ReturnType<typeof setInterval> | undefined
 
-    const connect = () => {
-      const token = session.access()
-      if (!token || !projectId) return // nothing to auth with; a later mount will retry
+    const connect = async () => {
+      const token = await realtimeAccess()
+      if (closedByUs || !token || !projectId) return
 
       setPhase('connecting')
       const ws = new WebSocket(realtimeUrl(token, projectId))

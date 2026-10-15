@@ -75,4 +75,20 @@ class DeletedProjectCleanupTest {
         verify(queue).requestCancel(run.getId());
         assertTrue(Files.exists(deleted.dir()), "files go in the sweep, after the run has stopped");
     }
+    @Test void durableLeaseAndPendingRecoveryProtectFilesWhenRedisHasNoLock() {
+        var leases=mock(com.code.pal.agent.lease.ProjectLeaseService.class);cleanup.useLeases(leases);
+        doAnswer(c->{((Runnable)c.getArgument(1)).run();return null;}).when(leases).guarded(any(),any(Runnable.class));
+        when(leases.hasLiveLease(deleted.projectId)).thenReturn(true);
+        cleanup.sweep();assertTrue(Files.exists(deleted.path("src/App.tsx")));
+        when(leases.hasLiveLease(deleted.projectId)).thenReturn(false);
+        doThrow(new IllegalStateException("Fixture pending restore")).when(leases).guarded(any(),any(Runnable.class));
+        cleanup.sweep();assertTrue(Files.exists(deleted.path("src/App.tsx")));
+    }
+    @Test void databaseCleanupIsRetriedAfterTheProjectFolderHasAlreadyGone() {
+        var jobs=mock(DeletedProjectCleanupJobs.class);var databases=mock(com.code.pal.project.database.GeneratedDatabaseService.class);
+        var worker=new DeletedProjectCleanup(projects,runs,queue,deleted.sandbox,deleted.storage,databases);worker.useJobs(jobs);
+        when(jobs.pending()).thenReturn(List.of(deleted.projectId));doThrow(new IllegalStateException("Mongo unavailable")).doNothing().when(databases).dropAll(deleted.projectId);
+        worker.sweep();assertFalse(Files.exists(deleted.dir()));verify(jobs,never()).completed(any());
+        worker.sweep();verify(databases,times(2)).dropAll(deleted.projectId);verify(jobs).completed(deleted.projectId);
+    }
 }

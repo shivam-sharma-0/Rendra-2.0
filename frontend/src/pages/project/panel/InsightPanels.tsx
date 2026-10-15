@@ -10,7 +10,12 @@ export function AnalyticsPanel({ projectId, active }: { projectId: string; activ
   const stats: [string, string | number][] = [
     ['Builds', data.totalRuns], ['Completed', data.completedRuns], ['Failed', data.failedRuns],
     ['Success rate', `${rate}%`], ['Messages', data.totalMessages], ['Files', data.fileCount],
-    ['Tokens used', data.totalTokens.toLocaleString()], ['Status', data.deploymentStatus.toLowerCase()],
+    ['Tokens charged or held', data.totalTokens.toLocaleString()], ['Status', data.deploymentStatus.toLowerCase()],
+    ...(data.reportedTokens === undefined ? [] : [
+      ['Reported tokens', data.reportedTokens.toLocaleString()], ['Unreported usage held', (data.unknownTokens ?? 0).toLocaleString()],
+      ['Active reservations', (data.reservedTokens ?? 0).toLocaleString()], ['Provider attempts', data.actualAttempts ?? 0],
+      ['Logical calls', data.logicalCalls ?? 0], ['Historical attempt records', data.historicalAttemptRecords ?? 0],
+    ] as [string, string | number][]),
   ]
   return (
     <div className="pv-page">

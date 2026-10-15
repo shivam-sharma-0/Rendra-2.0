@@ -89,7 +89,7 @@ class DockerProjectEnvironmentDockerIT {
     @Test
     void generatedCodeHasNoNetworkAndOldContainersAreRecreatedOnTheProjectFolder() throws Exception {
         UUID projectId = newProject();
-        String container = properties.getSandbox().getContainerPrefix() + projectId;
+        String container = new DockerProjectEnvironment(properties).primaryContainerName(projectId);
         String volume = "codepal-project-" + projectId;
         try {
             // A container as earlier code created it: bridge network, root, files in a named volume.
@@ -134,7 +134,8 @@ class DockerProjectEnvironmentDockerIT {
         org.mockito.Mockito.when(changes.save(org.mockito.ArgumentMatchers.any())).thenAnswer(call -> call.getArgument(0));
         var service = new com.code.pal.agent.change.ChangeSetService(changes,
                 org.mockito.Mockito.mock(com.code.pal.agent.repository.AgentRunRepository.class),
-                new tools.jackson.databind.ObjectMapper(), properties, files, sandbox);
+                new tools.jackson.databind.ObjectMapper(), properties, files, sandbox,
+                org.mockito.Mockito.mock(com.code.pal.project.service.ProjectService.class));
         UUID projectId = newProject();
 
         List<UUID> builds = List.of(UUID.randomUUID(), UUID.randomUUID());
@@ -278,7 +279,7 @@ class DockerProjectEnvironmentDockerIT {
 
     private UUID newProject() {
         UUID projectId = UUID.randomUUID();
-        containers.add(properties.getSandbox().getContainerPrefix() + projectId);
+        containers.add(new DockerProjectEnvironment(properties).primaryContainerName(projectId));
         return projectId;
     }
 

@@ -188,3 +188,9 @@ button.ft-row:focus-visible { outline: 2px solid var(--neu-focus); outline-offse
   .pv-root { animation: none; }
   .pv-frame, .pv-device, .ft-caret { transition: none; }
 }
+.pv-failed-draft { padding: 1rem; border: 1px solid var(--neu-dashed); border-radius: 12px; }
+.pv-failed-draft p { margin-block: .75rem; }
+.pv-failed-draft__actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-bottom: 1rem; }
+.pv-failed-draft label { display: grid; gap: .5rem; }
+.pv-failed-draft select { max-width: 100%; padding: .5rem; color: inherit; background: var(--neu-surface); }
+.pv-failed-draft__source { max-height: 32rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; padding: .75rem; }

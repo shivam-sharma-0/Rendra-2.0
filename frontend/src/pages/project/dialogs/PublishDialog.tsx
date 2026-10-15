@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { projectApi, type Project } from '../../../api/projects'
 import { AppIcon } from '../../../components/icons'
 import { NeuAlert, NeuButton, NeuDialog } from '../../../components/neu'
@@ -11,6 +11,13 @@ export function PublishDialog({ project, onClose, onChange }: { project: Project
   const [error, setError] = useState('')
   const live = project.deploymentStatus === 'LIVE'
   const url = project.publishedUrl ?? ''
+  const [capability, setCapability] = useState<{ available: boolean; reason: string | null } | null>(null)
+  useEffect(() => {
+    let current = true
+    setCapability(null)
+    void projectApi.publishCapability(project.id).then(value => { if (current) setCapability(value) }).catch(() => { if (current) setCapability({ available: false, reason: 'Publishing is unavailable. Please try again later.' }) })
+    return () => { current = false }
+  }, [project.id])
 
   const run = async (action: () => Promise<Project>) => {
     setBusy(true)
@@ -31,10 +38,10 @@ export function PublishDialog({ project, onClose, onChange }: { project: Project
       footer={live ? (
         <>
           <NeuButton onClick={() => void run(() => projectApi.unpublish(project.id))} disabled={busy}>{busy ? 'Working…' : 'Unpublish'}</NeuButton>
-          <NeuButton variant="accent" onClick={() => void run(() => projectApi.publish(project.id))} disabled={busy}>{busy ? 'Working…' : 'Re-publish'}</NeuButton>
+          <NeuButton variant="accent" onClick={() => void run(() => projectApi.publish(project.id))} disabled={busy || !capability?.available}>{busy ? 'Working…' : 'Re-publish'}</NeuButton>
         </>
       ) : (
-        <NeuButton variant="accent" onClick={() => void run(() => projectApi.publish(project.id))} disabled={busy}>{busy ? 'Publishing…' : 'Publish now'}</NeuButton>
+        <NeuButton variant="accent" onClick={() => void run(() => projectApi.publish(project.id))} disabled={busy || !capability?.available}>{busy ? 'Publishing…' : 'Publish now'}</NeuButton>
       )}
     >
       {live && url && (
@@ -46,6 +53,8 @@ export function PublishDialog({ project, onClose, onChange }: { project: Project
         </div>
       )}
       {error && <NeuAlert>{error}</NeuAlert>}
+      {!capability && <p role="status">Checking publishing availability…</p>}
+      {capability && !capability.available && <NeuAlert>{capability.reason}</NeuAlert>}
       <p className="dl-note">Static hosting — serves your project's built files. Server-rendered apps are coming soon.</p>
     </NeuDialog>
   )

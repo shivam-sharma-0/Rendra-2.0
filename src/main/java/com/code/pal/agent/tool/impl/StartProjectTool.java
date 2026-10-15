@@ -7,7 +7,6 @@ import com.code.pal.agent.tool.AgentTool;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -21,6 +20,12 @@ public class StartProjectTool implements AgentTool {
     private static final List<String> MANIFESTS = List.of("package.json", "client/package.json", "server/package.json");
 
     private final ChangeSetService changeSets;
+    private com.code.pal.project.capability.BuildDecisions buildDecisions;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setBuildDecisions(com.code.pal.project.capability.BuildDecisions decisions) {
+        this.buildDecisions = java.util.Objects.requireNonNull(decisions);
+    }
 
     @Override
     public String name() { return "startProject"; }
@@ -29,7 +34,7 @@ public class StartProjectTool implements AgentTool {
     public String description() {
         return "Set up a new app from a tested starter: \"vite-react\" (Vite + React + TypeScript + Tailwind) or \"mern\" "
                 + "(that app in client/ plus an Express + MongoDB API in server/). Writes package.json with versions that work "
-                + "together, tsconfig.json, vite.config.ts, index.html, src/main.tsx and src/index.css (for mern also "
+                + "together, a tested package-lock.json and runtime metadata, tsconfig.json, vite.config.ts, index.html, src/main.tsx and src/index.css (for mern also "
                 + "server/package.json, server/tsconfig.json and server/src/index.ts with /api/health and the database "
                 + "connection). Call it once, after setPlan, in a project without package.json; then write src/App.tsx and the "
                 + "rest. Never write these setup files yourself; only add a package to package.json when the app needs one.";
@@ -53,24 +58,24 @@ public class StartProjectTool implements AgentTool {
         Object stack = args.get("stack");
         Starter starter = Starter.of(stack == null ? "" : stack.toString())
                 .orElseThrow(() -> new IllegalArgumentException("stack must be \"vite-react\" or \"mern\""));
+        if (buildDecisions != null) buildDecisions.requireStarter(context.projectId(), starter.id());
         for (String manifest : MANIFESTS) {
             if (context.files().exists(context.projectId(), context.root(), manifest)) {
                 throw new IllegalArgumentException("The project already has " + manifest + ": keep its setup and stack");
             }
         }
         Map<String, String> files = starter.files(args.get("title") == null ? null : args.get("title").toString());
-        // All or nothing: a file the model already wrote would leave a half-written setup.
+        // Report existing setup clearly; the batch also repeats preflight inside its critical section.
         List<String> existing = files.keySet().stream()
                 .filter(path -> context.files().exists(context.projectId(), context.root(), path)).toList();
         if (!existing.isEmpty()) {
             throw new IllegalArgumentException("These files already exist: " + String.join(", ", existing)
                     + ". Delete them first, or keep the existing setup and do not call startProject.");
         }
-        List<String> created = new ArrayList<>();
-        files.forEach((path, content) -> {
-            changeSets.create(context, path, content);
-            created.add(path);
-        });
-        return Map.of("stack", starter.id(), "createdFiles", List.copyOf(created), "next", starter.next());
+        List<String> created = changeSets.createBatch(context, files.entrySet().stream()
+                .map(entry -> new ChangeSetService.NewFile(entry.getKey(), entry.getValue())).toList())
+                .stream().map(ChangeSetService.MutationResult::path).toList();
+        return Map.of("stack", starter.id(), "templateVersion", Starter.TEMPLATE_VERSION,
+                "createdFiles", List.copyOf(created), "next", starter.next());
     }
 }

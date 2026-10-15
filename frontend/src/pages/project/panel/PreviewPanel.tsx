@@ -36,15 +36,18 @@ export function PreviewPanel({ project, update, draftUpdate, reloadRequest, devi
     setPreviewError(false)
     if (!projectId) return
     let cancelled = false
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined
     void projectApi.previewToken(projectId)
       .then((response) => {
         if (cancelled) return
         setPreview({ url: response.url, available: response.available, draft: response.draft })
         setStatus(response.status)
         shownVersion.current = response.status.version
+        const expires = Math.min(Date.parse(response.expiresAt), response.draft ? Date.parse(response.draft.expiresAt) : Infinity)
+        if (Number.isFinite(expires)) refreshTimer = setTimeout(() => setReloads(n => n + 1), Math.max(1000, expires - Date.now() - 30_000))
       })
       .catch(() => { if (!cancelled) setPreviewError(true) })
-    return () => { cancelled = true }
+    return () => { cancelled = true; if (refreshTimer) clearTimeout(refreshTimer) }
   }, [projectId, reloads])
 
   // A finished build with new content reloads the frame; building/failed only change the status line,

@@ -17,7 +17,7 @@ type PanelHeaderProps = {
   /** Always rendered and invisible: the labelled tabs, measured to decide where the tabs go. */
   measure: ReactNode
   /** Stop is shown while a run is active; Restore when the latest build can be rolled back. */
-  run: { active: boolean; cancelling: boolean; onCancel: () => void; canRollback: boolean; rollingBack: boolean; onRollback: () => void }
+  run: { active: boolean; saving?: boolean; cancelling: boolean; onCancel: () => void; canRollback: boolean; rollingBack: boolean; onRollback: () => void }
   published: boolean
   onShare: () => void
   onPublish: () => void
@@ -44,7 +44,7 @@ export const PanelHeader = forwardRef<HTMLDivElement, PanelHeaderProps>(function
       {lead}
       <div className="ws-phead__actions" ref={actionsRef}>
         {run.active && (
-          <NeuButton size="sm" onClick={run.onCancel} disabled={run.cancelling}>{run.cancelling ? 'Stopping…' : 'Stop'}</NeuButton>
+          <NeuButton size="sm" onClick={run.onCancel} disabled={run.cancelling || run.saving}>{run.saving ? 'Saving...' : run.cancelling ? 'Stopping…' : 'Stop'}</NeuButton>
         )}
         {run.canRollback && (
           <NeuIconButton

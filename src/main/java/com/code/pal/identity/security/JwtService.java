@@ -60,11 +60,13 @@ public class JwtService {
     public String generateAccessToken(User user) {
         return build(user, ACCESS, accessExpiryMs);
     }
+    public String generateAccessToken(User user,java.util.UUID session){return build(user,ACCESS,accessExpiryMs,session);}
 
     /** Long-lived token used only to mint new access tokens at {@code /api/auth/refresh}. */
     public String generateRefreshToken(User user) {
         return build(user, REFRESH, refreshExpiryMs);
     }
+    public String generateRefreshToken(User user,java.util.UUID session){return build(user,REFRESH,refreshExpiryMs,session);}
 
     /** Short-lived bearer-less URL token used only by an authenticated project's preview iframe. */
     public String generatePreviewToken(java.util.UUID projectId) {
@@ -73,8 +75,12 @@ public class JwtService {
 
     /** A preview token for one run's draft; {@code draftRunId} null is the project's normal preview. */
     public String generatePreviewToken(java.util.UUID projectId, java.util.UUID draftRunId) {
+        return generatePreviewToken(projectId,draftRunId,null);
+    }
+    public String generatePreviewToken(java.util.UUID projectId,java.util.UUID draftRunId,java.util.UUID grantId) {
         Instant now = Instant.now();
         var builder = Jwts.builder();
+        if(grantId!=null)builder.claim("gid",grantId.toString());
         if (draftRunId != null) builder.claim(CLAIM_DRAFT_RUN, draftRunId.toString());
         return builder
                 .subject(projectId.toString())
@@ -87,8 +93,13 @@ public class JwtService {
     }
 
     private String build(User user, String type, long ttlMs) {
+        return build(user,type,ttlMs,null);
+    }
+    private String build(User user,String type,long ttlMs,java.util.UUID session) {
         Instant now = Instant.now();
         return Jwts.builder()
+                .id(java.util.UUID.randomUUID().toString())
+                .claim("sid",session==null?null:session.toString())
                 .subject(user.getEmail())
                 .claim(CLAIM_TYPE, type)
                 .claim(CLAIM_USER_ID, user.getId())
@@ -114,8 +125,9 @@ public class JwtService {
                 claims.get(CLAIM_USER_ID, Long.class),
                 java.util.UUID.fromString(claims.get(CLAIM_PUBLIC_ID, String.class)),
                 claims.getSubject(),
-                claims.get(CLAIM_ROLE, String.class));
+                claims.get(CLAIM_ROLE, String.class),sessionId(claims));
     }
+    public java.util.UUID sessionId(Claims claims){String value=claims.get("sid",String.class);return value==null?null:java.util.UUID.fromString(value);}
 
     public String tokenType(Claims claims) {
         return claims.get(CLAIM_TYPE, String.class);
@@ -125,6 +137,7 @@ public class JwtService {
         if (!PREVIEW.equals(tokenType(claims))) throw new IllegalArgumentException("Not a preview token");
         return java.util.UUID.fromString(claims.get(CLAIM_PROJECT_ID, String.class));
     }
+    public java.util.UUID previewGrantId(Claims claims){String id=claims.get("gid",String.class);return id==null?null:java.util.UUID.fromString(id);}
 
     /** The run whose draft a preview token shows, or null for the normal preview. */
     public java.util.UUID previewDraftRun(Claims claims) {

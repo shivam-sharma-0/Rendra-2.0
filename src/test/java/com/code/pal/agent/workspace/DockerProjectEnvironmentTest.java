@@ -208,31 +208,54 @@ class DockerProjectEnvironmentTest {
     private static final String KILL_ALL = "kill -KILL -1 2>/dev/null; true";
 
     @Test
-    void stopKillsTheCommandInsideTheContainer() throws Exception {
+    void stopRemovesOnlyItsOwnedCommandContainer() throws Exception {
         FakeDocker docker = new FakeDocker();
         DockerProjectEnvironment sandbox = sandbox(docker, new MutableClock());
         UUID projectId = UUID.randomUUID();
         sandbox.ensure(projectId);
 
+        String candidate=".codepal/candidate";
+        java.nio.file.Path base=java.nio.file.Path.of(sandboxPath(sandbox));
+        java.nio.file.Files.createDirectories(base.resolve(projectId.toString()).resolve(candidate));
         docker.blockExec = new CountDownLatch(1);
         com.code.pal.agent.runtime.RunCancellation run = new com.code.pal.agent.runtime.RunCancellation(UUID.randomUUID());
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {
             Future<CommandResult> running = pool.submit(() -> {
                 try (var bound = com.code.pal.agent.runtime.RunCancellation.bind(run)) {
-                    return sandbox.exec(projectId, List.of("npm", "run", "build"));
+                    return sandbox.exec(projectId,candidate,List.of("npm", "run", "build"));
                 }
             });
             assertTrue(docker.execStarted.await(5, TimeUnit.SECONDS));
-            run.cancel();
-            assertTrue(docker.calls.stream().anyMatch(call -> call.get(0).equals("exec") && call.contains(KILL_ALL)),
-                    "a Stop must kill the processes inside the container");
-            docker.blockExec.countDown();
-            running.get(5, TimeUnit.SECONDS);
+            long started=System.nanoTime();run.cancel();
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started)<200,"Stop hook must return promptly");
+            docker.blockExec.countDown();assertTrue(running.get(5,TimeUnit.SECONDS).cancelled());
+            var created=docker.calls.stream().filter(call->call.get(0).equals("create")).findFirst().orElseThrow();
+            String owned=created.get(created.indexOf("--name")+1);
+            assertTrue(docker.calls.stream().anyMatch(call->call.get(0).equals("rm") && call.contains(owned)));
+            assertTrue(docker.calls.stream().noneMatch(call->call.contains(KILL_ALL)));
+            assertTrue(docker.running,"persistent preview/process container stays alive");
         } finally {
             docker.blockExec.countDown();
             pool.shutdownNow();
         }
+    }
+
+    @Test void trustedCopyCannotStartWithoutDurableIoOwnership() {
+        FakeDocker docker=new FakeDocker();var sandbox=sandbox(docker,new MutableClock());UUID project=UUID.randomUUID();sandbox.ensure(project);
+        var io=org.mockito.Mockito.mock(com.code.pal.agent.lease.TrustedProjectIo.class);sandbox.useTrustedIo(io);
+        org.mockito.Mockito.when(io.begin(org.mockito.ArgumentMatchers.eq(project),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+                .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("fixture unavailable"));
+        org.junit.jupiter.api.Assertions.assertThrows(org.springframework.dao.DataAccessResourceFailureException.class,()->sandbox.copyTree(project,".",".codepal/archive"));
+        assertEquals(0,docker.count("create"));
+    }
+    @Test void uncertainTrustedContainerRemovalDoesNotReleaseItsDurableQuarantine() {
+        FakeDocker docker=new FakeDocker();var sandbox=sandbox(docker,new MutableClock());UUID project=UUID.randomUUID();sandbox.ensure(project);
+        var io=org.mockito.Mockito.mock(com.code.pal.agent.lease.TrustedProjectIo.class);sandbox.useTrustedIo(io);UUID operation=UUID.randomUUID();
+        org.mockito.Mockito.when(io.begin(org.mockito.ArgumentMatchers.eq(project),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString())).thenReturn(operation);
+        docker.failTrustedRemoval=true;
+        org.junit.jupiter.api.Assertions.assertThrows(com.code.pal.agent.lease.TrustedOperationPendingException.class,()->sandbox.copyTree(project,".",".codepal/archive"));
+        org.mockito.Mockito.verify(io,org.mockito.Mockito.never()).finish(operation);
     }
 
     @Test
@@ -257,6 +280,10 @@ class DockerProjectEnvironmentTest {
         return new DockerProjectEnvironment(properties, new WorkspaceStorage(properties), docker, clock);
     }
 
+    private static String sandboxPath(DockerProjectEnvironment sandbox) throws Exception {
+        var field=DockerProjectEnvironment.class.getDeclaredField("storage");field.setAccessible(true);
+        return ((WorkspaceStorage)field.get(sandbox)).base().toString();
+    }
     private static final String DOCKER_BASE = "/srv/codepal/workspaces";
 
     private static final class MutableClock extends Clock {
@@ -269,8 +296,9 @@ class DockerProjectEnvironmentTest {
 
     /** Minimal in-memory model of the Docker CLI responses the environment depends on. */
     private static final class FakeDocker implements DockerProjectEnvironment.CommandRunner {
-        final List<List<String>> calls = java.util.Collections.synchronizedList(new ArrayList<>());
+        final List<List<String>> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
         final CountDownLatch execStarted = new CountDownLatch(1);
+        volatile boolean failTrustedRemoval;
         volatile boolean volumeExists;
         volatile boolean containerExists;
         volatile boolean running;
@@ -286,6 +314,8 @@ class DockerProjectEnvironmentTest {
         public CommandResult run(List<String> args, Duration timeout, byte[] stdin, int outputLimit) {
             calls.add(List.copyOf(args));
             String verb = args.get(0);
+            if(verb.equals("info")) return ok("fixture-daemon");
+            if(verb.equals("rm") && args.stream().anyMatch(a->a.startsWith("codepal-trusted-")) && failTrustedRemoval) return result(false,"Error: daemon unavailable");
             if (verb.equals("volume")) {
                 if (args.get(1).equals("inspect")) return result(volumeExists, "");
                 volumeExists = true;
@@ -317,6 +347,14 @@ class DockerProjectEnvironmentTest {
                     mounts = mount.replaceAll("^type=(\\w+),source=([^,]+),.*$", "$1=$2;");
                 }
                 return ok("container-id");
+            }
+            if(verb.equals("create")) return ok("owned-id");
+            if(verb.equals("inspect") && args.contains("{{.State.ExitCode}}")) return ok("0");
+            if(verb.equals("rm") && args.getLast().startsWith("codepal-command-")) return ok("");
+            if(verb.equals("start") && args.contains("-a")) {
+                execStarted.countDown();
+                if(blockExec!=null) try { blockExec.await(5,TimeUnit.SECONDS); } catch(InterruptedException stop) { Thread.currentThread().interrupt(); }
+                return ok("");
             }
             if (verb.equals("rm")) {
                 containerExists = false;

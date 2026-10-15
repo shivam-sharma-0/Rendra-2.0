@@ -73,15 +73,19 @@ public class VisionService {
     public record Brief(String path, String brief, String note) {}
 
     public List<Brief> describe(UUID projectId, List<String> paths, String userRequest) {
+        requireRunning();
         if (paths.isEmpty()) return List.of();
         // Images are read on their own threads: carry the run's Stop signal and call context over to them.
-        RunCancellation cancellation = RunCancellation.current();
         LlmCallContext context = LlmCallContext.current();
+        var fence=com.code.pal.agent.lease.RunFence.current();
+        RunCancellation cancellation = RunCancellation.current()==RunCancellation.NONE
+                ? new RunCancellation(context.runId()==null ? UUID.randomUUID() : context.runId()) : RunCancellation.current();
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<Brief>> pending = new ArrayList<>();
             for (String path : paths) {
                 pending.add(pool.submit(() -> {
-                    try (RunCancellation.Registration stop = RunCancellation.bind(cancellation);
+                    try (var generation=com.code.pal.agent.lease.RunFence.bind(fence);
+                         RunCancellation.Registration stop = RunCancellation.bind(cancellation);
                          LlmCallContext.Scope call = LlmCallContext.bind(context)) {
                         return describeOne(projectId, path, userRequest);
                     }
@@ -92,12 +96,20 @@ public class VisionService {
                 try {
                     briefs.add(pending.get(i).get());
                 } catch (java.util.concurrent.ExecutionException error) {
-                    if (error.getCause() instanceof LlmCancelledException stopped) throw stopped;
+                    if (error.getCause() instanceof com.code.pal.agent.lease.TrustedOperationPendingException || error.getCause() instanceof com.code.pal.agent.lease.LeaseLostException || error.getCause() instanceof LlmCancelledException || error.getCause() instanceof LlmQuotaExceededException
+                            || error.getCause() instanceof com.code.pal.agent.llm.LlmAccountingException) {
+                        cancellation.cancel();pending.forEach(future->future.cancel(true));
+                        throw (RuntimeException)error.getCause();
+                    }
                     briefs.add(new Brief(paths.get(i), null, "could not be read: " + error.getCause().getMessage()));
+                } catch (InterruptedException interrupted) {
+                    cancellation.cancel();pending.forEach(future->future.cancel(true));Thread.currentThread().interrupt();
+                    throw new LlmCancelledException();
                 } catch (Exception error) {
                     briefs.add(new Brief(paths.get(i), null, "could not be read: " + error.getMessage()));
                 }
             }
+            if(cancellation.isCancelled()) throw new LlmCancelledException();
             return briefs;
         }
     }
@@ -118,6 +130,7 @@ public class VisionService {
     }
 
     private Brief describeOne(UUID projectId, String path, String userRequest) {
+        requireRunning();
         String image;
         try {
             image = dataUrl(files.readBytes(projectId, ".", path, MAX_FILE_BYTES));
@@ -125,8 +138,10 @@ public class VisionService {
             return new Brief(path, null, "could not be read");
         }
         if (image == null) return new Brief(path, null, "not an image the vision model can read; use readFile if it is text");
+        requireRunning();
         String prompt = PROMPT.formatted(userRequest == null ? "" : userRequest.strip());
         for (AgentProperties.ModelSelection model : properties.visionModels()) {
+            requireRunning();
             long started = System.nanoTime();
             // Not part of the run's totals: the call ledger counts it (and the quota reserves it).
             try (LlmCallContext.Scope vision = LlmCallContext.purpose(CallPurpose.VISION, false)) {
@@ -139,10 +154,16 @@ public class VisionService {
                             result.content().length(), (System.nanoTime() - started) / 1_000_000);
                     return new Brief(path, result.content(), null);
                 }
+            } catch (com.code.pal.agent.lease.TrustedOperationPendingException pending) {
+                throw pending;
+            } catch (com.code.pal.agent.lease.LeaseLostException lost) {
+                throw lost;
             } catch (LlmCancelledException stopped) {
                 throw stopped;   // the run was stopped: not this model's fault
             } catch (LlmQuotaExceededException quota) {
-                return new Brief(path, null, "could not be read: " + quota.getMessage());
+                throw quota;
+            } catch (com.code.pal.agent.llm.LlmAccountingException accounting) {
+                throw accounting;
             } catch (RuntimeException failure) {
                 log.warn("vision_model_failed model={} reason={}", model.model(), failure.getMessage());
                 // A model this account cannot use is set aside for long, not just a moment.
@@ -155,6 +176,8 @@ public class VisionService {
         }
         return new Brief(path, null, "no vision model could read this image");
     }
+
+    private static void requireRunning() { if(RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted()) throw new LlmCancelledException(); }
 
     /** A JPEG data URL small enough to send inline, or null when the bytes are not a readable image. */
     static String dataUrl(byte[] bytes) {

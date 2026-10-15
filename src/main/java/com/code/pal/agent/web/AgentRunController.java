@@ -45,11 +45,19 @@ public class AgentRunController {
     private final SiteBuildService sites;
     private final AgentActivityMapper activities;
     private final AgentCancellations cancellations;
+    private com.code.pal.agent.change.CodeRestoreService restores;
+    @org.springframework.beans.factory.annotation.Autowired
+    void useRestores(com.code.pal.agent.change.CodeRestoreService restores) {this.restores=restores;}
+    private com.code.pal.agent.contract.ContractStore contracts;
+    private com.code.pal.agent.config.AgentProperties properties;
+    @org.springframework.beans.factory.annotation.Autowired
+    void useContracts(com.code.pal.agent.contract.ContractStore contracts,com.code.pal.agent.config.AgentProperties properties) {this.contracts=contracts;this.properties=properties;}
 
     @GetMapping
     public List<AgentRunResponse> list(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId) {
         projects.requireAccessible(principal.userId(), projectId);
-        return runs.findTop100ByProjectIdOrderByCreatedAtDesc(projectId).stream().map(AgentRunResponse::from).toList();
+        var plans=properties!=null && properties.isStructuredContracts()?contracts.reviewableRuns(projectId):java.util.Set.<UUID>of();
+        return runs.findTop100ByProjectIdOrderByCreatedAtDesc(projectId).stream().map(r->AgentRunResponse.from(r).withPlanAvailable(plans.contains(r.getId()))).toList();
     }
 
     /** The run's user-facing steps after {@code afterSeq} (internal ones — model calls, counters — are left out). */
@@ -90,30 +98,38 @@ public class AgentRunController {
             throw new AgentRunConflictException("This run has no workspace snapshot");
         }
         AgentRun latest = runs.findTopByProjectIdOrderByCreatedAtDesc(projectId).orElse(null);
-        if (latest == null || !latest.getId().equals(runId) || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.QUEUED) {
+        if (latest == null || !latest.getId().equals(runId) || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.COMMITTING || run.getStatus() == RunStatus.QUEUED) {
             throw new AgentRunConflictException("Only the latest completed build can be rolled back");
         }
         String archive = ChangeSetService.archiveFor(run.getSnapshotRef());
         if (archive == null) throw new AgentRunConflictException("This run's snapshot can no longer be restored");
-        sandbox.restoreTree(projectId, archive);
+        if(restores==null) throw new AgentRunConflictException("Verified code restore service unavailable");
+        restores.restore(principal.userId(),run);
         sites.buildLater(projectId);   // rebuild the served site from the restored files
         events.emit(run, AgentStepType.STATUS, "Workspace restored to the snapshot before this run.", null);
     }
 
-    /** Request cancellation of a queued/running agent turn; it stops at once, without committing. */
+    /** Cancellation wins only before the durable save boundary. */
     @PostMapping("/{runId}/cancel")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void cancel(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId, @PathVariable UUID runId) {
-        projects.requireAccessible(principal.userId(), projectId);
+        projects.requireCanEdit(principal.userId(), projectId);
         AgentRun run = requireRun(projectId, runId);
         RunStatus status = run.getStatus();
-        if (status == RunStatus.DONE || status == RunStatus.FAILED || status == RunStatus.CANCELLED) {
+        if (status != RunStatus.RUNNING && status != RunStatus.QUEUED) {
             throw new AgentRunConflictException("This run has already finished");
         }
         // The flag reaches the run wherever it executes (a queued run stops the moment it begins); a run in this
         // process also stops at once, mid model call or sandbox command (other instances poll within ~250 ms).
-        queue.requestCancel(runId);
+        int recorded=runs.recordCancellation(runId, projectId, principal.userId(), java.time.Instant.now());
+        if(recorded==0) {
+            AgentRun current=requireRun(projectId,runId);
+            if(current.getCancelRequestedAt()==null || (current.getStatus()!=RunStatus.RUNNING && current.getStatus()!=RunStatus.QUEUED))
+                throw new AgentRunConflictException("Saving has started or this run has finished; cancellation was not accepted");
+        }
+        // Durable audit is authority. Local signal still reaches this process if Redis is unavailable.
         cancellations.cancelLocal(runId);
+        try { queue.requestCancel(runId); } catch(RuntimeException unavailable) { /* DB cancellation poll will deliver */ }
     }
 
     private AgentRun requireRun(UUID projectId, UUID runId) {

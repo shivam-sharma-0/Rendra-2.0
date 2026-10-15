@@ -48,16 +48,16 @@ public class CreateFilesTool implements AgentTool {
         }
         if (files.size() > 24) throw new IllegalArgumentException("A single batch may contain at most 24 files");
 
-        List<String> created = new ArrayList<>();
+        List<ChangeSetService.NewFile> entries = new ArrayList<>();
         for (Object item : files) {
             if (!(item instanceof Map<?, ?> rawFile)) {
                 throw new IllegalArgumentException("Each files entry must be an object");
             }
             String path = value(rawFile, "path");
             String content = value(rawFile, "content");
-            changeSets.create(context, path, content);
-            created.add(path);
+            entries.add(new ChangeSetService.NewFile(path, content));
         }
+        List<String> created = changeSets.createBatch(context, entries).stream().map(ChangeSetService.MutationResult::path).toList();
         return Map.of("createdFiles", List.copyOf(created));
     }
 

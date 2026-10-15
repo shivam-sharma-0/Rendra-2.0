@@ -33,7 +33,8 @@ public class RequirementController {
     }
 
     @PostMapping("/approve")
-    public RequirementDtos.Session approve(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId) {
-        return requirements.approve(principal.userId(), projectId);
+    public RequirementDtos.Session approve(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId,
+                                          @Valid @RequestBody RequirementDtos.ApprovalRequest request) {
+        return requirements.approve(principal.userId(), projectId, request.revision());
     }
 }

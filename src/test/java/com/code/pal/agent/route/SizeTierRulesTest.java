@@ -103,4 +103,12 @@ class SizeTierRulesTest {
         assertEquals(List.of("new project", "first build installs dependencies"), first.reasons());
         assertEquals(small, small.withLongerTimeout(60_000, "shorter"), "never shortens");
     }
+    @Test void negatedCapabilitiesAndActualBackendFeaturesHaveDifferentScope() {
+        assertEquals(SizeTier.S,newBuild("ek page calculator banao without backend, database or login"));
+        assertEquals(SizeTier.S,newBuild("simple timer banao, database nahi chahiye"));
+        assertEquals(SizeTier.M,SizeTierRules.decide(ProjectType.BUILD,"signup authentication aur crud jodo",null,true).tier());
+        var choice=new com.code.pal.project.capability.BuildDecisions.Choice(1,com.code.pal.project.capability.BuildDecisions.Storage.MERN,com.code.pal.project.capability.BuildDecisions.Auth.ACCOUNTS,null);
+        assertEquals(SizeTier.M,SizeTierRules.decide(ProjectType.BUILD,"simple calculator",null,false,choice).tier());
+        assertEquals(SizeTier.S,SizeTierRules.decide(ProjectType.BUILD,"change header color",null,true,choice).tier());
+    }
 }

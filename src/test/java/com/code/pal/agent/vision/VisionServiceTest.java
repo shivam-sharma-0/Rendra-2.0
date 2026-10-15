@@ -75,8 +75,7 @@ class VisionServiceTest {
         VisionService refused = new VisionService((request, onDelta) -> {
             throw new com.code.pal.agent.llm.LlmQuotaExceededException("Not enough of today's AI quota is left for this request.");
         }, properties, project.files);
-        VisionService.Brief brief = refused.describe(project.projectId, List.of("uploads/a.png"), "make it").getFirst();
-        assertNull(brief.brief());
+        assertThrows(com.code.pal.agent.llm.LlmQuotaExceededException.class,()->refused.describe(project.projectId,List.of("uploads/a.png"),"make it"));
         assertTrue(properties.available(only), "quota is not the model's fault");
 
         VisionService stopped = new VisionService((request, onDelta) -> { throw new com.code.pal.agent.llm.LlmCancelledException(); },
@@ -93,6 +92,39 @@ class VisionServiceTest {
             if (request.model().equals("broken-vision")) throw new IllegalStateException("HTTP 503");
             return new LlmClient.LlmResult("A header and two cards.", null, List.of(), new LlmClient.Usage(1, 1), "stop");
         };
+    }
+
+    @Test void stopDuringParallelVisionCancelsAllImagesWithoutFallback() throws Exception {
+        Files.createDirectories(project.path("uploads"));Files.write(project.path("uploads/a.png"),noisyPng(20,20));
+        Files.write(project.path("uploads/b.png"),noisyPng(20,20));
+        var properties=new AgentProperties();properties.getModels().setVision(List.of("fake:first","fake:fallback"));
+        var entered=new java.util.concurrent.CountDownLatch(2);var calls=new java.util.concurrent.atomic.AtomicInteger();
+        var signal=new com.code.pal.agent.runtime.RunCancellation(java.util.UUID.randomUUID());
+        LlmClient waiting=(request,delta)-> {
+            calls.incrementAndGet();entered.countDown();
+            long end=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while(System.nanoTime()<end && !com.code.pal.agent.runtime.RunCancellation.current().isCancelled()) {
+                try { Thread.sleep(10); } catch(InterruptedException interrupted) { Thread.currentThread().interrupt();break; }
+            }
+            throw new com.code.pal.agent.llm.LlmCancelledException();
+        };
+        var vision=new VisionService(waiting,properties,project.files);
+        try(var pool=java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var future=pool.submit(()->{try(var bound=com.code.pal.agent.runtime.RunCancellation.bind(signal)) {
+                return vision.describe(project.projectId,List.of("uploads/a.png","uploads/b.png"),"make it");
+            }});
+            assertTrue(entered.await(3,java.util.concurrent.TimeUnit.SECONDS));signal.cancel();
+            var failed=assertThrows(java.util.concurrent.ExecutionException.class,()->future.get(2,java.util.concurrent.TimeUnit.SECONDS));
+            assertInstanceOf(com.code.pal.agent.llm.LlmCancelledException.class,failed.getCause());assertEquals(2,calls.get());
+        } finally { signal.cancel(); }
+    }
+    @Test void accountingFailureDoesNotTryAnotherVisionModel() throws Exception {
+        Files.createDirectories(project.path("uploads"));Files.write(project.path("uploads/a.png"),noisyPng(20,20));
+        var properties=new AgentProperties();properties.getModels().setVision(List.of("fake:first","fake:fallback"));
+        var calls=new java.util.concurrent.atomic.AtomicInteger();
+        var vision=new VisionService((request,delta)-> { calls.incrementAndGet();throw new com.code.pal.agent.llm.LlmAccountingException("Scripted accounting outage"); },properties,project.files);
+        assertThrows(com.code.pal.agent.llm.LlmAccountingException.class,()->vision.describe(project.projectId,List.of("uploads/a.png"),"make it"));
+        assertEquals(1,calls.get());
     }
 
     private static byte[] noisyPng(int width, int height) throws Exception {

@@ -27,6 +27,7 @@ export default function ProjectPage() {
     hasOlder, loadingOlder, loadOlder,
     editRequest, requestEdit, sendError, send, setFeedback,
     cancel, cancelling, rollback, rollingBack, rollbackRun, rollingBackId, rollbackError,
+    acceptRetriedRun,
   } = useProjectWorkspace(id)
   const { layoutMode, setLayoutMode, narrow, chatWidth, dragging, splitRef, resizePointerDown, resizePointerMove, resizePointerUp } = useSplitLayout()
   // On a narrow screen the two sides take turns instead of splitting.
@@ -40,7 +41,9 @@ export default function ProjectPage() {
   const [previewReloadRequest, setPreviewReloadRequest] = useState(0)
   // The address the preview shows, for the header's "open in a new tab".
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('code')
+  const [tab, setTab] = useState<Tab>('preview')
+  const [detailsRunId, setDetailsRunId] = useState<string | null>(null)
+  useEffect(() => { setDetailsRunId(null); setTab('preview') }, [id])
   const [thinkingPanel, setThinkingPanel] = useState<{ reasoning: string; seconds: number } | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
@@ -73,6 +76,7 @@ export default function ProjectPage() {
 
   const runActive = !!selectedRun && isActive(selectedRun)
   const canRollback = !!selectedRun && selectedRun.mode === 'BUILD' && selectedRun.rollbackAvailable && !runActive
+  const inspectedRun = runs.find(run => run.id === detailsRunId) ?? selectedRun
 
   return (
     <AppShell active="chats" surface="plain">
@@ -106,7 +110,7 @@ export default function ProjectPage() {
           onSend={send}
           onFeedback={(messageId, feedback) => void setFeedback(messageId, feedback)}
           onEdit={requestEdit}
-          onOpenDetails={() => openView('details')}
+          onOpenDetails={(runId) => { setDetailsRunId(runId ?? null); openView('details') }}
           onOpenPreview={() => openView('preview')}
           onOpenThinking={(reasoning, seconds) => {
             setThinkingPanel({ reasoning, seconds })
@@ -139,7 +143,7 @@ export default function ProjectPage() {
           onReloadPreview={() => setPreviewReloadRequest((n) => n + 1)}
           previewUrl={previewUrl}
           run={{
-            active: runActive, cancelling, onCancel: () => void cancel(),
+            active: runActive, saving: selectedRun?.status === 'COMMITTING', cancelling, onCancel: () => void cancel(),
             canRollback, rollingBack, onRollback: () => void rollback(),
           }}
           published={project?.deploymentStatus === 'LIVE'}
@@ -152,13 +156,14 @@ export default function ProjectPage() {
             project={project}
             activeRunId={runActive ? selectedRun?.id ?? null : null}
             runs={runs}
-            selectedRun={selectedRun}
-            steps={steps}
+            selectedRun={tab === 'details' ? inspectedRun : selectedRun}
+            steps={tab === 'details' && inspectedRun ? stepsByRun[inspectedRun.id] ?? [] : steps}
             requirements={requirements}
             thinking={thinkingPanel}
             onCloseThinking={() => { setTab('details'); setThinkingPanel(null) }}
             onRestoreRun={rollbackRun}
             rollingBackId={rollingBackId}
+            onRetried={acceptRetriedRun}
             preview={{ update: previewUpdate, draftUpdate, reloadRequest: previewReloadRequest, device, onUrlChange: setPreviewUrl }}
           />
         </WorkspacePanel>

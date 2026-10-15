@@ -28,6 +28,9 @@ public interface SandboxPort {
     default void verifyEnvironment() {
     }
 
+    /** Recovery only, under the trusted project critical section; false leaves mutations quarantined. */
+    default boolean reconcilePendingOperations(UUID projectId) { return true; }
+
     /** @throws IllegalStateException when the project's files (internal state excluded) exceed the quota */
     void enforceQuota(UUID projectId);
 
@@ -58,6 +61,15 @@ public interface SandboxPort {
      * A result that did not start means no browser is available; callers then skip the check.
      */
     CommandResult browse(UUID projectId, String siteRoot);
+    /** Backend-validated acceptance data; implementations that lack it must report unavailable coverage. */
+    default CommandResult browse(UUID projectId,String siteRoot,String acceptanceJson) {
+        return new CommandResult(false,-1,"",CommandResult.NOT_STARTED+": acceptance browser is unavailable");
+    }
+
+    /** Candidate API selected by the backend. Browser remains offline; no arbitrary URL capability. */
+    default CommandResult browseWithApi(UUID projectId,String siteRoot,String acceptanceJson,ServerEndpoint candidate) {
+        return new CommandResult(false,-1,"",CommandResult.NOT_STARTED+": candidate API browser is unavailable");
+    }
 
     /** {@code relativeRoot} as commands see it, so their output can be mapped back to project paths. */
     String commandPath(UUID projectId, String relativeRoot);

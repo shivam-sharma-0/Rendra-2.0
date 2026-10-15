@@ -10,6 +10,8 @@ public class LlmHttpException extends LlmException {
     }
 
     public int status() { return status; }
+    /** Invalid payload/context must be corrected, not repeated across every configured model. */
+    public boolean terminalRequest(){return status==400 || status==413 || status==422;}
 
     /**
      * The model is not usable with this account for a while: access denied for the model (403, e.g. a

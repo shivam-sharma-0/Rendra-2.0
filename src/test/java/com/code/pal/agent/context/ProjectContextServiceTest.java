@@ -163,6 +163,24 @@ class ProjectContextServiceTest {
     }
 
     @Test
+    void environmentNamesCannotPretendToConnectSupabase() {
+        ProjectContextService service = new ProjectContextService(new AgentProperties(), new ObjectMapper(),
+                id -> java.util.Map.of("VITE_SUPABASE_URL", "secret-url", "VITE_SUPABASE_ANON_KEY", "secret-key"));
+        var decisions = org.mockito.Mockito.mock(com.code.pal.project.capability.BuildDecisions.class);
+        org.mockito.Mockito.when(decisions.state(project.projectId)).thenReturn(
+                new com.code.pal.project.capability.BuildDecisions.State(
+                        new com.code.pal.project.capability.BuildDecisions.Choice(1,
+                                com.code.pal.project.capability.BuildDecisions.Storage.BROWSER,
+                                com.code.pal.project.capability.BuildDecisions.Auth.NONE, null),
+                        new com.code.pal.project.capability.BuildDecisions.Available(true, null), null));
+        service.setBuildDecisions(decisions);
+        String context = service.build(project.files, project.projectId, ".", "Add login", List.of(), List.of()).projectContextMessage();
+        assertTrue(context.startsWith("<platform-build-decision"));
+        assertTrue(context.contains("storage=BROWSER") && context.contains("connection recorded=false"));
+        assertFalse(context.contains("Supabase is connected") || context.contains("secret-url") || context.contains("secret-key"));
+    }
+
+    @Test
     void summarizesImportsAndExportsWithoutReturningSourceBody() throws Exception {
         Path file = workspace.resolve("src/features/auth/Login.tsx");
         Files.createDirectories(file.getParent());

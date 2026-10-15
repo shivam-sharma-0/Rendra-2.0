@@ -62,6 +62,10 @@ public final class AgentRuntimeContext {
     public AgentPhase phase() { return phase; }
     public AgentPlanState plan() { return plan; }
 
+    public void restoreCounters(int iterations,int models,int tools) {
+        if(iterations<0 || models<0 || tools<0) throw new IllegalArgumentException("Invalid saved counters");
+        iteration=iterations;modelCallCount=models;toolCallCount=tools;
+    }
     public void beginIteration() { iteration++; }
     public void recordModelCall() { modelCallCount++; }
     public void recordToolCalls(int count) { toolCallCount += count; }

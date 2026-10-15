@@ -25,6 +25,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Getter
 @Setter
 public class AgentProperties implements org.springframework.context.EnvironmentAware {
+    /** MERN requires coordinator-bound acceptance even when optional structured routes are off. */
+    private boolean fullStackContracts = true;
 
     /**
      * Where the master key is read from: the OS environment and the gitignored secrets file, so the keys
@@ -43,6 +45,30 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     private final Models models = new Models();
     private final Sandbox sandbox = new Sandbox();
     private final Limits limits = new Limits();
+    /** Application request limits for shipped routes; unknown routes require explicit configuration. */
+    private Map<String, AccountingBound> accountingBounds = defaultAccountingBounds();
+    private static Map<String,AccountingBound> defaultAccountingBounds() {
+        var bounds=new LinkedHashMap<String,AccountingBound>();
+        for(String model:List.of("mistral:codestral-latest","mistral:open-mistral-nemo","mistral:ministral-8b-latest","nvidia:nvidia/nemotron-3-super-120b-a12b","nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning","nvidia:meta/llama-3.2-11b-vision-instruct")) {
+            var b=new AccountingBound();b.setInputTokens(65536);b.setOutputTokens(8192);b.setImages(model.contains("omni")||model.contains("vision"));
+            b.setEvidence("Shipped application caps, 2026-10-14; provider context >=128k; see ACCOUNTING_OPERATIONS.md");bounds.put(model,b);
+        }return bounds;
+    }
+    private long smallRunTokenBudget = 500_000;
+    private long mediumRunTokenBudget = 1_000_000;
+    private long largeRunTokenBudget = 1_500_000;
+    private long accountingRecoveryAgeMs = 300_000;
+
+    @Getter @Setter
+    public static class AccountingBound {
+        /** Provider-enforced ceiling including messages, tools, images and hidden input framing. */
+        private long inputTokens;
+        /** Verified max_tokens ceiling, including all billable reasoning/output tokens. */
+        private int outputTokens;
+        private boolean images;
+        /** Operator's verification reference; blank means unsupported. Never put credentials here. */
+        private String evidence;
+    }
     /** Provider-specific endpoints. The legacy {@code llm} block remains the compatibility fallback. */
     private Map<String, Provider> providers = new LinkedHashMap<>();
     private BillingMode billingMode = BillingMode.PAID;
@@ -57,6 +83,8 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
 
     /** Root directory holding one sub-folder per project's code. */
     private String workspaceBasePath = "./workspaces";
+    /** Optional local lock directory; UNC workspaces default to a host-local stable namespace. */
+    private String mutationLockPath = "";
     private int maxIterations = 40;
     /** Hard caps independent of iterations because one response may request several tools. */
     private int maxModelCalls = 40;
@@ -86,6 +114,23 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     private int largeRunMaxModelCalls = 60;
     private int largeRunMaxToolCalls = 150;
     private int workerConcurrency = 2;
+    /** Structured planning/execution is opt-in until its behavioral gates pass. */
+    private boolean structuredContracts = false;
+    /** Separate rollout switch; never enabled by merely enabling structured contracts. */
+    private boolean parallelUnits = false;
+    private final Scheduling scheduling = new Scheduling();
+    @Getter @Setter
+    public static class Scheduling {
+        private boolean enabled=false;
+        private int globalConcurrency=4;
+        private int userConcurrency=2;
+        private int runConcurrency=2;
+        private long maxWaitMs=10000;
+        /** Provider names mapped to an operator-verified shared account group and its concurrent-call cap. */
+        private Map<String,SchedulingPool> pools=new LinkedHashMap<>();
+    }
+    @Getter @Setter
+    public static class SchedulingPool {private String account;private int concurrency;}
     /** Maximum readonly calls from one model response to run at once. */
     private int toolConcurrency = 4;
     /** Coalesce model token deltas before broadcasting a live socket delta. */
@@ -103,12 +148,18 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     private long queuedRecoveryMs = 60_000;
     /** A live worker renews its run's heartbeat + project lock at this interval. */
     private long heartbeatIntervalMs = 15_000;
-    /** After a build first validates, one more turn reviews it against the request and a quality checklist. */
-    private boolean polishTurn = true;
+    /** Explicit opt-in only: an extra quality review after validation. Default builds do not spend this call. */
+    private boolean polishTurn = false;
+    /** Combine small independent contract units in one bounded model request. */
+    private boolean batchGeneration = true;
+    /** Prepare an approved, unambiguous fresh starter without asking the model to configure it. */
+    private boolean automaticStarter = true;
     /** Restore the pre-commit archive when a worker dies while committing a BUILD run. */
     private boolean rollbackOnFailure = true;
     /** Maximum fix/validate cycles after the first failed validation. */
     private int maxRepairAttempts = 3;
+    /** Patch misses per path/worker execution; effective bound is 1-5. Reads do not reset misses. */
+    private int maxPatchMisses = 3;
     /** Bound structured diagnostics returned to the model. */
     private int maxValidationDiagnostics = 40;
 
@@ -315,7 +366,7 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
         private String dockerCommand = "docker";
         /** Optional whitespace-separated arguments, e.g. {@code -e docker} when launched from Windows. */
         private String dockerCommandArgs = "";
-        private String image = "node:22-bookworm-slim";
+        private String image = com.code.pal.agent.starter.Starter.RUNTIME_IMAGE;
         /**
          * Docker network for project containers. "none" keeps generated code off the network while
          * it is validated; an existing container on another network is recreated (its volume stays).
@@ -368,6 +419,9 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
          * reachable only through the gateway.
          */
         private String appsNetwork = "codepal-apps";
+        private String appsDatabaseContainer = "codepal-apps-mongo";
+        private String appsDatabaseVolume = "codepal-apps-mongo-data";
+        private String gatewayContainer = "codepal-gateway";
         /** The gateway listens on this loopback port of the Docker host; the backend proxies through it. */
         private int gatewayPort = 55400;
         /** Host the backend uses to reach the gateway (loopback: same machine, or WSL's mirrored network). */
@@ -377,6 +431,8 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
          * the platform's database. The backend reaches it through the gateway on this loopback port.
          */
         private String appsDatabaseImage = "mongo:7";
+        /** Disable offering/generated MERN when this deployment does not support app databases. */
+        private boolean mernEnabled = true;
         private int appsDatabasePort = 55417;
         private int appsDatabaseMemoryMb = 384;
         /** Root password of the apps' MongoDB; empty: generated once and kept in the workspace base. */
@@ -457,6 +513,18 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
                 : configured.stream().filter(entry -> entry != null && !entry.isBlank()).map(this::selection).toList();
         if (all.isEmpty()) return modelFor(mode);
         return all.stream().filter(this::available).findFirst().orElse(all.getFirst());
+    }
+
+    /** A run never reselects a route whose bounded provider attempt already failed. */
+    public ModelSelection untriedModel(ProjectType mode, java.util.Set<ModelSelection> failed) {
+        List<String> configured = switch(mode) {
+            case CHAT -> billingMode == BillingMode.FREE ? models.getFreeChat() : models.getChat();
+            case PLAN -> billingMode == BillingMode.FREE ? models.getFreePlan() : models.getPlan();
+            case BUILD -> billingMode == BillingMode.FREE ? models.getFreeBuild() : models.getBuild();
+        };
+        var candidates=configured==null?List.<ModelSelection>of():configured.stream().filter(value->value!=null&&!value.isBlank()).map(this::selection).distinct().filter(value->!failed.contains(value)).toList();
+        if(configured==null || configured.stream().noneMatch(value->value!=null&&!value.isBlank())) {var fallback=modelFor(mode);return failed.contains(fallback)?null:fallback;}
+        return candidates.stream().filter(this::available).findFirst().orElse(candidates.isEmpty()?null:candidates.getFirst());
     }
 
     /** False while the model is cooling down after a failure. */

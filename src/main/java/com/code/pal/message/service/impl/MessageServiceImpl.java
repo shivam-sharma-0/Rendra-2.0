@@ -54,9 +54,29 @@ public class MessageServiceImpl implements MessageService {
         // Idempotent retries may return only a message from this project. A global id lookup here
         // would expose a message from another project to a caller who merely knows its client id.
         var existing = messageRepository.findByIdAndProjectId(request.id(), projectId);
-        if (existing.isPresent()) return List.of(MessageResponse.from(existing.get()));
+        if (existing.isPresent()) {
+            Message accepted = existing.get();
+            List<String> retryAttachments = retryAttachmentPaths(request.attachments());
+            if (accepted.getRole() != com.code.pal.message.domain.MessageRole.USER
+                    || !java.util.Objects.equals(accepted.getAuthorId(), userId)
+                    || !java.util.Objects.equals(accepted.getContent(), request.message())
+                    || !accepted.attachmentPaths().equals(retryAttachments)
+                    || (request.mode() != null && accepted.getRequestedMode() != null
+                        && request.mode() != accepted.getRequestedMode()))
+                throw new com.code.pal.message.exception.MessageConflictException();
+            var assistant = messageRepository.findFirstByProjectIdAndReplyToIdAndRoleOrderBySeqAsc(
+                    projectId, request.id(), com.code.pal.message.domain.MessageRole.ASSISTANT);
+            if (assistant.isPresent() && !assistant.get().getId().equals(request.aiMessageId()))
+                throw new com.code.pal.message.exception.MessageConflictException();
+            List<MessageResponse> result = new ArrayList<>();
+            result.add(MessageResponse.from(accepted));
+            assistant.ifPresent(message -> result.add(MessageResponse.from(message)));
+            return List.copyOf(result);
+        }
 
         ProjectType mode = request.mode() != null ? request.mode() : project.getType();
+        ProjectType requestedMode = mode;
+        mode = com.code.pal.agent.intent.RequestScope.mode(mode, request.message());
         // The opening prompt of a project created with pendingPrompt (its attachments uploaded first):
         // stored for the requirements step, which builds from it once approved, so no turn starts now.
         boolean openingPrompt = false;
@@ -77,6 +97,7 @@ public class MessageServiceImpl implements MessageService {
 
         List<Message> created = new ArrayList<>(2);
         Message userMessage = Message.user(projectId, request.id(), request.message(), mode, userId);
+        userMessage.setRequestedMode(requestedMode);
         userMessage.setAttachments(attachments(projectId, request.attachments()));
         userMessage.setSeq(sequence.next());
         created.add(messageRepository.save(userMessage));
@@ -84,7 +105,7 @@ public class MessageServiceImpl implements MessageService {
             Message assistantMessage = Message.assistantPlaceholder(projectId, request.aiMessageId(), request.id(), mode);
             assistantMessage.setSeq(sequence.next());
             created.add(messageRepository.save(assistantMessage));
-            // Kick off the agent to fill this assistant placeholder (runs AFTER_COMMIT).
+            // Persist run/outbox in this transaction; deliver only once acceptance commits.
             events.publishEvent(new AssistantTurnRequested(projectId, userId, mode, request.aiMessageId()));
         }
 
@@ -123,6 +144,16 @@ public class MessageServiceImpl implements MessageService {
         return String.join("\n", valid);
     }
 
+    private static List<String> retryAttachmentPaths(List<String> paths) {
+        if (paths == null) return List.of();
+        try {
+            return paths.stream().map(path -> com.code.pal.agent.workspace.ProjectPaths.normalize(path, false))
+                    .distinct().toList();
+        } catch (IllegalArgumentException invalid) {
+            throw new com.code.pal.message.exception.MessageConflictException();
+        }
+    }
+
     @Override
     @Transactional(readOnly = true)
     public List<String> openingAttachments(UUID projectId) {
@@ -152,6 +183,7 @@ public class MessageServiceImpl implements MessageService {
     private static boolean isConversationalPrompt(String message) {
         if (message == null) return true;
         String prompt = message.trim().toLowerCase();
+        if (com.code.pal.agent.intent.RequestScope.action(prompt)) return false;
         if (prompt.isBlank() || prompt.matches("^(hi|hello|hey|yo|good morning|good evening|ok|okay)[.! ]*$")) return true;
         return !prompt.matches(".*\\b(build|create|make|develop|design|implement|generate|clone|app|application|website|dashboard|todo|tool|platform|system|project|page|portal|crm|portfolio|store|shop|blog|mern)\\b.*");
     }

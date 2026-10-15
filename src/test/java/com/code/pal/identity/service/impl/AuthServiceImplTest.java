@@ -25,11 +25,13 @@ class AuthServiceImplTest {
 
     private final UserRepository users = mock(UserRepository.class);
     private final JwtService jwt = mock(JwtService.class);
-    private final AuthServiceImpl auth = new AuthServiceImpl(users, mock(PasswordEncoder.class), jwt);
+    private final com.code.pal.identity.security.AuthSessions sessions=mock(com.code.pal.identity.security.AuthSessions.class);
+    private final AuthServiceImpl auth = new AuthServiceImpl(users, mock(PasswordEncoder.class), jwt,sessions);
 
     AuthServiceImplTest() {
         when(jwt.generateAccessToken(any())).thenReturn("access");
         when(jwt.generateRefreshToken(any())).thenReturn("refresh");
+        when(sessions.issue(any())).thenAnswer(call->new com.code.pal.identity.dto.AuthResponse("access","refresh",com.code.pal.identity.dto.UserResponse.from(call.getArgument(0))));
     }
 
     @Test

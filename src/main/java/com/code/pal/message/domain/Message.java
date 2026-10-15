@@ -61,6 +61,11 @@ public class Message implements Persistable<String> {
     @Column(length = 16)
     ProjectType mode;
 
+    /** Original requested mode, before conversational/requirements routing changes the effective mode. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "requested_mode", length = 16, updatable = false)
+    ProjectType requestedMode;
+
     /** The user who authored this message; null for assistant/system messages (collaboration). */
     @Column(name = "author_id")
     Long authorId;

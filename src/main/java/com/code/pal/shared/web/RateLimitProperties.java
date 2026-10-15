@@ -25,4 +25,7 @@ public class RateLimitProperties {
 
     /** Rolling window length (seconds) for the auth bucket. */
     private int authWindowSeconds = 60;
+    private boolean failOpen = false;
+    /** Exact socket IPs of trusted proxies, walked from the right of the forwarded chain. */
+    private java.util.List<String> trustedProxyIps = java.util.List.of();
 }

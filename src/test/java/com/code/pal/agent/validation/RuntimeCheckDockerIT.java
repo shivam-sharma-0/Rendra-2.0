@@ -64,7 +64,7 @@ class RuntimeCheckDockerIT {
         DependencyService dependencies = new DependencyService(stacks, files, sandbox, properties);
         FileChangeRepository changes = mock(FileChangeRepository.class);
         when(changes.save(any())).thenAnswer(call -> call.getArgument(0));
-        ChangeSetService changeSets = new ChangeSetService(changes, mock(AgentRunRepository.class), mapper, properties, files, sandbox);
+        ChangeSetService changeSets = new ChangeSetService(changes, mock(AgentRunRepository.class), mapper, properties, files, sandbox, mock(com.code.pal.project.service.ProjectService.class));
         RuntimeCheckService runtime = new RuntimeCheckService(changeSets, stacks, files, sandbox, dependencies, properties, mapper,
                 com.code.pal.agent.preview.BuildVariables.NONE);
         ProjectValidationService validation = new ProjectValidationService(changeSets, stacks, properties, files, sandbox,
@@ -110,7 +110,7 @@ class RuntimeCheckDockerIT {
         StackPacks stacks = new StackPacks(mapper);
         FileChangeRepository changes = mock(FileChangeRepository.class);
         when(changes.save(any())).thenAnswer(call -> call.getArgument(0));
-        ChangeSetService changeSets = new ChangeSetService(changes, mock(AgentRunRepository.class), mapper, properties, files, sandbox);
+        ChangeSetService changeSets = new ChangeSetService(changes, mock(AgentRunRepository.class), mapper, properties, files, sandbox, mock(com.code.pal.project.service.ProjectService.class));
         RuntimeCheckService runtime = new RuntimeCheckService(changeSets, stacks, files, sandbox,
                 new DependencyService(stacks, files, sandbox, properties), properties, mapper,
                 com.code.pal.agent.preview.BuildVariables.NONE);
@@ -143,7 +143,7 @@ class RuntimeCheckDockerIT {
         StackPacks stacks = new StackPacks(mapper);
         FileChangeRepository changes = mock(FileChangeRepository.class);
         when(changes.save(any())).thenAnswer(call -> call.getArgument(0));
-        ChangeSetService changeSets = new ChangeSetService(changes, mock(AgentRunRepository.class), mapper, properties, files, sandbox);
+        ChangeSetService changeSets = new ChangeSetService(changes, mock(AgentRunRepository.class), mapper, properties, files, sandbox, mock(com.code.pal.project.service.ProjectService.class));
         RuntimeCheckService runtime = new RuntimeCheckService(changeSets, stacks, files, sandbox,
                 new DependencyService(stacks, files, sandbox, properties), properties, mapper,
                 com.code.pal.agent.preview.BuildVariables.NONE);

@@ -1,38 +1,22 @@
 package com.code.pal.agent.intent;
 
 import com.code.pal.agent.config.AgentProperties;
-import com.code.pal.agent.llm.CallPurpose;
-import com.code.pal.agent.llm.LlmCallContext;
 import com.code.pal.agent.domain.AgentIntent;
 import com.code.pal.agent.llm.LlmClient;
-import com.code.pal.agent.prompt.PromptLoader;
-import com.code.pal.agent.prompt.PromptLoader.Prompt;
-import com.code.pal.agent.llm.LlmClient.LlmMessage;
-import com.code.pal.agent.llm.LlmClient.LlmRequest;
-import com.code.pal.agent.llm.LlmClient.LlmResult;
-import com.code.pal.project.domain.ProjectType;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
-import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
  * Decides whether a user turn is small talk that deserves a quick, direct reply, or a real task
- * that needs the full explore/plan/implement/validate pipeline. Cheap regex heuristics resolve the
- * overwhelming majority of turns instantly and for free; only a genuinely ambiguous short message
- * pays for one extra classification call.
+ * that needs the full explore/plan/implement/validate pipeline. Deterministic scope rules route tasks;
+ * an ambiguous short message
+ * receives a direct reply/clarifying question. Classification itself never invokes a model.
  */
-@Slf4j
 @Service
-@RequiredArgsConstructor
 public class IntentClassifier {
 
     private static final int SHORT_MESSAGE_CHARS = 60;
-    /** A one-word answer; past this, the reply waits on a slow provider for nothing, so assume TASK. */
-    private static final java.time.Duration CLASSIFICATION_BUDGET = java.time.Duration.ofSeconds(10);
 
     private static final Pattern CONVERSATIONAL_PATTERN = Pattern.compile(
             "^(hi+|hey+|hello+|yo|sup|namaste|namaskar|"
@@ -48,45 +32,31 @@ public class IntentClassifier {
                     + "design|integrate|connect|deploy|migrate|optimi[sz]e|rename|move|make|page|component|"
                     + "endpoint|api|route|database|schema|table|column|login|signup|auth|form|button|"
                     + "feature|bug|error|crash|test\\s|validation|dashboard|screen|ui|style|css|layout|"
-                    + "project|file|code|function|class|module)\\b",
+                    + "project|file|code|function|class|module|calculator|counter|timer|quiz|app|application|website|react|todo|to[- ]do)\\b",
             Pattern.CASE_INSENSITIVE);
 
     private static final Pattern FILE_OR_PATH_SIGNAL = Pattern.compile(
             "[\\w-]+/[\\w./-]+|\\.[a-zA-Z0-9]{1,5}\\b");
 
-    private final LlmClient llm;
-    private final AgentProperties props;
+    @org.springframework.beans.factory.annotation.Autowired
+    public IntentClassifier() {}
+    /** Source compatibility for existing embedders; classification no longer uses these services. */
+    public IntentClassifier(LlmClient ignoredClient,AgentProperties ignoredProperties) {this();}
 
     public AgentIntent classify(String userRequest) {
-        String trimmed = userRequest == null ? "" : userRequest.trim();
+        String trimmed = RequestScope.normalize(userRequest);
         if (trimmed.isEmpty()) return AgentIntent.CONVERSATIONAL;
         if (hasTaskSignal(trimmed)) return AgentIntent.TASK;
         if (CONVERSATIONAL_PATTERN.matcher(trimmed).matches()) return AgentIntent.CONVERSATIONAL;
         if (trimmed.length() > SHORT_MESSAGE_CHARS) return AgentIntent.TASK;
-        return classifyWithModel(trimmed);
+        // An unclear short request does not authorize code changes. The normal reply can clarify it
+        // in one call instead of spending an intent call and then a second answer call.
+        return AgentIntent.CONVERSATIONAL;
     }
 
     private static boolean hasTaskSignal(String text) {
-        return TASK_SIGNAL_PATTERN.matcher(text).find() || FILE_OR_PATH_SIGNAL.matcher(text).find();
+        return RequestScope.action(text) || TASK_SIGNAL_PATTERN.matcher(text).find() || FILE_OR_PATH_SIGNAL.matcher(text).find()
+                || text.matches("^(?:continue|start karo|shuru karo|aage badho|agla step|next step)[.! ]*$");
     }
 
-    /** Fallback for short, ambiguous messages the heuristics can't confidently resolve either way. */
-    private AgentIntent classifyWithModel(String userRequest) {
-        try {
-            String system = PromptLoader.load(Prompt.INTENT_CLASSIFIER);
-            AgentProperties.ModelSelection selection = props.modelFor(ProjectType.CHAT);
-            LlmResult result;
-            // Not part of the run's totals: the call ledger counts it (and the quota reserves it).
-            try (LlmCallContext.Scope intent = LlmCallContext.purpose(CallPurpose.INTENT, false)) {
-                result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
-                        List.of(LlmMessage.system(system), LlmMessage.user(userRequest)), List.of(), 0.0,
-                        CLASSIFICATION_BUDGET).withMaxTokens(props.getLlm().getIntentMaxOutputTokens()));
-            }
-            String answer = result.content() == null ? "" : result.content().trim().toUpperCase(Locale.ROOT);
-            return answer.startsWith("CONVERSATIONAL") ? AgentIntent.CONVERSATIONAL : AgentIntent.TASK;
-        } catch (RuntimeException e) {
-            log.debug("Intent classification call failed, defaulting to TASK: {}", e.getMessage());
-            return AgentIntent.TASK;
-        }
-    }
 }

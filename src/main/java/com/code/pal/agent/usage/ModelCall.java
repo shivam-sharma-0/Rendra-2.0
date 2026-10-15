@@ -35,6 +35,9 @@ import java.util.UUID;
 @FieldDefaults(level = AccessLevel.PRIVATE)
 public class ModelCall {
     @Id @GeneratedValue(strategy = GenerationType.UUID) UUID id;
+    @Column(name = "attempt_id") UUID attemptId;
+    @Column(name = "logical_call_id") UUID logicalCallId;
+    @Column(name = "usage_known") Boolean usageKnown;
     @Column(name = "user_id") Long userId;
     @Column(name = "project_id") UUID projectId;
     @Column(name = "run_id") UUID runId;

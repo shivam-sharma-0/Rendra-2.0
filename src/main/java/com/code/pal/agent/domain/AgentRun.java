@@ -29,6 +29,10 @@ public class AgentRun {
     @Id @GeneratedValue(strategy = GenerationType.UUID) UUID id;
     @Column(name = "project_id", nullable = false, updatable = false) UUID projectId;
     @Column(name = "message_id", length = 40) String messageId;
+    @Column(name = "request_message_id", length = 40, updatable = false) String requestMessageId;
+    @Column(name = "request_fingerprint", length = 64, updatable = false) String requestFingerprint;
+    /** Explicit retry reads a private unverified artifact into a new isolated stage, never the live tree. */
+    @Column(name = "retry_source_run_id", updatable = false) UUID retrySourceRunId;
     @Column(name = "user_id", nullable = false, updatable = false) Long userId;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 16) ProjectType mode;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 20) @Builder.Default RunStatus status = RunStatus.QUEUED;
@@ -42,8 +46,16 @@ public class AgentRun {
      * reply begins, so the two can be timed separately from the run's total duration. */
     @Column(name = "responding_at") Instant respondingAt;
     @Column(columnDefinition = "text") String error;
+    @Enumerated(EnumType.STRING) @Column(name="failure_reason",length=48) AgentFailureReason failureReason;
     /** Last liveness beat from the executing worker; drives stale-run recovery without killing live runs. */
     @Column(name = "heartbeat_at") Instant heartbeatAt;
+    /** First Stop actor/time; bulk-updated so stale runner saves cannot erase the audit. */
+    @Column(name = "cancel_requested_by", updatable = false) Long cancelRequestedBy;
+    @Column(name = "cancel_requested_at", updatable = false) Instant cancelRequestedAt;
+    @Column(name = "commit_started_at", updatable = false) Instant commitStartedAt;
+    @Column(name = "code_saved_at", updatable = false) Instant codeSavedAt;
+    @Column(name = "preview_status", updatable = false, length = 24) String previewStatus;
+    @Column(name = "save_recovery_required", nullable=false, updatable=false) @Builder.Default boolean saveRecoveryRequired=false;
     @CreationTimestamp @Column(name = "created_at", nullable = false, updatable = false) Instant createdAt;
     @UpdateTimestamp @Column(name = "updated_at", nullable = false) Instant updatedAt;
 }

@@ -33,7 +33,7 @@ class AgentWorkerTest {
     @Test
     void busyProjectParksTheRunWithoutBlockingTheWorker() {
         when(runs.findById(runId)).thenReturn(Optional.of(run(RunStatus.QUEUED)));
-        when(queue.tryLock(projectId, runId)).thenReturn(false);
+        when(queue.tryLock(org.mockito.ArgumentMatchers.eq(projectId), any())).thenReturn(false);
 
         long started = System.nanoTime();
         worker.process(runId);
@@ -48,34 +48,34 @@ class AgentWorkerTest {
         // Two queue entries for one run: our first read saw QUEUED, but by the time we hold the lock
         // the other worker has finished it.
         when(runs.findById(runId)).thenReturn(Optional.of(run(RunStatus.QUEUED)), Optional.of(run(RunStatus.DONE)));
-        when(queue.tryLock(projectId, runId)).thenReturn(true);
+        when(queue.tryLock(org.mockito.ArgumentMatchers.eq(projectId), any())).thenReturn(true);
 
         worker.process(runId);
 
         verify(runtime, never()).run(any());
-        verify(queue).unlockAndReleaseParked(projectId, runId);
+        verify(queue).unlockAndReleaseParked(org.mockito.ArgumentMatchers.eq(projectId), any());
     }
 
     @Test
     void finishedRunReleasesTheProjectAndItsParkedRuns() {
         when(runs.findById(runId)).thenReturn(Optional.of(run(RunStatus.QUEUED)));
-        when(queue.tryLock(projectId, runId)).thenReturn(true);
+        when(queue.tryLock(org.mockito.ArgumentMatchers.eq(projectId), any())).thenReturn(true);
 
         worker.process(runId);
 
         verify(runtime).run(any());
-        verify(queue).unlockAndReleaseParked(projectId, runId);
+        verify(queue).unlockAndReleaseParked(org.mockito.ArgumentMatchers.eq(projectId), any());
     }
 
     @Test
     void releaseHappensEvenWhenTheRunThrows() {
         when(runs.findById(runId)).thenReturn(Optional.of(run(RunStatus.QUEUED)));
-        when(queue.tryLock(projectId, runId)).thenReturn(true);
+        when(queue.tryLock(org.mockito.ArgumentMatchers.eq(projectId), any())).thenReturn(true);
         when(runtime.run(any())).thenThrow(new IllegalStateException("boom"));
 
         try { worker.process(runId); } catch (IllegalStateException expected) { /* surfaced to the loop */ }
 
-        verify(queue).unlockAndReleaseParked(projectId, runId);
+        verify(queue).unlockAndReleaseParked(org.mockito.ArgumentMatchers.eq(projectId), any());
     }
 
     private AgentRun run(RunStatus status) {

@@ -10,13 +10,15 @@ const NEAR_LIMIT = 90 // percent
 export default function UsageMeter({ onNavigate }: { onNavigate: () => void }) {
   const { data, isError } = useDailyUsage()
   const unlimited = data?.quota === 0
-  const percent = data && !unlimited ? Math.min(100, Math.round((data.tokensUsed / data.quota) * 100)) : 0
+  const percent = data && !unlimited ? Math.min(100, Math.round(((data.capacityUsed ?? data.tokensUsed) / data.quota) * 100)) : 0
   const resetsAt = data ? new Date(data.resetsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''
 
   let summary = 'Loading usage…'
   if (isError) summary = 'Usage is unavailable right now'
   else if (data && unlimited) summary = `${compact.format(data.tokensUsed)} tokens used · no daily limit`
   else if (data) summary = `${compact.format(data.tokensUsed)} of ${compact.format(data.quota)} tokens · resets ${resetsAt}`
+  if (data && !isError && (data.unknownTokens ?? 0) > 0) summary += ` · ${compact.format(data.unknownTokens!)} held for unreported usage`
+  if (data && !isError && (data.reservedTokens ?? 0) > 0) summary += ` · ${compact.format(data.reservedTokens!)} reserved for active calls`
 
   return (
     <div className="kap-ws-credits">

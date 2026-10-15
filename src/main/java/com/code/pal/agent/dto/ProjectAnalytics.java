@@ -12,6 +12,8 @@ public record ProjectAnalytics(
         int fileCount,
         String deploymentStatus,
         Instant createdAt,
-        Instant lastActivityAt
+        Instant lastActivityAt,
+        long reportedTokens,long unknownTokens,long reservedTokens,long unknownCalls,
+        long actualAttempts,long logicalCalls,long historicalAttemptRecords
 ) {
 }

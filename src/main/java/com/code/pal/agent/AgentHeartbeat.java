@@ -29,6 +29,9 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class AgentHeartbeat {
 
+    private com.code.pal.agent.lease.ProjectLeaseService leases;
+    @org.springframework.beans.factory.annotation.Autowired
+    void useLeases(com.code.pal.agent.lease.ProjectLeaseService leases) { this.leases=leases; }
     private final AgentRunRepository runs;
     private final AgentJobQueue queue;
     private final AgentProperties props;
@@ -51,18 +54,24 @@ public class AgentHeartbeat {
     /** Begin heartbeating a run; the returned handle stops it (idempotent) and is safe to call in a finally. */
     public AutoCloseable start(UUID runId, UUID projectId) {
         long interval = Math.max(2_000, props.getHeartbeatIntervalMs());
+        var fence=com.code.pal.agent.lease.RunFence.current();
+        var cancellation=com.code.pal.agent.runtime.RunCancellation.current();
         ScheduledFuture<?> future = scheduler.scheduleWithFixedDelay(
-                () -> beat(runId, projectId), interval, interval, TimeUnit.MILLISECONDS);
+                () -> beat(runId, projectId,fence,cancellation), interval, interval, TimeUnit.MILLISECONDS);
         return () -> future.cancel(false);
     }
 
-    private void beat(UUID runId, UUID projectId) {
+    void beat(UUID runId, UUID projectId,com.code.pal.agent.lease.RunFence fence,com.code.pal.agent.runtime.RunCancellation cancellation) {
         try {
-            tx.executeWithoutResult(status -> runs.touchHeartbeat(runId, Instant.now()));
-            queue.renewLock(projectId, runId);
+            UUID owner=fence==null?runId:fence.ownerId();
+            if(!queue.renewLock(projectId,owner) || (leases!=null && (fence==null || !leases.renew(fence))))
+                throw new com.code.pal.agent.lease.LeaseLostException();
+            if(leases==null) tx.executeWithoutResult(status -> runs.touchHeartbeat(runId,Instant.now()));
+            // Durable renewal updates heartbeat atomically without waiting for long filesystem guards.
         } catch (RuntimeException e) {
-            // A transient DB/Redis blip must not kill the run; the next beat retries.
-            log.debug("Heartbeat skipped for run {}: {}", runId, e.getMessage());
+            cancellation.cancel();
+            // Ownership uncertainty stops work; recovery handles durable state after expiry.
+            log.warn("Worker ownership renewal failed runId={} errorType={}",runId,e.getClass().getSimpleName());
         }
     }
 

@@ -26,6 +26,9 @@ import java.time.Instant;
 @Component
 @RequiredArgsConstructor
 public class AgentRunRecovery {
+    private com.code.pal.agent.lease.ProjectLeaseService leases;
+    @org.springframework.beans.factory.annotation.Autowired
+    void useLeases(com.code.pal.agent.lease.ProjectLeaseService leases) { this.leases=leases; }
     private final AgentProperties props;
     private final AgentRunRepository runs;
     private final AgentJobQueue queue;
@@ -39,6 +42,17 @@ public class AgentRunRecovery {
     @Scheduled(fixedDelayString = "${app.agent.stale-sweep-interval-ms:30000}")
     public void sweep() {
         Instant now = Instant.now();
+        long recoveryDeadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+        if(leases!=null) for(var project:leases.pendingIoProjects()) {
+            if(System.nanoTime()>recoveryDeadline) break;
+            try { leases.recovering(project,()->{if(!leases.hasLiveLease(project)) sandbox.reconcilePendingOperations(project);}); }
+            catch(RuntimeException pending) {log.warn("trusted_operation_recovery_pending project={} errorType={}",project,pending.getClass().getSimpleName());}
+        }
+
+        if(leases!=null) for(var id:leases.pendingPromotionRuns()) {
+            if(System.nanoTime()>recoveryDeadline) break;
+            runs.findById(id).ifPresent(this::failAbandoned);
+        }
 
         // Parked runs whose project is no longer locked: the worker that held the lock died before
         // releasing them. Requeue them first so they are not counted as lost below.
@@ -59,38 +73,52 @@ public class AgentRunRecovery {
         Instant heartbeatCutoff = now.minusMillis(props.leaseMs());
         for (AgentRun run : runs.findByStatusAndHeartbeatAtBefore(RunStatus.RUNNING, heartbeatCutoff)) {
             // Secondary guard: if the project lock is still held, a worker is alive â€” leave it alone.
-            if (queue.isLocked(run.getProjectId())) continue;
+            if (leases==null && queue.isLocked(run.getProjectId())) continue;
             failAbandoned(run);
+        }
+        for (AgentRun run : runs.findByStatusAndHeartbeatAtBefore(RunStatus.COMMITTING, heartbeatCutoff)) {
+            if (leases!=null || !queue.isLocked(run.getProjectId())) failAbandoned(run);
         }
     }
 
     private void recoverQueued(AgentRun run) {
         // Duplicate queue entries are harmless: after one worker moves it to RUNNING, later entries are ignored.
+        if(runs.markRequeued(run.getId(),Instant.now())!=1) return;
         queue.enqueue(run.getId());
-        run.setError("Requeued after stale queue delay"); // marks updated_at so the sweep does not hot-loop
-        runs.save(run);
         log.info("Recovered queued agent run {}", run.getId());
     }
 
     private void failAbandoned(AgentRun run) {
-        boolean restored = false;
-        String archive = ChangeSetService.archiveFor(run.getSnapshotRef());
-        if (props.isRollbackOnFailure() && run.getSnapshotRef() != null) {
-            try {
-                if (archive == null) throw new IllegalStateException("unsupported snapshot reference " + run.getSnapshotRef());
-                sandbox.restoreTree(run.getProjectId(), archive);
-                sites.buildLater(run.getProjectId());   // the served site still shows the abandoned build
-                restored = true;
-            } catch (Exception e) {
-                log.error("Could not restore abandoned run {}: {}", run.getId(), e.getMessage());
-            }
+        if(leases==null) { failAbandonedOwned(run);return; }
+        try { leases.recovering(run.getProjectId(),()-> {
+            if(leases.hasLiveLease(run.getProjectId()) || !sandbox.reconcilePendingOperations(run.getProjectId())) return;
+            AgentRun current=runs.findById(run.getId()).orElse(null);
+            if(current!=null && (current.getStatus()==RunStatus.RUNNING || current.getStatus()==RunStatus.COMMITTING || leases.hasPendingPromotion(current.getProjectId())))
+                failAbandonedOwned(current);
+        }); } catch(RuntimeException pending) { log.warn("run_recovery_pending runId={} errorType={}",run.getId(),pending.getClass().getSimpleName()); }
+    }
+    private void failAbandonedOwned(AgentRun run) {
+        if(changeSets.requeueCheckpoint(run)) {
+            // The durable outbox will dispatch even if the immediate queue delivery is unavailable.
+            try {queue.enqueue(run.getId());}catch(RuntimeException unavailable){log.warn("checkpoint_delivery_deferred runId={}",run.getId());}
+            return;
         }
-        // The dead process took the in-memory change set with it; remove its staging area too.
-        changeSets.cleanupAbandoned(run.getProjectId(), run.getId());
+        boolean restored;
+        try {
+            restored=changeSets.recoverPromotion(run);
+            if(restored) sites.buildLater(run.getProjectId());
+        } catch(com.code.pal.agent.change.PromotionRecoveryPendingException pending) {
+            try{runs.flagSaveRecovery(run.getId());}catch(RuntimeException unavailable){log.warn("save_recovery_status_deferred runId={}",run.getId());}
+            log.warn("promotion_recovery_pending runId={}",run.getId());return;
+        }
         run.setStatus(RunStatus.FAILED);
         run.setError("Agent worker stopped before the run completed");
+        if(run.getCodeSavedAt()!=null) { runs.recordPreviewStatus(run.getId(),"FAILED");run.setPreviewStatus("FAILED"); }
         runs.save(run);
-        String messageText = restored
+        // Capture terminal failed output before cleanup; ambiguous evidence is retained for recovery.
+        changeSets.cleanupAbandoned(run.getProjectId(), run.getId());
+        String messageText = run.getCodeSavedAt()!=null ? "Your code changes were saved. Preview preparation was interrupted."
+                : restored
                 ? "The agent stopped before completing this response. Its workspace changes were restored."
                 : "The agent stopped before completing this response. Please try again.";
         messages.findById(run.getMessageId()).ifPresent(message -> {

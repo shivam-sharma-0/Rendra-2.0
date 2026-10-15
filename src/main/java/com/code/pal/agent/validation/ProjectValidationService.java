@@ -43,6 +43,18 @@ public class ProjectValidationService {
      * again; the final gate reuses what the agent's own typeCheck/build calls already ran.
      */
     private final Map<UUID, RevisionResults> results = new ConcurrentHashMap<>();
+    private com.code.pal.project.capability.BuildDecisions buildDecisions;
+    private MernBehaviorCheck mernBehavior;
+    private RunBehaviorCriteria behaviorCriteria;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void useBehaviorCriteria(RunBehaviorCriteria criteria){this.behaviorCriteria=java.util.Objects.requireNonNull(criteria);}
+    @org.springframework.beans.factory.annotation.Autowired
+    public void useMernBehavior(MernBehaviorCheck check){this.mernBehavior=java.util.Objects.requireNonNull(check);}
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setBuildDecisions(com.code.pal.project.capability.BuildDecisions decisions) {
+        this.buildDecisions = java.util.Objects.requireNonNull(decisions);
+    }
 
     public Object diagnostics(AgentContext context) {
         var capabilities = stack(context).inspect(files, context.projectId(), ".");
@@ -75,6 +87,16 @@ public class ProjectValidationService {
 
     /** Required final gate: structural checks plus every applicable type-check/build operation. */
     public ValidationReport validateAll(AgentContext context) {
+        String capabilityProblem = buildDecisions == null ? null
+                : buildDecisions.validate(context.projectId(), files, context.root());
+        if (capabilityProblem != null) {
+            List<ProjectDiagnostic> diagnostics = List.of(new ProjectDiagnostic("", null, null,
+                    DiagnosticSeverity.ERROR, capabilityProblem, "capabilities", "BUILD_DECISION_MISMATCH"));
+            changeSets.recordProjectValidation(context, false, diagnostics);
+            ValidationReport report = aggregateReport(context, false, diagnostics, List.of(), capabilityProblem);
+            lastReports.put(context.runId(), report);
+            return report;
+        }
         ChangeSetService.ValidationResult structure = changeSets.validate(context);
         if (!structure.valid()) {
             List<ProjectDiagnostic> diagnostics = structure.issues().stream().map(issue ->
@@ -99,37 +121,85 @@ public class ProjectValidationService {
             return report;
         }
         List<Comparison> comparisons = new ArrayList<>();
+        List<ValidationCheck> checks=new ArrayList<>();
+        checks.add(new ValidationCheck("STRUCTURE",ValidationCheck.Outcome.PASS,true,"Deterministic staged file validation passed"));
         List<String> executed = new ArrayList<>();
         for (ValidationOperation operation : List.of(ValidationOperation.TYPE_CHECK, ValidationOperation.BUILD)) {
             CommandPlan plan = plan(context, operation, null);
-            if (!plan.available()) continue;
-            comparisons.add(compareOnce(context, plan));
+            if (!plan.available()) {
+                checks.add(new ValidationCheck(operation.name(),ValidationCheck.Outcome.SKIPPED,false,plan.unavailableReason()));
+                continue;
+            }
+            var comparison=compareOnce(context, plan);comparisons.add(comparison);
+            checks.add(new ValidationCheck(operation.name(),comparison.after().started() && !comparison.after().timedOut() && comparison.after().exitCode()==0?ValidationCheck.Outcome.PASS:
+                    !comparison.after().started()?ValidationCheck.Outcome.SKIPPED:ValidationCheck.Outcome.FAIL,true,
+                    comparison.changePassed()?"No new diagnostics":"Candidate command did not pass"));
             executed.add(operation.name());
         }
         List<ProjectDiagnostic> introduced = new ArrayList<>(comparisons.stream().flatMap(value -> value.introduced().stream()).toList());
         List<ProjectDiagnostic> existing = comparisons.stream().flatMap(value -> value.preExisting().stream()).toList();
-        boolean passed = comparisons.stream().allMatch(Comparison::changePassed);
+        boolean passed = comparisons.stream().allMatch(c->c.after().started() && !c.after().timedOut() && c.after().exitCode()==0);
+        boolean commandsPassed=passed;
         boolean terminal = comparisons.stream().anyMatch(value -> !value.after().started() || value.after().timedOut());
+        if(comparisons.stream().anyMatch(c->c.changePassed() && c.after().exitCode()!=0)) {
+            introduced.add(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,"The candidate still fails an existing required build check. Fix the existing project before saving this change.","validation","PRE_EXISTING_VALIDATION_FAILURE"));
+            terminal=true;
+        }
         // Only a change that type-checks and builds is worth loading in a browser.
-        if (passed && runtime != null) {
-            List<ProjectDiagnostic> runtimeIssues = revisionResults(context).runtime;
-            if (runtimeIssues == null) {
-                runtimeIssues = runtime.check(context);
-                revisionResults(context).runtime = runtimeIssues;
+        if (passed) {
+            RuntimeCheckService.Result runtimeResult = revisionResults(context).runtime;
+            if (runtimeResult == null) {
+                runtimeResult = runtime==null?new RuntimeCheckService.Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.SKIPPED,
+                        properties.getSandbox().isRuntimeCheck(),"Runtime probe is not wired"),List.of()):runtime.evaluate(context);
+                if(runtimeResult==null)throw new IllegalStateException("Runtime check did not report an outcome");
+                revisionResults(context).runtime = runtimeResult;
             }
-            executed.add("RUNTIME");
-            if (!runtimeIssues.isEmpty()) {
-                introduced.addAll(runtimeIssues);
+            checks.add(runtimeResult.check());
+            if(runtimeResult.check().outcome()==ValidationCheck.Outcome.PASS)executed.add("RUNTIME");
+            if (runtimeResult.check().blocksSuccess()) {
+                introduced.addAll(runtimeResult.diagnostics());
+                if(runtimeResult.diagnostics().stream().anyMatch(d->"PRE_EXISTING_RUNTIME_FAILURE".equals(d.code())))terminal=true;
                 passed = false;
+                if(runtimeResult.check().outcome()==ValidationCheck.Outcome.SKIPPED){
+                    terminal=true;introduced.add(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,
+                            runtimeResult.check().reason(),"runtime","REQUIRED_CHECK_SKIPPED"));
+                }
             }
+        }
+        // API behavior is independent of a failed UI interaction once compilation/build succeeded.
+        // Collect real API evidence before selecting repairs; deferred checks are not evidence of a code defect.
+        if(commandsPassed && checks.stream().noneMatch(ValidationCheck::unavailable)
+                && "mern".equals(stacks.detect(files,context.projectId(),context.root()).id())) {
+            var apiChecks=mernBehavior==null?List.of(new ValidationCheck("API_BEHAVIOR",ValidationCheck.Outcome.SKIPPED,true,"Candidate API validator is not wired")):
+                    mernBehavior.check(context);
+            checks.addAll(apiChecks);
+            for(var check:apiChecks)if(check.blocksSuccess()) {
+                passed=false;introduced.add(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,check.reason(),"api-behavior",
+                        check.outcome()==ValidationCheck.Outcome.SKIPPED?"REQUIRED_CHECK_SKIPPED":"API_ACCEPTANCE_FAILED"));
+                if(check.unavailable() || check.id().endsWith("CLEANUP"))terminal=true;
+            }
+        }
+        var acceptance=behaviorCriteria==null?null:behaviorCriteria.current(context);
+        if(acceptance!=null) {
+            var missing=new ArrayList<String>();
+            if(!acceptance.browser().isEmpty() && checks.stream().noneMatch(c->c.id().equals("RUNTIME") && c.outcome()!=ValidationCheck.Outcome.SKIPPED))missing.add("BROWSER_ACCEPTANCE");
+            for(var step:acceptance.api())if(checks.stream().noneMatch(c->c.id().equals("API_"+step.id())))missing.add("API_"+step.id());
+            boolean blocked=checks.stream().anyMatch(ValidationCheck::blocksSuccess);
+            for(String id:missing){String reason=blocked?"Earlier validation failed; required acceptance was not run":"Required acceptance coverage is unavailable";
+                checks.add(new ValidationCheck(id,ValidationCheck.Outcome.SKIPPED,true,reason,blocked?ValidationCheck.SkipCause.PREREQUISITE_FAILED:ValidationCheck.SkipCause.UNAVAILABLE));
+                if(!blocked)introduced.add(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,reason,"acceptance","REQUIRED_CHECK_SKIPPED"));}
+            if(!missing.isEmpty()){passed=false;if(!blocked)terminal=true;}
         }
         if (terminal) changeSets.recordTerminalValidationFailure(context, introduced);
         else changeSets.recordProjectValidation(context, passed, introduced);
         String summary = passed
                 ? (executed.isEmpty() ? "Structural validation passed; no type-check/build script is configured"
                                       : "Validation passed: " + String.join(", ", executed))
-                : "Validation found errors introduced by the staged changes";
-        ValidationReport report = aggregateReport(context, passed, introduced, existing, summary);
+                : checks.stream().anyMatch(ValidationCheck::unavailable)
+                    ? "Required validation coverage was unavailable; code cannot be certified"
+                    : "Validation found errors introduced by the staged changes";
+        ValidationReport report = aggregateReport(context, passed, introduced, existing, summary).withChecks(checks);
+        log.info("required_validation runId={} checks={}",context.runId(),checks.stream().map(check->check.id()+":"+check.outcome()+(check.skipCause()==null?"":":"+check.skipCause())).toList());
         lastReports.put(context.runId(), report);
         return report;
     }
@@ -168,7 +238,7 @@ public class ProjectValidationService {
     private static final class RevisionResults {
         final int revision;
         final Map<ValidationOperation, Comparison> comparisons = new ConcurrentHashMap<>();
-        volatile List<ProjectDiagnostic> runtime;
+        volatile RuntimeCheckService.Result runtime;
         RevisionResults(int revision) { this.revision = revision; }
     }
 

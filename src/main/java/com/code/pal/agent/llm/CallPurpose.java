@@ -8,5 +8,8 @@ public enum CallPurpose {
     INTENT,
     VISION,
     REQUIREMENTS,
+    PLANNER,
+    SCHEMA_CORRECTION,
+    UNIT,
     OTHER
 }

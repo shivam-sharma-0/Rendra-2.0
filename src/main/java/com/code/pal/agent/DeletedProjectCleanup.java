@@ -34,7 +34,7 @@ import java.util.stream.Stream;
 @Component
 @RequiredArgsConstructor
 public class DeletedProjectCleanup {
-    private static final List<RunStatus> UNFINISHED = List.of(RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.AWAITING_INPUT);
+    private static final List<RunStatus> UNFINISHED = List.of(RunStatus.QUEUED, RunStatus.RUNNING,RunStatus.COMMITTING, RunStatus.AWAITING_INPUT);
 
     private final ProjectService projects;
     private final AgentRunRepository runs;
@@ -42,6 +42,12 @@ public class DeletedProjectCleanup {
     private final SandboxPort sandbox;
     private final WorkspaceStorage storage;
     private final com.code.pal.project.database.GeneratedDatabaseService databases;
+    private com.code.pal.agent.lease.ProjectLeaseService leases;
+    private DeletedProjectCleanupJobs jobs;
+    @org.springframework.beans.factory.annotation.Autowired
+    void useJobs(DeletedProjectCleanupJobs jobs){this.jobs=jobs;}
+    @org.springframework.beans.factory.annotation.Autowired
+    void useLeases(com.code.pal.agent.lease.ProjectLeaseService leases){this.leases=leases;}
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onDeleted(ProjectDeleted event) {
@@ -51,17 +57,24 @@ public class DeletedProjectCleanup {
     @Scheduled(initialDelayString = "${app.agent.deleted-project-sweep-ms:60000}",
                fixedDelayString = "${app.agent.deleted-project-sweep-ms:60000}")
     public void sweep() {
-        List<UUID> folders = projectFolders();
-        if (folders.isEmpty()) return;
-        for (UUID projectId : projects.deletedAmong(folders)) {
+        List<UUID> pending = jobs==null?projects.deletedAmong(projectFolders()):jobs.pending();
+        for (UUID projectId : pending) {
+            if(jobs!=null)jobs.attempted(projectId);
             if (queue.isLocked(projectId)) {
                 cancelRuns(projectId);   // still working: stop it, remove next time
                 continue;
             }
             try {
-                sandbox.destroy(projectId);
-                databases.dropAll(projectId);
-                log.info("deleted_project_cleaned projectId={}", projectId);
+                Runnable clean=()->{
+                    if(leases!=null && leases.hasLiveLease(projectId)) {cancelRuns(projectId);return;}
+                    sandbox.destroy(projectId);
+                    databases.dropAll(projectId);
+                    if(jobs!=null)jobs.completed(projectId);
+                    log.info("deleted_project_cleaned projectId={}", projectId);
+                };
+                // The same filesystem/DB critical section excludes a concurrent new claimant.
+                // Pending trusted IO/promotion/restore is refused by guarded, even when Redis lost its lock.
+                if(leases==null)clean.run();else leases.guarded(projectId,clean);
             } catch (RuntimeException failure) {
                 log.warn("deleted_project_cleanup_failed projectId={} reason={}", projectId, failure.getMessage());
             }

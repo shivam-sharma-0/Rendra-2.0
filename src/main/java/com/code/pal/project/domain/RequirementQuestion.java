@@ -17,7 +17,7 @@ public class RequirementQuestion {
     @Id @GeneratedValue(strategy = GenerationType.UUID) UUID id;
     @Column(name = "session_id", nullable = false) UUID sessionId;
     @Column(name = "sequence_no", nullable = false) int sequence;
-    @Column(nullable = false, length = 80) String questionKey;
+    @Column(name = "question_key", nullable = false, length = 80) String questionKey;
     @Column(nullable = false, columnDefinition = "text") String prompt;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 20) RequirementQuestionType type;
     @Column(nullable = false) boolean required;

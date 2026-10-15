@@ -28,6 +28,10 @@ import java.util.UUID;
 public class PublishedSiteService {
     static final String PUBLISHED = ProjectPaths.INTERNAL + "/published";
     static final String LIVE = "LIVE";
+    static final String RELEASE = "RELEASE";
+    private com.code.pal.agent.stack.StackPacks stacks;
+    @org.springframework.beans.factory.annotation.Autowired
+    void useStacks(com.code.pal.agent.stack.StackPacks stacks) { this.stacks = stacks; }
 
     private final SiteBuildService sites;
     private final ProjectFiles files;
@@ -35,6 +39,7 @@ public class PublishedSiteService {
 
     /** @throws IllegalStateException with the reason when there is nothing publishable */
     public void publish(UUID projectId) {
+        requireStaticRelease(projectId);
         SiteBuildService.Result built = sites.build(projectId);
         if (built.error() != null) throw new IllegalStateException("The site does not build: " + built.error());
         String source = sites.currentSite(projectId);
@@ -47,6 +52,8 @@ public class PublishedSiteService {
         String id = UUID.randomUUID().toString();
         sandbox.copyTree(projectId, source, PUBLISHED + "/" + id);
         sandbox.removeTree(projectId, PUBLISHED + "/" + id + "/" + ProjectBriefFile.NAME);   // the brief is not published
+        requireStaticRelease(projectId);
+        files.writeText(projectId, PUBLISHED + "/" + id, RELEASE, "STATIC_V1");
         String previous = publishedSite(projectId);
         files.writeText(projectId, PUBLISHED, LIVE, id);
         Set<String> keep = new HashSet<>(List.of(id));
@@ -65,19 +72,30 @@ public class PublishedSiteService {
         try {
             if (!files.regularFile(projectId, PUBLISHED, LIVE)) return null;
             String site = PUBLISHED + "/" + UUID.fromString(files.readText(projectId, PUBLISHED, LIVE).trim());
-            return files.exists(projectId, site, "index.html") ? site : null;
+            // Legacy snapshots have no server/config binding; require an explicit safe republish.
+            return files.regularFile(projectId, site, RELEASE)
+                    && "STATIC_V1".equals(files.readText(projectId, site, RELEASE))
+                    && files.exists(projectId, site, "index.html") ? site : null;
         } catch (RuntimeException unreadableOrInvalid) {
             return null;
         }
     }
 
+    private void requireStaticRelease(UUID projectId) {
+        var capability=capability(projectId);if(!capability.available())throw new IllegalStateException(capability.reason());
+    }
+
+    public record Capability(boolean available,String reason) {}
+    public Capability capability(UUID projectId) {
+        if(stacks==null)return new Capability(false,"Publication capability is unavailable");
+        var stack=stacks.detect(files,projectId,".");
+        if(stack instanceof com.code.pal.agent.stack.MernPack || files.exists(projectId,".","server/package.json"))
+            return new Capability(false,"Publishing apps with an API is unavailable until isolated frontend/backend releases are supported");
+        boolean entry=files.regularFile(projectId,".","index.html") || sites.currentSite(projectId)!=null || stack.previewBuild(files,projectId,".")!=null;
+        return entry?new Capability(true,null):new Capability(false,"Build a browser application before publishing");
+    }
+
     private void prune(UUID projectId, Set<String> keep) {
-        try {
-            for (ProjectFiles.Entry entry : files.list(projectId, PUBLISHED, 1)) {
-                if (entry.directory() && !keep.contains(entry.path())) sandbox.removeTree(projectId, PUBLISHED + "/" + entry.path());
-            }
-        } catch (RuntimeException error) {
-            log.warn("published_prune_failed projectId={} reason={}", projectId, error.getMessage());
-        }
+        // Retain snapshots until maintenance can prove no instance/request still references them.
     }
 }

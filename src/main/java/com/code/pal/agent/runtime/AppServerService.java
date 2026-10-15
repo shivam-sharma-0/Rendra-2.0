@@ -75,7 +75,9 @@ public class AppServerService {
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3))
             .followRedirects(HttpClient.Redirect.NEVER).build();
     private final Map<UUID, ReentrantLock> locks = new ConcurrentHashMap<>();
-    private final Map<UUID, Instant> lastUsed = new ConcurrentHashMap<>();
+    private record ServerUse(UUID project, String build) { String name(){return serverName(build);} }
+    private final Map<ServerUse, Instant> lastUsed = new ConcurrentHashMap<>();
+    static String serverName(String build) {return APP+"-"+UUID.fromString(build.substring(build.lastIndexOf('/')+1));}
     private final Map<UUID, Status> statuses = new ConcurrentHashMap<>();
     private final ExecutorService background = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -133,18 +135,22 @@ public class AppServerService {
             }
             String previous = currentBuild(projectId);
             String id = UUID.randomUUID().toString();
+            String sourceRevision = ReleaseSource.capture(files, projectId, ".");
             String error = build(projectId, SERVERS + "/" + id);
+            if (error == null && !sourceRevision.equals(ReleaseSource.capture(files, projectId, ".")))
+                error = "Project changed during backend build; rebuild the current revision";
             if (error != null) {
                 statuses.put(projectId, new Status(Status.State.FAILED, error));
                 log.warn("app_server_build_failed projectId={} reason={}", projectId, error);
                 return;
             }
+            files.writeText(projectId, SERVERS + "/" + id, ReleaseSource.PROOF, sourceRevision);
             files.writeText(projectId, SERVERS, CURRENT, id);
             Set<String> keep = new HashSet<>(List.of(id));
             if (previous != null) keep.add(previous.substring(SERVERS.length() + 1));
             prune(projectId, keep);
             log.info("app_server_built projectId={} build={}", projectId, id);
-            boolean wasRunning = sandbox.server(projectId, APP) != null;
+            boolean wasRunning = previous != null && sandbox.server(projectId, serverName(previous)) != null;
             statuses.put(projectId, new Status(Status.State.STOPPED, null));
             if (wasRunning) startLocked(projectId);
         } finally {
@@ -157,7 +163,6 @@ public class AppServerService {
      * response is the server's, or 502/503 with a JSON error when it cannot be reached.
      */
     public void proxy(UUID projectId, HttpServletRequest request, HttpServletResponse response) throws IOException {
-        lastUsed.put(projectId, clock.instant());
         SandboxPort.ServerEndpoint endpoint;
         try {
             endpoint = ensureRunning(projectId);
@@ -184,9 +189,9 @@ public class AppServerService {
             }
         }
         endpoint.headers().forEach(forward::header);
-        HttpResponse<byte[]> reply;
+        BoundedHttp.Reply reply;
         try {
-            reply = http.send(forward.build(), HttpResponse.BodyHandlers.ofByteArray());
+            reply = BoundedHttp.send(http,forward.build(),2_000_000,Duration.ofSeconds(30));
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             sendError(response, 502, "Interrupted");
@@ -195,10 +200,12 @@ public class AppServerService {
             sendError(response, 502, "The app server did not answer");
             return;
         }
-        response.setStatus(reply.statusCode());
+        if(reply.headers().firstValue("x-codepal-relay-error").isPresent()){sendError(response,503,"The application transport is unavailable");return;}
+        response.setStatus(reply.status());
         reply.headers().map().forEach((name, values) -> {
             if (HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT)) || name.startsWith(":")) return;
-            values.forEach(value -> response.addHeader(name, value));
+            // Generated application cookies remain host-only; a project cannot set sibling cookies.
+            values.forEach(value -> response.addHeader(name, name.equalsIgnoreCase("set-cookie")?value.replaceAll("(?i);\\s*domain\\s*=[^;]+",""):value));
         });
         response.setContentLength(reply.body().length);
         response.getOutputStream().write(reply.body());
@@ -206,12 +213,17 @@ public class AppServerService {
 
     /** The project's server for a request: running already, or started now on the current build. */
     private SandboxPort.ServerEndpoint ensureRunning(UUID projectId) {
-        SandboxPort.ServerEndpoint running = sandbox.server(projectId, APP);
-        if (running != null) return running;
         ReentrantLock lock = lockFor(projectId);
         lock.lock();
         try {
-            running = sandbox.server(projectId, APP);
+            Status status = statuses.get(projectId);
+            if (status != null && status.state() == Status.State.FAILED)
+                throw new IllegalStateException("the saved server build is unavailable");
+            String current = currentBuild(projectId);
+            if (current == null || !ReleaseSource.paired(files, projectId, current))
+                throw new IllegalStateException("frontend and backend revisions do not match; rebuild the preview");
+            lastUsed.put(new ServerUse(projectId,current),clock.instant());
+            SandboxPort.ServerEndpoint running = sandbox.server(projectId, serverName(current));
             return running != null ? running : startLocked(projectId);
         } finally {
             lock.unlock();
@@ -221,20 +233,22 @@ public class AppServerService {
     private SandboxPort.ServerEndpoint startLocked(UUID projectId) {
         String build = currentBuild(projectId);
         if (build == null) throw new IllegalStateException("the server has not been built");
+        if (!ReleaseSource.paired(files,projectId,build)) throw new IllegalStateException("frontend/backend preview revisions do not match");
+        String name=serverName(build);
         statuses.put(projectId, new Status(Status.State.STARTING, null));
         String uri = databases.connectionUri(projectId, sandbox.databaseAddress(), false);
         SandboxPort.ServerEndpoint endpoint;
         try {
-            endpoint = sandbox.startServer(projectId, APP, build, List.of("node", entry(projectId, build)),
+            endpoint = sandbox.startServer(projectId, name, build, List.of("node", entry(projectId, build)),
                     Map.of("MONGODB_URI", uri, "NODE_ENV", "production"), PORT);
-            awaitListening(projectId, APP, endpoint);
+            awaitListening(projectId, name, endpoint);
         } catch (RuntimeException failure) {
-            String logs = sandbox.serverLogs(projectId, APP, 40);
-            sandbox.stopServer(projectId, APP);
+            String logs = sandbox.serverLogs(projectId, name, 40);
+            sandbox.stopServer(projectId, name);
             statuses.put(projectId, new Status(Status.State.FAILED, failure.getMessage() + (logs.isBlank() ? "" : "\n" + logs)));
             throw new IllegalStateException(failure.getMessage(), failure);
         }
-        lastUsed.put(projectId, clock.instant());
+        lastUsed.put(new ServerUse(projectId,build), clock.instant());
         statuses.put(projectId, new Status(Status.State.RUNNING, null));
         return endpoint;
     }
@@ -250,9 +264,9 @@ public class AppServerService {
                 HttpRequest.Builder probe = HttpRequest.newBuilder(URI.create(endpoint.baseUrl() + "/api/health"))
                         .timeout(Duration.ofSeconds(2)).GET();
                 endpoint.headers().forEach(probe::header);
-                int status = http.send(probe.build(), HttpResponse.BodyHandlers.discarding()).statusCode();
-                // 502 is the gateway saying the server is not listening yet.
-                if (status != 502) return;
+                int status = BoundedHttp.send(http,probe.build(),65_536,Duration.ofSeconds(1)).status();
+                // An error page is not readiness evidence.
+                if (status >= 200 && status < 300) return;
             } catch (IOException notYet) {
                 // not listening yet
             } catch (InterruptedException interrupted) {
@@ -333,14 +347,15 @@ public class AppServerService {
     public void stopIdleServers() {
         Instant now = clock.instant();
         long idle = Math.max(60_000, properties.getSandbox().getServerIdleStopMs());
-        for (Map.Entry<UUID, Instant> entry : lastUsed.entrySet()) {
+        for (Map.Entry<ServerUse, Instant> entry : lastUsed.entrySet()) {
             if (Duration.between(entry.getValue(), now).toMillis() < idle) continue;
-            ReentrantLock lock = lockFor(entry.getKey());
+            ReentrantLock lock = lockFor(entry.getKey().project());
             if (!lock.tryLock()) continue;
             try {
-                sandbox.stopServer(entry.getKey(), APP);
+                sandbox.stopServer(entry.getKey().project(), entry.getKey().name());
                 lastUsed.remove(entry.getKey(), entry.getValue());
-                statuses.put(entry.getKey(), new Status(Status.State.STOPPED, null));
+                if(entry.getKey().build().equals(currentBuild(entry.getKey().project())))
+                    statuses.put(entry.getKey().project(), new Status(Status.State.STOPPED, null));
                 log.info("app_server_stopped_idle projectId={}", entry.getKey());
             } catch (RuntimeException error) {
                 log.warn("app_server_stop_failed projectId={} reason={}", entry.getKey(), error.getMessage());
@@ -353,19 +368,16 @@ public class AppServerService {
     private void retire(UUID projectId) {
         if (!files.exists(projectId, SERVERS, CURRENT)) return;
         sandbox.stopServer(projectId, APP);
+        for(var use:lastUsed.keySet()) if(use.project().equals(projectId)) {
+            sandbox.stopServer(projectId,use.name());lastUsed.remove(use);
+        }
         files.delete(projectId, SERVERS, CURRENT);
         prune(projectId, Set.of());
         statuses.remove(projectId);
     }
 
     private void prune(UUID projectId, Set<String> keep) {
-        try {
-            for (ProjectFiles.Entry entry : files.list(projectId, SERVERS, 1)) {
-                if (entry.directory() && !keep.contains(entry.path())) sandbox.removeTree(projectId, SERVERS + "/" + entry.path());
-            }
-        } catch (RuntimeException error) {
-            log.warn("app_server_prune_failed projectId={} reason={}", projectId, error.getMessage());
-        }
+        // A failed Stop or another instance may still run an older build. Retain its artifacts.
     }
 
     private ReentrantLock lockFor(UUID projectId) {

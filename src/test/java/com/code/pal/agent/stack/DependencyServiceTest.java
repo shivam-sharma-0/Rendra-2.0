@@ -148,4 +148,30 @@ class DependencyServiceTest {
         assertEquals("../../../deps/x/node_modules",
                 ProjectPaths.relativeTarget(".codepal/changesets/run/candidate-build/node_modules", ".codepal/deps/x/node_modules"));
     }
+
+    @Test void lockRefreshResolvesOutsideSourceAndReusesTheCompletedSet() {
+        project.write("package.json", DEPS).write("package-lock.json", "{\"packages\":{\"\":{}}}");
+        doAnswer(call -> {
+            String root = call.getArgument(1);
+            var command = (List<?>) call.getArgument(2);
+            assertEquals("install", command.get(1));
+            assertTrue(command.contains("--ignore-scripts"));
+            project.write(root + "/package-lock.json", "{\"lockfileVersion\":3,\"packages\":{\"\":" + DEPS + "}}");
+            return new SandboxPort.CommandResult(true, 0, "", "");
+        }).when(sandbox).install(any(), anyString(), any());
+        var resolved = service.refreshNpmLocks(project.projectId, ".");
+        assertTrue(resolved.get("package-lock.json").contains("19.0.0"));
+        assertEquals("{\"packages\":{\"\":{}}}", project.read("package-lock.json"));
+        assertEquals(resolved, service.refreshNpmLocks(project.projectId, "."));
+        verify(sandbox).install(any(), anyString(), any());
+    }
+    @Test void anotherRuntimeImageCannotReuseTheSameDependencySet() {
+        project.write("package.json", DEPS);
+        service.prepare(project.projectId, ".");
+        String original = installs.getLast();
+        project.properties.getSandbox().setImage("node@sha256:" + "a".repeat(64));
+        service.prepare(project.projectId, ".");
+        assertNotEquals(original, installs.getLast());
+        assertEquals(2, installs.size());
+    }
 }

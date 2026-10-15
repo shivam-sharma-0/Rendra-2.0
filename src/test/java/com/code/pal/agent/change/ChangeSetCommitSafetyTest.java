@@ -20,6 +20,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -44,6 +45,9 @@ class ChangeSetCommitSafetyTest {
     private final UUID projectId = project.projectId;
 
     ChangeSetCommitSafetyTest() {
+        when(runs.beginCommit(any(),any(),any())).thenReturn(1);
+        when(runs.recordCodeSaved(any(),any())).thenReturn(1);
+        when(runs.recordSnapshot(any(),any())).thenReturn(1);
         when(changes.save(any(FileChange.class))).thenAnswer(call -> call.getArgument(0));
     }
 
@@ -61,11 +65,21 @@ class ChangeSetCommitSafetyTest {
 
         InOrder order = inOrder(sandbox, runs, files);
         order.verify(sandbox).copyTree(projectId, ".", ".codepal/history/" + runId + "/original");
-        order.verify(runs).save(run);                                                        // restore point recorded...
+        order.verify(runs).recordSnapshot(runId,"archive:"+runId);                                                        // restore point recorded...
         order.verify(files).copyFile(projectId, context.root(), "a.txt", ".", "a.txt");      // ...before any live write
         assertEquals("archive:" + runId, run.getSnapshotRef());
         assertEquals(".codepal/history/" + runId + "/original", ChangeSetService.archiveFor(run.getSnapshotRef()));
         assertEquals("agent", project.read("a.txt"));
+        assertNotNull(run.getCodeSavedAt());
+    }
+
+    @Test void acceptedCancellationPreventsArchiveAndEveryLiveWrite() {
+        project.write("a.txt","original");var service=service(project.properties);var id=UUID.randomUUID();var ctx=context(service,id);
+        patch(service,ctx,"a.txt");service.recordProjectValidation(ctx,true,List.of());
+        when(runs.beginCommit(any(),any(),any())).thenReturn(0);
+        assertThrows(com.code.pal.agent.llm.LlmCancelledException.class,()->service.commit(ctx,run(id)));
+        verify(sandbox,never()).copyTree(eq(projectId),eq("."),eq(".codepal/history/"+id+"/original"));
+        verify(files,never()).copyFile(any(),anyString(),anyString(),eq("."),anyString());assertEquals("original",project.read("a.txt"));
     }
 
     @Test
@@ -130,7 +144,7 @@ class ChangeSetCommitSafetyTest {
     }
 
     @Test
-    void onlyTheLatestArchiveIsKeptAndStagingIsRemoved() {
+    void archivesAreRetainedForRecoveryAndOwnedStagingIsRemoved() {
         project.write("a.txt", "v0");
         ChangeSetService service = service(project.properties);
         UUID first = UUID.randomUUID();
@@ -143,7 +157,7 @@ class ChangeSetCommitSafetyTest {
             project.write("a.txt", "original again");
         }
 
-        assertFalse(project.exists(".codepal/history/" + first), "older archives are pruned");
+        assertTrue(project.exists(".codepal/history/" + first), "retain archives until restore/recovery references are proven inactive");
         assertTrue(project.exists(".codepal/history/" + second + "/original/a.txt"));
         assertFalse(project.exists(".codepal/changesets/" + first));
         assertFalse(project.exists(".codepal/changesets/" + second));
@@ -213,7 +227,7 @@ class ChangeSetCommitSafetyTest {
     }
 
     private ChangeSetService service(AgentProperties properties) {
-        return new ChangeSetService(changes, runs, new ObjectMapper(), properties, files, sandbox);
+        return new ChangeSetService(changes, runs, new ObjectMapper(), properties, files, sandbox, mock(com.code.pal.project.service.ProjectService.class));
     }
 
     private AgentContext context(ChangeSetService service, UUID runId) {

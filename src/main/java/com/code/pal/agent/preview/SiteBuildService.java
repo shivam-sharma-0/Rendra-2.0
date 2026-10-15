@@ -123,7 +123,7 @@ public class SiteBuildService {
                     // A static project has no site id: its files changed, so its content is new anyway.
                     : new PreviewStatus(PreviewStatus.State.READY, result.built() ? version(projectId) : UUID.randomUUID().toString(), null));
             // The files changed: a MERN project's server follows, in the background (it may take a while).
-            if (servers != null) servers.deployLater(projectId);
+            if (servers != null && result.error() == null) servers.deployLater(projectId);
             return result;
         } finally {
             lock.unlock();
@@ -191,9 +191,13 @@ public class SiteBuildService {
             return Result.notNeeded();
         }
         String id = UUID.randomUUID().toString();
+        String sourceRevision = com.code.pal.agent.runtime.ReleaseSource.capture(files, projectId, ".");
         long started = System.nanoTime();
         String error = compile(projectId, stack, build, ".", SITE + "/" + id);
         if (error != null) return Result.failed(error);
+        if (!sourceRevision.equals(com.code.pal.agent.runtime.ReleaseSource.capture(files, projectId, ".")))
+            return Result.failed("Project changed during frontend build; rebuild the current revision");
+        files.writeText(projectId, SITE + "/" + id, com.code.pal.agent.runtime.ReleaseSource.PROOF, sourceRevision);
         String previous = currentSite(projectId);
         files.writeText(projectId, SITE, CURRENT, id);
         // The previous site stays one more build: a request that read the old CURRENT can still finish.
@@ -258,14 +262,7 @@ public class SiteBuildService {
     }
 
     private void prune(UUID projectId, java.util.Set<String> keep) {
-        try {
-            List<ProjectFiles.Entry> entries = files.list(projectId, SITE, 1);
-            for (ProjectFiles.Entry entry : entries) {
-                if (entry.directory() && !keep.contains(entry.path())) removeQuietly(projectId, SITE + "/" + entry.path());
-            }
-        } catch (RuntimeException error) {
-            log.warn("site_prune_failed projectId={} reason={}", projectId, error.getMessage());
-        }
+        // Cross-instance readers have no durable reference count: retain rather than race deletion.
     }
 
     private void removeQuietly(UUID projectId, String path) {

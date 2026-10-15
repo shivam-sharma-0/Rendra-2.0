@@ -46,6 +46,8 @@ import java.util.regex.Pattern;
 @Service
 @ConditionalOnProperty(prefix = "app.agent.sandbox", name = "required", havingValue = "true")
 public class DockerProjectEnvironment implements SandboxPort {
+    private com.code.pal.agent.lease.TrustedProjectIo trustedIo;
+    @Autowired void useTrustedIo(com.code.pal.agent.lease.TrustedProjectIo io){trustedIo=io;}
     private static final String WORKSPACE_LABEL = "com.codepal.workspace=true";
     /** Bounds re-checks when the container is stopped between ensure() and taking the read lock. */
     private static final int MAX_EXEC_ROUNDS = 3;
@@ -228,7 +230,7 @@ public class DockerProjectEnvironment implements SandboxPort {
 
     private Environment environment(UUID projectId) {
         return new Environment(projectId,
-                resourceName(properties.getSandbox().getContainerPrefix(), projectId),
+                primaryContainerName(projectId),
                 dockerBase() + "/" + projectId,
                 properties.getSandbox().getWorkspacePath());
     }
@@ -246,6 +248,22 @@ public class DockerProjectEnvironment implements SandboxPort {
      */
     private CommandResult execInContainer(UUID projectId, List<String> options, List<String> command,
                                           Duration timeout, byte[] stdin, int outputLimit) {
+        if(RunCancellation.current().isCancelled()) return new CommandResult(false,-1,"",CommandResult.CANCELLED);
+        if(RunCancellation.current()!=RunCancellation.NONE) {
+            Environment environment=readyEnvironment(projectId);
+            String name="codepal-command-"+UUID.randomUUID();
+            List<String> args=new ArrayList<>(List.of("run","--name",name,"--label","com.codepal.command=true",
+                    "--label","com.codepal.project="+projectId,"--label","com.codepal.run="+RunCancellation.current().runId(),
+                    "--network",network(),"--user",user(),"--cpus",Double.toString(Math.max(0.25,properties.getSandbox().getCpus())),
+                    "--memory",Math.max(256,properties.getSandbox().getMemoryMb())+"m","--pids-limit","256",
+                    "--cap-drop","ALL","--security-opt","no-new-privileges",
+                    "--mount","type=bind,source="+environment.hostPath()+",target="+environment.workspacePath(),
+                    "--workdir",environment.workspacePath()));
+            args.addAll(options);args.add(properties.getSandbox().getImage());args.addAll(command);
+            Lock lock=lockFor(projectId).readLock();lock.lock();
+            try { return runOwnedContainer(name,args,timeout,stdin,outputLimit); }
+            finally { lock.unlock(); }
+        }
         boolean retried = false;
         for (int round = 1; ; round++) {
             Environment environment = readyEnvironment(projectId);
@@ -257,9 +275,8 @@ public class DockerProjectEnvironment implements SandboxPort {
             Lock lock = lockFor(projectId).readLock();
             CommandResult result;
             lock.lock();
-            // Killing the docker CLI does not stop the command inside the container, so a Stop also kills
-            // the container's processes. One run works on a project at a time, so they all belong to it.
-            try (RunCancellation.Registration ignored = RunCancellation.current().onCancel(() -> killContainerProcesses(environment.container()))) {
+            // Non-run trusted operations use the persistent container. Cancellable run commands are isolated above.
+            try {
                 // Idle cleanup may have stopped the container between ensure() and this lock.
                 if (!ready.contains(projectId) && round < MAX_EXEC_ROUNDS) continue;
                 result = run(args, timeout, stdin, outputLimit);
@@ -310,7 +327,7 @@ public class DockerProjectEnvironment implements SandboxPort {
     }
 
     private void cleanupIdle(UUID projectId, Instant seenLastUsed, long idleMs, long removeAfter) {
-        String container = resourceName(properties.getSandbox().getContainerPrefix(), projectId);
+        String container = primaryContainerName(projectId);
         CommandResult status = run(List.of("container", "inspect", "-f", "{{.State.Status}}", container),
                 Duration.ofSeconds(20), null);
         if (!status.success()) {
@@ -371,8 +388,97 @@ public class DockerProjectEnvironment implements SandboxPort {
     @Override
     public CommandResult exec(UUID projectId, String relativeRoot, List<String> command) {
         if (command == null || command.isEmpty()) throw new IllegalArgumentException("Sandbox command is empty");
-        return execInContainer(projectId, List.of("--workdir", rootPath(relativeRoot)), command,
-                timeout(), null, outputLimit());
+        String root=ProjectPaths.normalize(relativeRoot,true);
+        if(root.equals(".")) {
+            if(RunCancellation.current()!=RunCancellation.NONE) throw new IllegalArgumentException("Run commands require a candidate root");
+            return execInContainer(projectId,List.of("--workdir",rootPath(root)),command,timeout(),null,outputLimit());
+        }
+        Environment environment=readyEnvironment(projectId);
+        requirePlainCommandRoot(projectId,root);
+        String name="codepal-command-"+UUID.randomUUID();
+        List<String> args=new ArrayList<>(List.of("run","--name",name,"--label","com.codepal.command=true",
+                "--label","com.codepal.project="+projectId,"--label","com.codepal.run="+RunCancellation.current().runId(),
+                "--network",network(),"--user",user(),"--cpus",Double.toString(Math.max(0.25,properties.getSandbox().getCpus())),
+                "--memory",Math.max(256,properties.getSandbox().getMemoryMb())+"m","--pids-limit","256",
+                "--cap-drop","ALL","--security-opt","no-new-privileges","--read-only","--tmpfs","/tmp:rw,nosuid,size=256m",
+                "--mount","type=bind,source="+environment.hostPath()+"/"+root+",target="+rootPath(root),"--workdir",rootPath(root)));
+        // Relative node_modules links may reach this readonly cache; accepted files/history/secrets stay unmounted.
+        if(java.nio.file.Files.isDirectory(storage.projectDir(projectId).resolve(".codepal/deps"),java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            requirePlainCommandRoot(projectId,".codepal/deps");
+            args.addAll(List.of("--mount","type=bind,source="+environment.hostPath()+"/.codepal/deps,target="+rootPath(".codepal/deps")+",readonly"));
+            addBuildCacheMounts(projectId,args);
+        }
+        args.add(properties.getSandbox().getImage());args.addAll(command);
+        Lock lock=lockFor(projectId).readLock();lock.lock();
+        try { return runOwnedContainer(name,args,timeout(),null,outputLimit()); }
+        finally { lock.unlock(); }
+    }
+
+    /** Per-command writable scratch over immutable dependencies; Vite bundles config in .vite-temp. */
+    private void addBuildCacheMounts(UUID projectId,List<String> args) {
+        Path deps=storage.projectDir(projectId).resolve(".codepal/deps");
+        try(var sets=Files.list(deps)) {
+            for(Path set:sets.filter(p->Files.isDirectory(p,java.nio.file.LinkOption.NOFOLLOW_LINKS)).toList()) {
+                if(!set.getFileName().toString().matches("(?:[a-f0-9]{32}|[a-f0-9]{64})"))continue;
+                Path modules=set.resolve("node_modules");if(!Files.isDirectory(modules,java.nio.file.LinkOption.NOFOLLOW_LINKS))continue;
+                for(String name:List.of(".vite-temp",".vite",".cache")) {
+                    Path cache=modules.resolve(name);if(Files.isSymbolicLink(cache))throw new IllegalStateException("Unsafe dependency cache link");
+                    Files.createDirectories(cache);
+                    args.addAll(List.of("--tmpfs",rootPath(".codepal/deps/"+set.getFileName()+"/node_modules/"+name)+":rw,nosuid,nodev,size=64m,mode=1777"));
+                }
+            }
+        }catch(IOException failed){throw new IllegalStateException("Cannot prepare isolated build caches",failed);}
+    }
+
+    private CommandResult trustedTreeCommand(UUID project,List<String> command) {
+        Environment env=readyEnvironment(project);String name="codepal-trusted-"+UUID.randomUUID();
+        List<String> args=new ArrayList<>(List.of("run","--name",name,"--label","com.codepal.trusted=true",
+                "--label","com.codepal.project="+project,"--network","none","--user",user(),
+                "--cpus",Double.toString(Math.max(0.25,properties.getSandbox().getCpus())),
+                "--memory",Math.max(256,properties.getSandbox().getMemoryMb())+"m","--pids-limit","256",
+                "--cap-drop","ALL","--security-opt","no-new-privileges","--mount",
+                "type=bind,source="+env.hostPath()+",target="+env.workspacePath(),"--workdir",env.workspacePath(),properties.getSandbox().getImage()));
+        args.addAll(command);
+        UUID operation=trustedIo==null?null:trustedIo.begin(project,name,daemonIdentity());
+        Lock lock=lockFor(project).readLock();lock.lock();
+        try{return runOwnedContainer(name,args,timeout(),null,outputLimit());}
+        finally {try{
+            if(!removeContainerQuietly(name)) throw new com.code.pal.agent.lease.TrustedOperationPendingException();
+            if(operation!=null) trustedIo.finish(operation);
+        }finally{lock.unlock();}}
+    }
+    private String daemonIdentity() {
+        CommandResult identity=run(List.of("info","--format","{{.ID}}"),Duration.ofSeconds(5),null);identity.requireSuccess();
+        String id=identity.stdout().trim();
+        if(!id.matches("[A-Za-z0-9:-]{6,100}")) throw new IllegalStateException("Docker daemon identity is unavailable");
+        return id;
+    }
+    @Override public boolean reconcilePendingOperations(UUID project) {
+        if(trustedIo==null) return true;
+        String daemon=daemonIdentity();
+        for(var pending:trustedIo.pending(project)) {
+            if(!daemon.equals(pending.daemon())) return false; // never certify absence on a different daemon
+            CommandResult inspected=run(List.of("container","inspect","-f","{{json .Config.Labels}}",pending.container()),Duration.ofSeconds(10),null);
+            if(!inspected.success()) {
+                if(noSuchContainer(inspected)) {trustedIo.finish(pending.id());continue;}
+                return false;
+            }
+            var labels=new tools.jackson.databind.ObjectMapper().readTree(inspected.stdout());
+            if(!project.toString().equals(labels.path("com.codepal.project").asText()) || !labels.path("com.codepal.trusted").asText().equals("true"))
+                throw new IllegalStateException("Pending operation ownership does not match the container");
+            if(!removeContainerQuietly(pending.container())) return false;
+            trustedIo.finish(pending.id());
+        }
+        return trustedIo.pending(project).isEmpty();
+    }
+    private void requirePlainCommandRoot(UUID project,String root) {
+        Path base=storage.projectDir(project).toAbsolutePath().normalize();
+        Path path=base;
+        for(String part:root.split("/")) {
+            path=path.resolve(part);
+            if(!Files.isDirectory(path,java.nio.file.LinkOption.NOFOLLOW_LINKS))
+                throw new IllegalArgumentException("Command root contains a link or is not a directory");
+        }
     }
 
     /**
@@ -385,6 +491,9 @@ public class DockerProjectEnvironment implements SandboxPort {
         if (command == null || command.isEmpty()) throw new IllegalArgumentException("Install command is empty");
         Environment environment = environment(projectId);
         storage.ensure(projectId);
+        String isolatedRoot=ProjectPaths.normalize(relativeRoot,true);
+        if(isolatedRoot.equals(".")) throw new IllegalArgumentException("Installs require an isolated dependency root");
+        requirePlainCommandRoot(projectId,isolatedRoot);
         try {
             Files.createDirectories(storage.base().resolve(PACKAGE_CACHE));
         } catch (IOException error) {
@@ -397,7 +506,7 @@ public class DockerProjectEnvironment implements SandboxPort {
                 "--cpus", Double.toString(Math.max(0.25, properties.getSandbox().getCpus())),
                 "--memory", Math.max(256, properties.getSandbox().getMemoryMb()) + "m",
                 "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-                "--mount", "type=bind,source=" + environment.hostPath() + ",target=" + properties.getSandbox().getWorkspacePath(),
+                "--mount", "type=bind,source=" + environment.hostPath() + "/"+isolatedRoot+",target=" + rootPath(isolatedRoot),
                 "--mount", "type=bind,source=" + dockerBase() + "/" + PACKAGE_CACHE + ",target=/package-cache",
                 "-e", "HOME=/tmp", "-e", "npm_config_cache=/package-cache/npm", "-e", "npm_config_update_notifier=false",
                 // pnpm and yarn come through corepack; their caches share the package cache, and yarn 2+ is
@@ -409,18 +518,14 @@ public class DockerProjectEnvironment implements SandboxPort {
                 "-e", "YARN_ENABLE_TELEMETRY=0", "-e", "YARN_ENABLE_GLOBAL_CACHE=false",
                 "--workdir", rootPath(relativeRoot), properties.getSandbox().getImage()));
         args.addAll(command);
-        CommandResult result = run(args, Duration.ofMillis(Math.max(10_000, properties.getSandbox().getInstallTimeoutMs())),
-                null, outputLimit());
-        // Killing the docker CLI on timeout or Stop leaves the container running.
-        if (result.timedOut() || result.cancelled()) removeContainerQuietly(name);
-        return result;
+        return runOwnedContainer(name,args,Duration.ofMillis(Math.max(10_000,properties.getSandbox().getInstallTimeoutMs())),null,outputLimit());
     }
 
     @Override
     public void link(UUID projectId, String linkPath, String targetPath) {
         String link = ProjectPaths.normalize(linkPath, false);
         String target = ProjectPaths.relativeTarget(link, ProjectPaths.normalize(targetPath, false));
-        exec(projectId, ".", List.of("sh", "-c", "rm -rf -- \"$1\" && ln -s -- \"$2\" \"$1\"", "link", link, target))
+        trustedTreeCommand(projectId, List.of("sh", "-c", "rm -rf -- \"$1\" && ln -s -- \"$2\" \"$1\"", "link", link, target))
                 .requireSuccess();
     }
 
@@ -431,6 +536,28 @@ public class DockerProjectEnvironment implements SandboxPort {
      */
     @Override
     public CommandResult browse(UUID projectId, String siteRoot) {
+        return browseInternal(projectId,siteRoot,null,null);
+    }
+    @Override public CommandResult browse(UUID projectId,String siteRoot,String acceptanceJson) {
+        if(acceptanceJson==null || acceptanceJson.length()>24_000)throw new IllegalArgumentException("Invalid browser acceptance size");
+        return browseInternal(projectId,siteRoot,acceptanceJson,null);
+    }
+    @Override public CommandResult browseWithApi(UUID projectId,String siteRoot,String acceptanceJson,ServerEndpoint candidate) {
+        if(acceptanceJson==null || acceptanceJson.length()>24_000)throw new IllegalArgumentException("Invalid browser acceptance size");
+        String parent=".codepal/browser-relay";
+        Path root=storage.projectDir(projectId).resolve(parent);
+        try {
+            requirePlainCommandRoot(projectId,".");
+            Path internal=storage.projectDir(projectId).resolve(".codepal");
+            if(Files.isSymbolicLink(internal) || Files.isSymbolicLink(root))throw new IllegalArgumentException("Unsafe relay root");
+            Files.createDirectories(root);requirePlainCommandRoot(projectId,parent);
+            String id=UUID.randomUUID().toString();
+            try(var relay=new BrowserApiRelay(root.resolve(id),candidate)) {
+                return browseInternal(projectId,siteRoot,acceptanceJson,parent+"/"+id);
+            }
+        }catch(IOException unavailable){throw new IllegalStateException("Candidate browser relay unavailable",unavailable);}
+    }
+    private CommandResult browseInternal(UUID projectId,String siteRoot,String acceptanceJson,String relayRoot) {
         String image;
         try {
             image = browserImage();
@@ -440,16 +567,17 @@ public class DockerProjectEnvironment implements SandboxPort {
         String root = ProjectPaths.normalize(siteRoot, true);
         String site = environment(projectId).hostPath() + (root.equals(".") ? "" : "/" + root);
         String name = "codepal-probe-" + UUID.randomUUID();
-        List<String> args = List.of("run", "--rm", "--name", name, "--label", "com.codepal.probe=true",
+        List<String> args = new ArrayList<>(List.of("run", "--rm", "--name", name, "--label", "com.codepal.probe=true","--label","com.codepal.project="+projectId,
                 "--network", "none", "--user", user(),
                 "--cpus", Double.toString(Math.max(0.5, properties.getSandbox().getCpus())),
                 "--memory", Math.max(512, Math.min(2_048, properties.getSandbox().getMemoryMb())) + "m",
                 "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-                "--mount", "type=bind,source=" + site + ",target=/site,readonly", image, "/site");
-        CommandResult result = run(args, Duration.ofMillis(Math.max(10_000, properties.getSandbox().getBrowserTimeoutMs())),
-                null, outputLimit());
-        if (result.timedOut() || result.cancelled()) removeContainerQuietly(name);
-        return result;
+                "--mount", "type=bind,source=" + site + ",target=/site,readonly"));
+        if(relayRoot!=null)args.addAll(List.of("--mount","type=bind,source="+environment(projectId).hostPath()+"/"+relayRoot+",target=/relay"));
+        args.addAll(List.of(image,"/site"));
+        if(acceptanceJson!=null)args.addAll(List.of("1500",java.util.Base64.getEncoder().encodeToString(acceptanceJson.getBytes(StandardCharsets.UTF_8))));
+        if(relayRoot!=null)args.add("/relay");
+        return runOwnedContainer(name,args,Duration.ofMillis(Math.max(10_000,properties.getSandbox().getBrowserTimeoutMs())),null,outputLimit());
     }
 
     /**
@@ -523,7 +651,7 @@ public class DockerProjectEnvironment implements SandboxPort {
         String script = "rm -rf " + shellQuote(target) + " && mkdir -p " + shellQuote(target)
                 + " && tar -C " + shellQuote(source) + " --exclude=.codepal --exclude=.git --exclude=.secrets --exclude=node_modules"
                 + " -cf - . | tar -C " + shellQuote(target) + " -xf -";
-        exec(projectId, ".", List.of("sh", "-lc", "mkdir -p " + shellQuote(parent) + " && " + script)).requireSuccess();
+        trustedTreeCommand(projectId, List.of("bash", "-o", "pipefail", "-lc", "mkdir -p " + shellQuote(parent) + " && " + script)).requireSuccess();
         // Internal state (staging, validation copies, history) is outside the quota by design.
         if (!ProjectPaths.isInternal(targetRoot)) enforceQuota(projectId);
     }
@@ -534,7 +662,7 @@ public class DockerProjectEnvironment implements SandboxPort {
         if ("/".equals(root) || root.equals(properties.getSandbox().getWorkspacePath())) {
             throw new IllegalArgumentException("Refusing to remove sandbox root");
         }
-        exec(projectId, ".", List.of("rm", "-rf", "--", root)).requireSuccess();
+        trustedTreeCommand(projectId, List.of("rm", "-rf", "--", root)).requireSuccess();
     }
 
     /** Restore a complete project tree from an internal snapshot while preserving the snapshot store. */
@@ -547,13 +675,13 @@ public class DockerProjectEnvironment implements SandboxPort {
                 + " && find " + shellQuote(workspace) + " -mindepth 1 -maxdepth 1 ! -name .codepal -exec rm -rf -- {} +"
                 + " && tar -C " + shellQuote(source) + " --exclude=.codepal -cf - . | tar -C "
                 + shellQuote(workspace) + " -xf -";
-        exec(projectId, ".", List.of("sh", "-lc", script)).requireSuccess();
+        trustedTreeCommand(projectId, List.of("bash", "-o", "pipefail", "-lc", script)).requireSuccess();
         enforceQuota(projectId);
     }
 
     @Override
     public void destroy(UUID projectId) {
-        String container = resourceName(properties.getSandbox().getContainerPrefix(), projectId);
+        String container = primaryContainerName(projectId);
         java.nio.file.Path folder = storage.projectDir(projectId);
         Lock lock = lockFor(projectId).writeLock();
         lock.lock();
@@ -569,7 +697,11 @@ public class DockerProjectEnvironment implements SandboxPort {
                 if (!emptied.success()) log.warn("sandbox_destroy_partial projectId={} exit={} error={} output={}", projectId, emptied.exitCode(), emptied.error(), emptied.stdout());
             }
             run(List.of("rm", "-f", container), Duration.ofSeconds(30), null);
+            CommandResult remaining=run(List.of("ps","-aq","--filter","name=^/"+container+"$"),Duration.ofSeconds(20),null);
+            remaining.requireSuccess();
+            if(!remaining.stdout().isBlank())throw new IllegalStateException("Project sandbox cleanup is incomplete");
             removeAppServers(projectId);
+            removeProjectNetworks(projectId);
             storage.delete(projectId);   // the (now empty) folder itself, or whatever the container left
         } finally {
             lock.unlock();
@@ -587,7 +719,12 @@ public class DockerProjectEnvironment implements SandboxPort {
             .connectTimeout(Duration.ofSeconds(2)).build();
     private volatile AppsNetwork appsNetwork;
 
-    private static final String APPS_DATABASE = "codepal-apps-mongo";
+    private String appsDatabaseContainer() { return helperName(properties.getSandbox().getAppsDatabaseContainer()); }
+    private String gatewayContainer() { return helperName(properties.getSandbox().getGatewayContainer()); }
+    private static String helperName(String name) {
+        if(name==null || !name.matches("[a-z0-9][a-z0-9_.-]{0,95}"))throw new IllegalArgumentException("Invalid helper resource name");
+        return name;
+    }
 
     /** The internal network's subnet and the apps' database container's address on it. */
     private record AppsNetwork(String subnet, String database) {}
@@ -595,7 +732,7 @@ public class DockerProjectEnvironment implements SandboxPort {
     @Override
     public String databaseAddress() {
         readyGateway();
-        return APPS_DATABASE + ":27017";
+        return appsDatabaseContainer() + ":27017";
     }
 
     @Override
@@ -607,8 +744,8 @@ public class DockerProjectEnvironment implements SandboxPort {
 
     /** The apps' MongoDB on the internal network: authentication on, data in its own volume. Returns its IP. */
     private String readyAppsDatabase() {
-        String format = "{{.State.Running}} {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}";
-        CommandResult state = run(List.of("container", "inspect", "-f", format, APPS_DATABASE), Duration.ofSeconds(20), null);
+        String format = "{{.State.Running}} {{json .NetworkSettings.Networks}}";
+        CommandResult state = run(List.of("container", "inspect", "-f", format, appsDatabaseContainer()), Duration.ofSeconds(20), null);
         if (!state.success()) {
             String image = properties.getSandbox().getAppsDatabaseImage();
             if (!run(List.of("image", "inspect", "--format", "{{.Id}}", image), Duration.ofSeconds(20), null).success()) {
@@ -618,20 +755,22 @@ public class DockerProjectEnvironment implements SandboxPort {
                         + ": " + tail(pulled.error().isBlank() ? pulled.stdout() : pulled.error()));
             }
             log.info("apps_database_creating image={}", image);
-            run(List.of("run", "-d", "--name", APPS_DATABASE, "--restart", "unless-stopped",
+            run(List.of("run", "-d", "--name", appsDatabaseContainer(), "--restart", "unless-stopped",
                     "--network", properties.getSandbox().getAppsNetwork(), "--label", "com.codepal.apps-database=true",
                     "--memory", Math.max(256, properties.getSandbox().getAppsDatabaseMemoryMb()) + "m",
-                    "--mount", "type=volume,source=codepal-apps-mongo-data,target=/data/db",
+                    "--mount", "type=volume,source="+helperName(properties.getSandbox().getAppsDatabaseVolume())+",target=/data/db",
                     "-e", "MONGO_INITDB_ROOT_USERNAME=root", "-e", "MONGO_INITDB_ROOT_PASSWORD=" + appsDatabasePassword(),
                     properties.getSandbox().getAppsDatabaseImage(), "--wiredTigerCacheSizeGB", "0.25"),
                     Duration.ofMinutes(10), null).requireSuccess();
         } else if (!state.stdout().trim().startsWith("true")) {
-            run(List.of("start", APPS_DATABASE), Duration.ofSeconds(30), null).requireSuccess();
+            run(List.of("start", appsDatabaseContainer()), Duration.ofSeconds(30), null).requireSuccess();
         }
-        String[] parts = run(List.of("container", "inspect", "-f", format, APPS_DATABASE), Duration.ofSeconds(20), null)
-                .requireSuccess().stdout().trim().split("\\s+");
+        String[] parts = run(List.of("container", "inspect", "-f", format, appsDatabaseContainer()), Duration.ofSeconds(20), null)
+                .requireSuccess().stdout().trim().split("\\s+",2);
         if (parts.length < 2 || parts[1].isBlank()) throw new IllegalStateException("The apps database has no address");
-        return parts[1];
+        var networks=new tools.jackson.databind.ObjectMapper().readTree(parts[1]);
+        String address=networks.path(properties.getSandbox().getAppsNetwork()).path("IPAddress").asString("");
+        if(address.isBlank())throw new IllegalStateException("The apps database has no trusted admin-network address");return address;
     }
 
     /** Generated once and kept next to the projects (the backend's view of the workspace base). */
@@ -655,18 +794,26 @@ public class DockerProjectEnvironment implements SandboxPort {
     @Override
     public ServerEndpoint startServer(UUID projectId, String name, String relativeRoot, List<String> command,
                                       Map<String, String> variables, int port) {
+        String isolatedRoot=ProjectPaths.normalize(relativeRoot,true);
+        if(isolatedRoot.equals(".")) throw new IllegalArgumentException("Servers require an isolated release root");
+        requirePlainCommandRoot(projectId,isolatedRoot);
         readyGateway();
+        String privateNetwork=projectNetwork(projectId,name);
         Environment env = environment(projectId);
         String container = appContainer(projectId, name);
         run(List.of("rm", "-f", container), Duration.ofSeconds(30), null);
         List<String> args = new ArrayList<>(List.of("run", "-d", "--name", container,
-                "--label", APP_LABEL, "--label", "com.codepal.project=" + projectId, "--label", "com.codepal.port=" + port,
-                "--network", properties.getSandbox().getAppsNetwork(), "--user", user(),
+                "--label", APP_LABEL, "--label", "com.codepal.project=" + projectId, "--label", "com.codepal.port=" + port,"--label","com.codepal.namespace="+workspaceNamespace(),
+                "--network", privateNetwork, "--user", user(),
                 "--cpus", Double.toString(Math.max(0.25, properties.getSandbox().getCpus())),
                 "--memory", Math.max(128, properties.getSandbox().getServerMemoryMb()) + "m", "--pids-limit", "256",
                 "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,size=64m",
-                "--mount", "type=bind,source=" + env.hostPath() + ",target=" + env.workspacePath() + ",readonly",
+                "--mount", "type=bind,source=" + env.hostPath() + "/"+isolatedRoot+",target=" + rootPath(isolatedRoot) + ",readonly",
                 "--workdir", rootPath(relativeRoot), "-e", "HOME=/tmp", "-e", "PORT=" + port));
+        if(Files.isDirectory(storage.projectDir(projectId).resolve(".codepal/deps"),java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            requirePlainCommandRoot(projectId,".codepal/deps");
+            args.addAll(List.of("--mount","type=bind,source="+env.hostPath()+"/.codepal/deps,target="+rootPath(".codepal/deps")+",readonly"));
+        }
         variables.forEach((key, value) -> { args.add("-e"); args.add(key + "=" + value); });
         args.add(properties.getSandbox().getImage());
         args.addAll(command);
@@ -687,14 +834,24 @@ public class DockerProjectEnvironment implements SandboxPort {
         String[] parts = inspected.stdout().trim().split("\\s+", 3);
         String port = parts.length < 3 ? null : label(parts[2], "com.codepal.port");
         if (port == null || !"true".equals(parts[0]) || parts[1].isBlank()) return null;
-        readyGateway();
-        return new ServerEndpoint("http://" + properties.getSandbox().getGatewayHost() + ":" + properties.getSandbox().getGatewayPort(),
-                Map.of("x-codepal-upstream", parts[1] + ":" + port));
+        if(!projectId.toString().equals(label(parts[2],"com.codepal.project")) || !workspaceNamespace().equals(label(parts[2],"com.codepal.namespace")))throw new IllegalStateException("App server namespace is unverified");
+        readyGateway();String upstream=parts[1]+":"+port;long expiry=System.currentTimeMillis()/1000+600;
+        return new ServerEndpoint("http://"+properties.getSandbox().getGatewayHost()+":"+properties.getSandbox().getGatewayPort(),
+                Map.of("x-codepal-upstream",upstream,"x-codepal-expires",String.valueOf(expiry),"x-codepal-signature",signUpstream(upstream,expiry)));
     }
 
     @Override
     public void stopServer(UUID projectId, String name) {
-        run(List.of("rm", "-f", appContainer(projectId, name)), Duration.ofSeconds(30), null);
+        String container=appContainer(projectId,name);
+        List<String> lookup=List.of("ps","-aq","--filter","name=^/"+container+"$");
+        var present=run(lookup,Duration.ofSeconds(20),null);present.requireSuccess();
+        if(present.stdout().isBlank()){removeServerNetwork(projectId,name);return;}
+        var ownership=run(List.of("container","inspect","-f","{{json .Config.Labels}}",container),Duration.ofSeconds(20),null);ownership.requireSuccess();
+        if(!projectId.toString().equals(label(ownership.stdout(),"com.codepal.project")) || !"true".equals(label(ownership.stdout(),"com.codepal.app")) || !workspaceNamespace().equals(label(ownership.stdout(),"com.codepal.namespace")))throw new IllegalStateException("Candidate server ownership could not be verified");
+        run(List.of("rm","-f",container),Duration.ofSeconds(30),null).requireSuccess();
+        var remaining=run(lookup,Duration.ofSeconds(20),null);remaining.requireSuccess();
+        if(!remaining.stdout().isBlank())throw new IllegalStateException("Candidate server cleanup needs verification");
+        removeServerNetwork(projectId,name);
     }
 
     @Override
@@ -705,15 +862,52 @@ public class DockerProjectEnvironment implements SandboxPort {
     }
 
     private void removeAppServers(UUID projectId) {
-        CommandResult listed = run(List.of("ps", "-aq", "--filter", "label=" + APP_LABEL, "--filter", "label=com.codepal.project=" + projectId),
+        CommandResult listed = run(List.of("ps", "-aq", "--filter", "label=" + APP_LABEL, "--filter", "label=com.codepal.project=" + projectId,"--filter","label=com.codepal.namespace="+workspaceNamespace()),
                 Duration.ofSeconds(20), null);
-        if (!listed.success()) return;
-        for (String id : listed.stdout().split("\\R")) if (!id.isBlank()) run(List.of("rm", "-f", id.trim()), Duration.ofSeconds(30), null);
+        listed.requireSuccess();
+        for (String id : listed.stdout().split("\\R")) if (!id.isBlank()) run(List.of("rm", "-f", id.trim()), Duration.ofSeconds(30), null).requireSuccess();
+        var remaining=run(List.of("ps","-aq","--filter","label="+APP_LABEL,"--filter","label=com.codepal.project="+projectId,"--filter","label=com.codepal.namespace="+workspaceNamespace()),Duration.ofSeconds(20),null);
+        remaining.requireSuccess();if(!remaining.stdout().isBlank())throw new IllegalStateException("Project app process cleanup is incomplete");
     }
 
-    private static String appContainer(UUID projectId, String name) {
+    private String appContainer(UUID projectId, String name) {
         if (!name.matches("[a-z0-9-]{1,40}")) throw new IllegalArgumentException("Invalid server name");
-        return "codepal-app-" + projectId + "-" + name;
+        return "codepal-app-"+workspaceNamespace()+"-" + projectId + "-" + name;
+    }
+
+    String workspaceNamespace(){String base=storage.base().toAbsolutePath().normalize().toString();if(System.getProperty("os.name","").toLowerCase(Locale.ROOT).startsWith("windows"))base=base.toLowerCase(Locale.ROOT);return com.code.pal.agent.contract.ContractStore.hash(base).substring(0,16);}
+    String primaryContainerName(UUID project){return resourceName(properties.getSandbox().getContainerPrefix()+workspaceNamespace()+"-",project);}
+    private String projectNetworkName(UUID project,String server){if(!server.matches("[a-z0-9-]{1,40}"))throw new IllegalArgumentException("Invalid server name");String prefix=helperName(properties.getSandbox().getAppsNetwork());return prefix.substring(0,Math.min(20,prefix.length()))+"-"+workspaceNamespace()+"-"+project+"-"+server;}
+    private synchronized String gatewaySecret() {
+        Path path=storage.base().resolve(".apps-gateway-secret");
+        try{if(Files.exists(path)){String value=Files.readString(path).strip();if(!value.matches("[a-f0-9]{64}"))throw new IllegalStateException("Invalid trusted relay key");return value;}
+            byte[] bytes=new byte[32];new java.security.SecureRandom().nextBytes(bytes);String value=java.util.HexFormat.of().formatHex(bytes);Files.createDirectories(path.getParent());Files.writeString(path,value,java.nio.file.StandardOpenOption.CREATE_NEW);return value;
+        }catch(IOException unavailable){throw new IllegalStateException("Trusted relay key is unavailable",unavailable);}
+    }
+    private String signUpstream(String upstream,long expiry){try{var mac=javax.crypto.Mac.getInstance("HmacSHA256");mac.init(new javax.crypto.spec.SecretKeySpec(java.util.HexFormat.of().parseHex(gatewaySecret()),"HmacSHA256"));return java.util.HexFormat.of().formatHex(mac.doFinal((upstream+"\n"+expiry).getBytes(java.nio.charset.StandardCharsets.UTF_8)));}catch(java.security.GeneralSecurityException invalid){throw new IllegalStateException("Trusted relay signature unavailable",invalid);}}
+    private synchronized String projectNetwork(UUID project,String server) {
+        String name=projectNetworkName(project,server);var found=run(List.of("network","inspect","-f","{{.Internal}} {{json .Labels}}",name),Duration.ofSeconds(20),null);
+        if(!found.success()){run(List.of("network","create","--internal","--label","com.codepal.project="+project,"--label","com.codepal.namespace="+workspaceNamespace(),"--label","com.codepal.server="+server,name),Duration.ofSeconds(30),null).requireSuccess();found=run(List.of("network","inspect","-f","{{.Internal}} {{json .Labels}}",name),Duration.ofSeconds(20),null);}
+        found.requireSuccess();String[] proof=found.stdout().strip().split("\\s+",2);
+        if(proof.length!=2 || !"true".equals(proof[0]) || !project.toString().equals(label(proof[1],"com.codepal.project")) || !workspaceNamespace().equals(label(proof[1],"com.codepal.namespace")) || !server.equals(label(proof[1],"com.codepal.server")))throw new IllegalStateException("Project network ownership is unverified");
+        var attached=run(List.of("container","inspect","-f","{{json .NetworkSettings.Networks}}",appsDatabaseContainer()),Duration.ofSeconds(20),null);attached.requireSuccess();
+        if(!new tools.jackson.databind.ObjectMapper().readTree(attached.stdout()).has(name))run(List.of("network","connect","--alias",appsDatabaseContainer(),name,appsDatabaseContainer()),Duration.ofSeconds(30),null).requireSuccess();
+        return name;
+    }
+    private void removeServerNetwork(UUID project,String server) {
+        String name=projectNetworkName(project,server);var present=run(List.of("network","ls","-q","--filter","name=^"+name+"$"),Duration.ofSeconds(20),null);present.requireSuccess();if(present.stdout().isBlank())return;removeOwnedNetwork(project,name);
+    }
+    private void removeProjectNetworks(UUID project) {
+        var listed=run(List.of("network","ls","-q","--filter","label=com.codepal.project="+project,"--filter","label=com.codepal.namespace="+workspaceNamespace()),Duration.ofSeconds(20),null);listed.requireSuccess();for(String id:listed.stdout().split("\\R"))if(!id.isBlank())removeOwnedNetwork(project,id.strip());
+    }
+    private void removeOwnedNetwork(UUID project,String name) {
+        var found=run(List.of("network","inspect","-f","{{.Name}} {{json .Labels}}",name),Duration.ofSeconds(20),null);found.requireSuccess();
+        String[] proof=found.stdout().strip().split("\\s+",2);
+        if(proof.length!=2 || !project.toString().equals(label(proof[1],"com.codepal.project")) || !workspaceNamespace().equals(label(proof[1],"com.codepal.namespace")))throw new IllegalStateException("Project network cleanup ownership is unverified");
+        String actualName=proof[0];
+        var database=run(List.of("container","inspect","-f","{{json .NetworkSettings.Networks}}",appsDatabaseContainer()),Duration.ofSeconds(20),null);
+        if(database.success() && new tools.jackson.databind.ObjectMapper().readTree(database.stdout()).has(actualName))run(List.of("network","disconnect",actualName,appsDatabaseContainer()),Duration.ofSeconds(20),null).requireSuccess();
+        run(List.of("network","rm",name),Duration.ofSeconds(20),null).requireSuccess();
     }
 
     /**
@@ -734,19 +928,19 @@ public class DockerProjectEnvironment implements SandboxPort {
         if (parts.length < 2) throw new IllegalStateException("The apps network has no IPv4 subnet: " + inspected.stdout());
         network = new AppsNetwork(parts[0], readyAppsDatabase());
         String image = classpathImage("gateway", List.of("Dockerfile", "gateway.mjs"), properties.getSandbox().getGatewayImage(), GATEWAY_CONTEXT);
-        String config = contentHash(List.of((image + "|" + network + "|" + properties.getSandbox().getGatewayPort() + "|"
+        String config = contentHash(List.of((image + "|" + network + "|" + com.code.pal.agent.contract.ContractStore.hash(gatewaySecret())+"|"+properties.getSandbox().getGatewayPort() + "|"
                 + properties.getSandbox().getAppsDatabasePort()).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-        CommandResult current = run(List.of("container", "inspect", "-f", "{{.State.Running}} {{json .Config.Labels}}", "codepal-gateway"),
+        CommandResult current = run(List.of("container", "inspect", "-f", "{{.State.Running}} {{json .Config.Labels}}", gatewayContainer()),
                 Duration.ofSeconds(20), null);
         String[] state = current.stdout().trim().split("\\s+", 2);
         boolean matches = current.success() && state.length == 2 && "true".equals(state[0])
                 && config.equals(label(state[1], "com.codepal.gateway.config"));
         if (!matches) {
-            run(List.of("rm", "-f", "codepal-gateway"), Duration.ofSeconds(30), null);
-            run(List.of("run", "-d", "--name", "codepal-gateway", "--restart", "unless-stopped", "--network", "host",
+            run(List.of("rm", "-f", gatewayContainer()), Duration.ofSeconds(30), null);
+            run(List.of("run", "-d", "--name", gatewayContainer(), "--restart", "unless-stopped", "--network", "host",
                     "--label", "com.codepal.gateway.config=" + config, "--memory", "96m", "--cap-drop", "ALL",
                     "--security-opt", "no-new-privileges",
-                    "-e", "GATEWAY_PORT=" + properties.getSandbox().getGatewayPort(), "-e", "APPS_SUBNET=" + network.subnet(),
+                    "-e", "GATEWAY_PORT=" + properties.getSandbox().getGatewayPort(), "-e", "APPS_SUBNET=" + network.subnet(),"-e","API_RELAY_KEY="+gatewaySecret(),
                     "-e", "MONGO_TARGET=" + network.database() + ":27017",
                     "-e", "MONGO_LISTEN=127.0.0.1:" + properties.getSandbox().getAppsDatabasePort(),
                     image), Duration.ofSeconds(60), null).requireSuccess();
@@ -817,14 +1011,15 @@ public class DockerProjectEnvironment implements SandboxPort {
             command.addAll(List.of(configuredArgs.trim().split("\\s+")));
         }
         command.addAll(args);
+        Process process=null;
         try {
-            Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-            if (stdin != null) {
-                try (OutputStream output = process.getOutputStream()) { output.write(stdin); }
-            }
+            process = new ProcessBuilder(command).redirectErrorStream(true).start();
+            Process launched=process;
+            // WSL's pipe transport needs EOF even for commands that consume no input.
+            try (OutputStream output = process.getOutputStream()) { if(stdin!=null)output.write(stdin); }
             ByteArrayOutputStream captured = new ByteArrayOutputStream();
             Thread reader = Thread.ofVirtual().start(() -> {
-                try { process.getInputStream().transferTo(new BoundedOutputStream(captured, outputLimit)); }
+                try { launched.getInputStream().transferTo(new BoundedOutputStream(captured, outputLimit)); }
                 catch (IOException ignored) { }
             });
             ProcessWaiter.Outcome outcome = ProcessWaiter.await(process, timeout);
@@ -840,26 +1035,54 @@ public class DockerProjectEnvironment implements SandboxPort {
             return new CommandResult(false, -1, "", CommandResult.NOT_STARTED + " (docker): " + e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return new CommandResult(false, -1, "", "Sandbox command interrupted");
+            return new CommandResult(false, -1, "", CommandResult.CANCELLED);
+        } finally {
+            if(process!=null && process.isAlive()) { process.descendants().forEach(ProcessHandle::destroyForcibly);process.destroyForcibly(); }
         }
     }
 
-    /**
-     * Kills every process the sandbox user runs in {@code container} except its init process (the
-     * container stays up). Runs on the cancelling thread, outside the stopped run, so it is not itself
-     * refused as cancelled.
-     */
-    private void killContainerProcesses(String container) {
-        try (RunCancellation.Registration ignored = RunCancellation.bind(RunCancellation.NONE)) {
-            CommandResult killed = run(List.of("exec", container, "sh", "-c", "kill -KILL -1 2>/dev/null; true"), Duration.ofSeconds(10), null);
-            log.info("sandbox_processes_killed container={} success={}", container, killed.success());
+    /** Each command gets a pre-created owned container. Stop cannot race a late container creation. */
+    private CommandResult runOwnedContainer(String name,List<String> args,Duration timeout,byte[] stdin,int outputLimit) {
+        RunCancellation signal=RunCancellation.current();
+        if(signal.isCancelled()) return new CommandResult(false,-1,"",CommandResult.CANCELLED);
+        List<String> create=new ArrayList<>();create.add("create");
+        create.addAll(args.subList(args.size()>1 && args.get(1).equals("--rm") ? 2 : 1,args.size()));
+        if(stdin!=null) create.add(1,"-i");
+        try {
+            CommandResult prepared;
+            // Creation launches no generated process; finish this bounded operation then check Stop before start.
+            try(var ignored=RunCancellation.bind(RunCancellation.NONE)) { prepared=run(create,Duration.ofSeconds(20),null,outputLimit); }
+            if(!prepared.success()) return prepared;
+            try(var hook=signal.onCancel(()->Thread.ofVirtual().start(()->removeContainerQuietly(name)))) {
+                if(signal.isCancelled()) return new CommandResult(false,-1,"",CommandResult.CANCELLED);
+                List<String> start=stdin==null ? List.of("start","-a",name) : List.of("start","-a","-i",name);
+                CommandResult result=run(start,timeout,stdin,outputLimit);
+                if(signal.isCancelled()) return new CommandResult(false,-1,result.stdout(),CommandResult.CANCELLED);
+                if(result.timedOut() || !result.error().isBlank()) return result;
+                CommandResult state=run(List.of("inspect","-f","{{.State.ExitCode}}",name),Duration.ofSeconds(10),null);
+                if(!state.success()) return new CommandResult(false,-1,result.stdout(),"Command exit state unavailable");
+                try { int exit=Integer.parseInt(state.stdout().trim());return new CommandResult(exit==0,exit,result.stdout(),""); }
+                catch(NumberFormatException invalid) { return new CommandResult(false,-1,result.stdout(),"Command exit state invalid"); }
+            }
+        } finally {
+            boolean interrupted=Thread.interrupted();
+            try { removeContainerQuietly(name); } finally { if(interrupted) Thread.currentThread().interrupt(); }
         }
     }
 
-    private void removeContainerQuietly(String name) {
+    private static boolean noSuchContainer(CommandResult result) {
+        String text=(result.stdout()+"\n"+result.error()).stripLeading().toLowerCase(Locale.ROOT);
+        return text.startsWith("error response from daemon: no such container") || text.startsWith("error: no such container");
+    }
+    private boolean removeContainerQuietly(String name) {
+        boolean interrupted=Thread.interrupted();
         try (RunCancellation.Registration ignored = RunCancellation.bind(RunCancellation.NONE)) {
-            run(List.of("rm", "-f", name), Duration.ofSeconds(30), null);
-        }
+            CommandResult removed=run(List.of("rm", "-f", name), Duration.ofSeconds(10), null);
+            boolean gone=removed.success() || noSuchContainer(removed);
+            if(!gone) log.warn("owned_container_cleanup_pending container={}",name);
+            return gone;
+        } catch(RuntimeException failed) { log.warn("owned_container_cleanup_pending container={}",name);return false; }
+        finally {if(interrupted) Thread.currentThread().interrupt();}
     }
 
     private static String resourceName(String prefix, UUID projectId) {

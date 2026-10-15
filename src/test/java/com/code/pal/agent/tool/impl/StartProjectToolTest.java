@@ -24,7 +24,7 @@ import static org.mockito.Mockito.mock;
 class StartProjectToolTest {
     private final LocalProject project = LocalProject.create();
     private final ChangeSetService changeSets = new ChangeSetService(mock(FileChangeRepository.class), mock(AgentRunRepository.class),
-            new ObjectMapper(), project.properties, project.files, project.sandbox);
+            new ObjectMapper(), project.properties, project.files, project.sandbox, mock(com.code.pal.project.service.ProjectService.class));
     private final StartProjectTool tool = new StartProjectTool(changeSets);
 
     private AgentContext context() {
@@ -75,5 +75,17 @@ class StartProjectToolTest {
         AgentContext context = context();
         assertThrows(IllegalArgumentException.class, () -> tool.execute(Map.of("stack", "django"), context));
         assertEquals("startProject", tool.name());
+    }
+
+    @Test void aStarterMismatchDoesNotWriteAnySetupFile() {
+        var decisions = mock(com.code.pal.project.capability.BuildDecisions.class);
+        org.mockito.Mockito.doThrow(new com.code.pal.project.exception.WorkflowStageException("Approved storage is MERN"))
+                .when(decisions).requireStarter(project.projectId, "vite-react");
+        tool.setBuildDecisions(decisions);
+        AgentContext context = context();
+        assertThrows(com.code.pal.project.exception.WorkflowStageException.class,
+                () -> tool.execute(Map.of("stack", "vite-react"), context));
+        assertFalse(project.files.exists(project.projectId, context.root(), "package.json"));
+        assertEquals(0, changeSets.view(context).revision());
     }
 }

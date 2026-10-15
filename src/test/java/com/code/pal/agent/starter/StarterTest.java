@@ -19,7 +19,7 @@ class StarterTest {
     @Test
     void theViteStarterHasTheSetupFilesButNotTheApp() {
         Map<String, String> files = Starter.VITE_REACT.files("Tip <Calc> & \"more\"");
-        assertEquals(List.of(".gitignore", "package.json", "tsconfig.json", "vite.config.ts", "index.html", "src/main.tsx",
+        assertEquals(List.of(".gitignore", ".nvmrc", "starter-runtime.json", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts", "index.html", "src/main.tsx",
                 "src/index.css"), List.copyOf(files.keySet()));
         assertTrue(files.get("index.html").contains("<title>Tip &lt;Calc&gt; &amp; &quot;more&quot;</title>"));
         assertTrue(files.get("index.html").contains("src=\"/src/main.tsx\""));
@@ -42,6 +42,31 @@ class StarterTest {
                 }
             });
         }
+    }
+
+    @Test void lockfilesMatchManifestsAndSelectCleanInstallWithPinnedRuntime() {
+        for (Starter starter : Starter.values()) {
+            var files = starter.files(null);
+            var runtime = json.readTree(files.get("starter-runtime.json"));
+            assertEquals(Starter.RUNTIME_IMAGE, runtime.path("image").asString());
+            assertEquals(Starter.TEMPLATE_VERSION, runtime.path("templateVersion").asString());
+            assertEquals(runtime.path("node").asString(), files.get(".nvmrc").strip());
+            var project = com.code.pal.agent.workspace.LocalProject.create();
+            files.forEach(project::write);
+            for (String path : files.keySet()) {
+                if (!path.endsWith("package.json")) continue;
+                var manifest = json.readTree(files.get(path));
+                var lock = json.readTree(files.get(path.replace("package.json", "package-lock.json")));
+                assertEquals(3, lock.path("lockfileVersion").asInt());
+                var root = lock.path("packages").path("");
+                for (String key : List.of("dependencies", "devDependencies", "engines")) assertEquals(manifest.path(key), root.path(key));
+                assertEquals("npm@" + runtime.path("npm").asString(), manifest.path("packageManager").asString());
+                assertEquals(runtime.path("node").asString(), manifest.path("engines").path("node").asString());
+                String packageRoot = path.equals("package.json") ? "." : path.substring(0, path.lastIndexOf('/'));
+                assertEquals("ci", new com.code.pal.agent.stack.NodePack(json).installCommand(project.files, project.projectId, packageRoot).get(1));
+            }
+        }
+        assertEquals(Starter.RUNTIME_IMAGE, new com.code.pal.agent.config.AgentProperties().getSandbox().getImage());
     }
 
     @Test

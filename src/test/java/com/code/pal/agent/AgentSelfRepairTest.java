@@ -45,6 +45,7 @@ class AgentSelfRepairTest {
     @Test
     void repairsAnIntroducedTypeErrorAndCommitsOnlyTheValidatedRevision() throws Exception {
         AgentProperties props = new AgentProperties();
+        props.getSandbox().setRuntimeCheck(false); // Command-only fixture, explicit optional coverage.
         LocalProject workspace = LocalProject.create(props);
         UUID projectId = workspace.projectId; UUID workspaceId = UUID.randomUUID(); UUID runId = UUID.randomUUID();
         Path live = workspace.dir();
@@ -65,10 +66,13 @@ class AgentSelfRepairTest {
         props.getModels().setBuild(List.of("test-model"));
         ObjectMapper mapper = new ObjectMapper();
         AgentRunRepository runs = mock(AgentRunRepository.class);
+        when(runs.beginCommit(any(),any(),any())).thenReturn(1);
+        when(runs.recordCodeSaved(any(),any())).thenReturn(1);
+        when(runs.recordSnapshot(any(),any())).thenReturn(1);
         when(runs.save(any())).thenAnswer(call -> call.getArgument(0));
         FileChangeRepository fileChanges = mock(FileChangeRepository.class);
         when(fileChanges.save(any())).thenAnswer(call -> call.getArgument(0));
-        ChangeSetService changeSets = new ChangeSetService(fileChanges, runs, mapper, props, workspace.files, workspace.sandbox);
+        ChangeSetService changeSets = new ChangeSetService(fileChanges, runs, mapper, props, workspace.files, workspace.sandbox, mock(com.code.pal.project.service.ProjectService.class));
         ProjectValidationService validation = new ProjectValidationService(changeSets, new StackPacks(mapper), props,
                 workspace.files, workspace.sandbox,
                 new com.code.pal.agent.stack.DependencyService(new StackPacks(mapper), workspace.files, workspace.sandbox, props), null);
@@ -81,13 +85,14 @@ class AgentSelfRepairTest {
                 .lastActivityAt(Instant.now()).build();
         when(projects.requireManageable(7L, projectId)).thenReturn(project);
         when(projects.requireAccessible(7L, projectId)).thenReturn(project);
+        when(projects.requireCanEdit(7L, projectId)).thenReturn(project);
         AgentToolExecutor executor = new AgentToolExecutor(props, registry, projects);
 
         AgentRun run = AgentRun.builder().id(runId).projectId(projectId).userId(7L).mode(ProjectType.BUILD)
                 .messageId("assistant-repair").status(RunStatus.QUEUED).build();
         MessageRepository messages = mock(MessageRepository.class);
         Message request = Message.user(projectId, "user-repair", "Update the theme constant safely.", ProjectType.BUILD, 7L);
-        when(messages.findByProjectId(eq(projectId), any())).thenReturn(new PageImpl<>(List.of(request)));
+        com.code.pal.testsupport.QueuedRequestFixture.stubOriginal(messages, run, request);
         when(messages.findById("assistant-repair")).thenReturn(Optional.empty());
         AgentHeartbeat heartbeat = mock(AgentHeartbeat.class); when(heartbeat.start(runId, projectId)).thenReturn(() -> {});
         AgentJobQueue queue = mock(AgentJobQueue.class);
@@ -104,7 +109,8 @@ class AgentSelfRepairTest {
 
         assertEquals(RunStatus.DONE, result.status());
         assertEquals("export const theme = 'DARK';\n", Files.readString(live.resolve("src/App.tsx")));
-        assertTrue(result.response().contains("src/App.tsx"));
+        assertFalse(result.response().contains("src/App.tsx"), "File inventories belong in Details");
+        assertTrue(result.response().contains("changes are saved"));
         verify(fileChanges, times(2)).save(any(FileChange.class));
         verify(events).emit(eq(run), eq(com.code.pal.agent.domain.AgentStepType.STATUS), eq("Run size"),
                 argThat(data -> data instanceof java.util.Map<?, ?> size && "S".equals(size.get("tier"))

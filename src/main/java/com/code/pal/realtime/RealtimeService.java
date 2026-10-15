@@ -52,6 +52,8 @@ public class RealtimeService {
 
     private final ObjectMapper objectMapper;
     private final StringRedisTemplate redis;
+    private final com.code.pal.identity.security.AuthSessions authSessions;
+    private final org.springframework.beans.factory.ObjectProvider<com.code.pal.project.service.ProjectService> projects;
 
     private final Map<UUID, Set<WebSocketSession>> sessionsByProject = new ConcurrentHashMap<>();
     private final Map<String, UUID> projectBySession = new ConcurrentHashMap<>();
@@ -108,6 +110,7 @@ public class RealtimeService {
 
     private void deliver(WebSocketSession session, TextMessage frame) {
         try {
+            if(!authorized(session)){session.close(org.springframework.web.socket.CloseStatus.POLICY_VIOLATION);unregister(session);return;}
             if (session.isOpen()) session.sendMessage(frame);
         } catch (IOException | IllegalStateException e) {
             // Broken pipe / buffer overrun — close and let afterConnectionClosed clean up.
@@ -119,6 +122,17 @@ public class RealtimeService {
             }
         }
     }
+    private boolean authorized(WebSocketSession session) {
+        try {
+            var actor=(com.code.pal.shared.security.AuthPrincipal)session.getAttributes().get(com.code.pal.realtime.security.JwtHandshakeInterceptor.PRINCIPAL);
+            var expiry=(java.time.Instant)session.getAttributes().get(com.code.pal.realtime.security.JwtHandshakeInterceptor.EXPIRES_AT);
+            UUID project=(UUID)session.getAttributes().get(com.code.pal.realtime.security.JwtHandshakeInterceptor.PROJECT_ID);
+            if(actor==null || expiry==null || !expiry.isAfter(java.time.Instant.now()) || !authSessions.active(actor.sessionId(),actor.userId()))return false;
+            projects.getObject().requireAccessible(actor.userId(),project);return true;
+        }catch(RuntimeException revoked){return false;}
+    }
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelayString="${app.realtime.recheck-ms:30000}")
+    public void closeRevoked(){for(var sessions:sessionsByProject.values())for(var session:sessions)if(!authorized(session))try{session.close(org.springframework.web.socket.CloseStatus.POLICY_VIOLATION);unregister(session);}catch(IOException ignored){}}
 
     private TextMessage serialize(RealtimeMessage message) {
         try {

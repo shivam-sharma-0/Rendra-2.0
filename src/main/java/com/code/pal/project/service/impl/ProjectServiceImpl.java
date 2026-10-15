@@ -130,7 +130,7 @@ public class ProjectServiceImpl implements ProjectService {
     @Override
     @Transactional
     public ProjectResponse advanceLifecycle(Long userId, UUID projectId, ProjectStage stage) {
-        Project project = requireManageable(userId, projectId);
+        Project project = requireCanEdit(userId, projectId);
         project.setLifecycleStage(stage);
         return ProjectResponse.from(project);
     }

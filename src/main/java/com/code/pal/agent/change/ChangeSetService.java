@@ -8,6 +8,7 @@ import com.code.pal.agent.tool.AgentToolException;
 import com.code.pal.agent.validation.ProjectDiagnostic;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.SandboxPort;
+import com.code.pal.project.service.ProjectService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -19,9 +20,9 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Run-scoped copy-on-write workspace. Tools mutate only the run's staging tree
- * ({@code .codepal/changesets/<runId>/workspace}); commit first checks every touched live file against
- * its baseline fingerprint, archives the project, and restores the touched files from that archive if
- * any apply operation fails. Single files go through {@link ProjectFiles}; whole-tree copies, removal
+ * ({@code .codepal/changesets/<runId>/epoch-<generation>/workspace}); commit first checks every touched live file against
+ * its baseline fingerprint, journals a proved archive, and verifies touched-file compensation after failure.
+ * Unknown finalization/restore outcomes retain COMMITTING and quarantine rather than claiming restoration. Single files go through {@link ProjectFiles}; whole-tree copies, removal
  * and restore run in the sandbox next to the files.
  */
 @Slf4j
@@ -43,17 +44,106 @@ public class ChangeSetService {
     private final AgentProperties properties;
     private final ProjectFiles files;
     private final SandboxPort sandbox;
+    private final ProjectService projects;
+    private com.code.pal.agent.lease.ProjectLeaseService leases;
+    @org.springframework.beans.factory.annotation.Autowired
+    void useLeases(com.code.pal.agent.lease.ProjectLeaseService leases) { this.leases=leases; }
+    private PromotionJournal journal;
+    @org.springframework.beans.factory.annotation.Autowired
+    void useJournal(PromotionJournal journal) { this.journal=journal; }
+    private SequentialCheckpoints checkpoints;
+    @org.springframework.beans.factory.annotation.Autowired
+    void useCheckpoints(SequentialCheckpoints checkpoints) { this.checkpoints=checkpoints; }
+    private com.code.pal.project.brief.ApprovedProjectMemory memory;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void useApprovedMemory(com.code.pal.project.brief.ApprovedProjectMemory memory) { this.memory=Objects.requireNonNull(memory); }
     private final Map<UUID, ActiveChangeSet> active = new ConcurrentHashMap<>();
+    private FailedDraftService failedDrafts;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    void useFailedDrafts(FailedDraftService service) {this.failedDrafts=service;}
 
     /** Starts a change set as a copy of the project; returns the staging root for the run's tools. */
     public String start(UUID runId, UUID projectId) {
+        return leases==null?startOwned(runId,projectId):leases.guarded(projectId,()->startOwned(runId,projectId));
+    }
+    private String startOwned(UUID runId, UUID projectId) {
         sandbox.ensure(projectId);
-        String container = CHANGESETS + "/" + runId;
+        var fence=com.code.pal.agent.lease.RunFence.current();
+        String container=CHANGESETS+"/"+runId+(fence==null?"":"/epoch-"+fence.epoch());
         String stage = container + "/workspace";
         sandbox.removeTree(projectId, container);
         sandbox.copyTree(projectId, ".", stage);
-        active.put(runId, new ActiveChangeSet(runId, projectId, stage, container));
+        var set=new ActiveChangeSet(runId,projectId,stage,container);
+        // Bind failed-output reuse to the accepted starting code/approval, before any staged mutation.
+        if(failedDrafts!=null) {
+            try {
+                set.failedDraftBasis=failedDrafts.basis(projectId,stage);
+                failedDrafts.persistBasis(runs.findById(runId).orElseThrow(),container,set.failedDraftBasis);
+            }
+            catch(RuntimeException unavailable) {set.failedDraftBasis=null;log.warn("failed_draft_basis_unavailable runId={} errorType={}",runId,unavailable.getClass().getSimpleName());}
+        }
+        boolean checkpointRestored=false;
+        if(checkpoints!=null) {
+            var run=runs.findById(runId).orElseThrow();
+            var checkpoint=checkpoints.restore(run,stage);
+            if(checkpoint!=null) {
+                checkpointRestored=true;
+                set.revision=checkpoint.revision();set.repairAttempts=checkpoint.repairAttempts();set.resumedPlan=checkpoint.plan();
+                for(var file:checkpoint.files()) {set.touched.add(file.path());set.baselines.put(file.path(),file.before());}
+                // Outputs are proved, but validation on the new accepted/config context is still mandatory.
+                set.validatedRevision=-1;
+            }
+        }
+        active.put(runId,set);
+        if(failedDrafts!=null && !checkpointRestored) {
+            var run=runs.findById(runId).orElseThrow();
+            if(run.getRetrySourceRunId()!=null) seedFailedDraft(run,set);
+        }
         return stage;
+    }
+
+    private void seedFailedDraft(AgentRun run,ActiveChangeSet set) {
+        var manifest=failedDrafts.retryManifest(run.getProjectId(),run.getRetrySourceRunId());
+        var sources=failedDrafts.retrySources(run.getProjectId(),run.getRetrySourceRunId());
+        try {
+            for(var change:manifest.changes()) {
+                if(change.after().equals(FileVersions.ABSENT)) files.delete(set.projectId,set.stage,change.path());
+                else {
+                    byte[] bytes=sources.get(change.path());
+                    if(bytes==null || !change.after().equals("sha256:"+FailedDraftArchive.hash(bytes))) throw new IllegalStateException("Retry source proof unavailable");
+                    files.writeBytes(set.projectId,set.stage+"/"+change.path(),bytes);
+                }
+                if(!files.version(set.projectId,set.stage,change.path()).equals(change.after())) throw new IllegalStateException("Retry staging proof failed");
+                set.baselines.put(change.path(),change.before());set.touched.add(change.path());
+            }
+            changes.saveAllAndFlush(manifest.changes().stream().map(c->FileChange.builder().runId(run.getId()).projectId(run.getProjectId())
+                    .path(c.path()).beforeVersion(c.before()).afterVersion(c.after()).operation(c.after().equals(FileVersions.ABSENT)?FileOperation.DELETE:
+                            c.before().equals(FileVersions.ABSENT)?FileOperation.CREATE:FileOperation.PATCH).build()).toList());
+            set.revision++;set.validatedRevision=-1;
+        }catch(RuntimeException uncertain){set.batchRecoveryRequired=true;throw uncertain;}
+    }
+
+    /** Snapshot failure/Stop output before normal cleanup. A retention failure keeps raw stage evidence. */
+    public void finish(AgentRun run) {
+        var set=active.get(run.getId());
+        if(set!=null && set.batchRecoveryRequired) {
+            active.remove(run.getId());
+            log.warn("failed_draft_audit_pending runId={}",run.getId());
+            return;
+        }
+        if(set!=null && failedDrafts!=null && FailedDraftService.eligible(run) && !set.touched.isEmpty()) {
+            try {
+                if(set.failedDraftBasis==null) throw new IllegalStateException("Original draft basis unavailable; stage retained");
+                Runnable retain=()->failedDrafts.retain(run,set.stage,set.touched.stream().sorted().map(path->
+                        new FailedDraftArchive.Change(path,set.baselines.get(path),files.version(set.projectId,set.stage,path))).toList(),set.failedDraftBasis);
+                if(leases==null) retain.run();else leases.guarded(set.projectId,retain);
+            } catch(RuntimeException unavailable) {
+                active.remove(run.getId());
+                log.warn("failed_draft_retention_pending runId={} errorType={}",run.getId(),unavailable.getClass().getSimpleName());
+                return;
+            }
+        }
+        discard(run.getId());
     }
 
     public MutationResult create(AgentContext context, String relative, String content) {
@@ -61,6 +151,7 @@ public class ChangeSetService {
         requirePlan(context);
         requireRepairAvailable(set);
         String path = context.resolvePath(relative);
+        com.code.pal.agent.contract.UnitWriteScope.destination(context,path);
         if (files.exists(set.projectId, set.stage, path)) throw failure("FILE_ALREADY_EXISTS", "File already exists", path);
         ensureTextSize(content);
         rememberBaseline(set, path);
@@ -68,19 +159,172 @@ public class ChangeSetService {
         return record(set, path, null, FileOperation.CREATE, FileVersions.ABSENT, files.version(set.projectId, set.stage, path));
     }
 
+    /** New-file batch: preflight every entry, compensate proved writes, then commit all audit rows.
+     * An uncertain audit/commit or cleanup blocks this stage; it must never become a checkpoint/save.
+     */
+    public List<MutationResult> createBatch(AgentContext context, List<NewFile> entries) {
+        ActiveChangeSet set = requireActive(context);
+        requirePlan(context);
+        synchronized (set) {
+            requireRepairAvailable(set);
+            if (entries == null || entries.isEmpty() || entries.size() > 24)
+                throw new IllegalArgumentException("A batch must contain between 1 and 24 files");
+            Map<String, NewFile> prepared = new LinkedHashMap<>();
+            Set<String> portablePaths = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            Map<String, String> baselines = new LinkedHashMap<>();
+            Set<String> attempted = new LinkedHashSet<>();
+            boolean[] auditAttempted = {false};
+            java.util.function.Supplier<Void> writeBatch = () -> {
+                for (NewFile entry : entries) {
+                    if (entry == null || entry.content() == null) throw new IllegalArgumentException("Missing file content");
+                    String path = java.nio.file.Path.of(context.resolvePath(entry.path())).normalize().toString().replace('\\', '/');
+                    path = context.resolvePath(path);
+                    com.code.pal.agent.contract.UnitWriteScope.destination(context,path);
+                    if (!portablePaths.add(path))
+                        throw failure("DUPLICATE_BATCH_PATH", "Batch paths must be distinct", path);
+                    prepared.put(path, new NewFile(path, entry.content()));
+                    ensureTextSize(entry.content());
+                    if (files.exists(set.projectId, set.stage, path)) throw failure("FILE_ALREADY_EXISTS", "File already exists", path);
+                    baselines.put(path, files.version(set.projectId, ".", path));
+                }
+                // Reject a file that would also be another entry's parent before any write.
+                for (String path : prepared.keySet()) for (String other : prepared.keySet())
+                    if (other.toLowerCase(Locale.ROOT).startsWith(path.toLowerCase(Locale.ROOT) + "/"))
+                        throw failure("BATCH_PATH_CONFLICT", "A file cannot be another file's parent", path);
+                try {
+                    for (NewFile entry : prepared.values()) {
+                        if (com.code.pal.agent.runtime.RunCancellation.current().isCancelled())
+                            throw new com.code.pal.agent.llm.LlmCancelledException();
+                        attempted.add(entry.path()); // A write can succeed physically before reporting failure.
+                        files.writeText(set.projectId, set.stage, entry.path(), entry.content());
+                        if (!files.version(set.projectId, set.stage, entry.path()).equals(textVersion(entry.content())))
+                            throw new IllegalStateException("Batch write proof failed");
+                    }
+                    for (NewFile entry : prepared.values())
+                        if (!files.version(set.projectId, set.stage, entry.path()).equals(textVersion(entry.content())))
+                            throw new IllegalStateException("Final batch proof failed");
+                    if (com.code.pal.agent.runtime.RunCancellation.current().isCancelled())
+                        throw new com.code.pal.agent.llm.LlmCancelledException();
+                } catch (RuntimeException failedWrite) {
+                    try {
+                        // Check every target before deleting any: preserve an unexpected edit.
+                        for (String path : attempted) {
+                            String actual = files.version(set.projectId, set.stage, path);
+                            if (!actual.equals(FileVersions.ABSENT) && !actual.equals(textVersion(prepared.get(path).content())))
+                                throw new IllegalStateException("Batch cleanup proof failed");
+                        }
+                        for (String path : attempted) files.delete(set.projectId, set.stage, path);
+                        for (String path : attempted) if (!files.version(set.projectId, set.stage, path).equals(FileVersions.ABSENT))
+                            throw new IllegalStateException("Batch cleanup incomplete");
+                    } catch (RuntimeException uncertainCleanup) {
+                        set.batchRecoveryRequired = true;
+                        throw batchRecoveryRequired();
+                    }
+                    if (failedWrite instanceof com.code.pal.agent.llm.LlmCancelledException) throw failedWrite;
+                    throw new AgentToolException("BATCH_WRITE_FAILED", "New-file batch was rolled back; retry the complete batch");
+                }
+                auditAttempted[0] = true;
+                changes.saveAllAndFlush(prepared.values().stream().map(entry -> FileChange.builder()
+                        .runId(set.runId).projectId(set.projectId).path(entry.path()).operation(FileOperation.CREATE)
+                        .beforeVersion(FileVersions.ABSENT).afterVersion(textVersion(entry.content())).build()).toList());
+                return null;
+            };
+            try {
+                // Managed execution supplies one DB transaction and the project filesystem/lease lock.
+                if (leases == null) writeBatch.get(); else leases.guarded(set.projectId, writeBatch);
+            } catch (RuntimeException error) {
+                if (auditAttempted[0]) { set.batchRecoveryRequired = true; throw batchRecoveryRequired(); }
+                throw error;
+            }
+            set.baselines.putAll(baselines);
+            set.touched.addAll(prepared.keySet());
+            if (set.repairPending) { set.repairAttempts++; set.repairPending = false; }
+            set.revision++;
+            set.validatedRevision = -1;
+            return prepared.values().stream().map(entry -> new MutationResult(entry.path(), null, FileOperation.CREATE,
+                    FileVersions.ABSENT, textVersion(entry.content()), set.revision)).toList();
+        }
+    }
+
+    private static String textVersion(String content) {
+        try {
+            return "sha256:" + java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(content.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+    private static AgentToolException batchRecoveryRequired() {
+        return new AgentToolException("BATCH_RECOVERY_REQUIRED", "Batch outcome is uncertain; discard this stage and recover from a proved checkpoint");
+    }
+    public record NewFile(String path, String content) {}
+
+    /** Coordinator batch for existing/new/deleted files. Expected versions bind a complete wave snapshot. */
+    public record Replacement(String path,String expectedVersion,String content) {}
+    public void replaceBatch(AgentContext context,List<Replacement> entries) {
+        ActiveChangeSet set=requireActive(context);requirePlan(context);
+        synchronized(set) {
+            requireRepairAvailable(set);
+            if(entries==null || entries.isEmpty() || entries.size()>256)throw new IllegalArgumentException("Invalid coordinator batch size");
+            var prepared=new LinkedHashMap<String,Replacement>();var originals=new LinkedHashMap<String,String>();var live=new LinkedHashMap<String,String>();
+            var portable=new TreeSet<String>(String.CASE_INSENSITIVE_ORDER);long total=0;
+            for(var entry:entries){
+                if(entry==null)throw new IllegalArgumentException("Missing batch entry");String path=context.resolvePath(entry.path());
+                com.code.pal.agent.contract.UnitWriteScope.destination(context,path);
+                if(!path.equals(java.nio.file.Path.of(path).normalize().toString().replace('\\','/')) || !portable.add(path))throw new IllegalArgumentException("Noncanonical/duplicate batch path");
+                String before=files.version(set.projectId,set.stage,path);requireVersion(path,entry.expectedVersion(),before);
+                if(!before.equals(FileVersions.ABSENT) && !files.regularFile(set.projectId,set.stage,path))throw new IllegalArgumentException("Batch target is not a regular file");
+                if(entry.content()!=null){ensureTextSize(entry.content());total+=entry.content().getBytes(StandardCharsets.UTF_8).length;}
+                if(total>8_000_000)throw new IllegalArgumentException("Batch byte limit exceeded");
+                prepared.put(path,entry);originals.put(path,before);live.put(path,files.version(set.projectId,".",path));
+            }
+            for(String path:prepared.keySet())for(String other:prepared.keySet())if(other.toLowerCase(Locale.ROOT).startsWith(path.toLowerCase(Locale.ROOT)+"/"))throw new IllegalArgumentException("Batch file/parent conflict");
+            String backup=set.container+"/batches/"+UUID.randomUUID();var attempted=new LinkedHashSet<String>();boolean[] audit={false};
+            Runnable mutate=()->{
+                // Re-read every target under the shared mutation lock before touching any file.
+                originals.forEach((p,v)->requireVersion(p,v,files.version(set.projectId,set.stage,p)));
+                originals.forEach((p,v)->{if(!v.equals(FileVersions.ABSENT)){files.copyFile(set.projectId,set.stage,p,backup,p);requireVersion(p,v,files.version(set.projectId,backup,p));}});
+                try {
+                    for(var e:prepared.values()){
+                        if(com.code.pal.agent.runtime.RunCancellation.current().isCancelled())throw new com.code.pal.agent.llm.LlmCancelledException();
+                        attempted.add(e.path());if(e.content()==null)files.delete(set.projectId,set.stage,e.path());else files.writeText(set.projectId,set.stage,e.path(),e.content());
+                    }
+                    for(var e:prepared.values())requireVersion(e.path(),e.content()==null?FileVersions.ABSENT:textVersion(e.content()),files.version(set.projectId,set.stage,e.path()));
+                    if(com.code.pal.agent.runtime.RunCancellation.current().isCancelled())throw new com.code.pal.agent.llm.LlmCancelledException();
+                }catch(RuntimeException failed){
+                    try {
+                        for(String p:attempted){String current=files.version(set.projectId,set.stage,p),after=prepared.get(p).content()==null?FileVersions.ABSENT:textVersion(prepared.get(p).content());if(!current.equals(originals.get(p)) && !current.equals(after))throw new IllegalStateException("Batch target changed during compensation");}
+                        for(String p:attempted){if(originals.get(p).equals(FileVersions.ABSENT))files.delete(set.projectId,set.stage,p);else {requireVersion(p,originals.get(p),files.version(set.projectId,backup,p));files.copyFile(set.projectId,backup,p,set.stage,p);}}
+                        originals.forEach((p,v)->requireVersion(p,v,files.version(set.projectId,set.stage,p)));
+                    }catch(RuntimeException uncertain){set.batchRecoveryRequired=true;throw batchRecoveryRequired();}
+                    throw failed;
+                }
+                audit[0]=true;
+                changes.saveAllAndFlush(prepared.values().stream().map(e->FileChange.builder().runId(set.runId).projectId(set.projectId).path(e.path())
+                        .operation(e.content()==null?FileOperation.DELETE:originals.get(e.path()).equals(FileVersions.ABSENT)?FileOperation.CREATE:FileOperation.PATCH)
+                        .beforeVersion(originals.get(e.path())).afterVersion(e.content()==null?FileVersions.ABSENT:textVersion(e.content())).build()).toList());
+            };
+            try{if(leases==null)mutate.run();else leases.guarded(set.projectId,mutate);}catch(RuntimeException e){if(audit[0]){set.batchRecoveryRequired=true;throw batchRecoveryRequired();}throw e;}
+            live.forEach(set.baselines::putIfAbsent);set.touched.addAll(prepared.keySet());
+            if(set.repairPending){set.repairAttempts++;set.repairPending=false;}set.revision++;set.validatedRevision=-1;
+        }
+    }
+
     public MutationResult patch(AgentContext context, String relative, String expectedVersion, String oldText, String newText) {
         ActiveChangeSet set = requireActive(context);
         requirePlan(context);
         requireRepairAvailable(set);
         String path = context.resolvePath(relative);
+        com.code.pal.agent.contract.UnitWriteScope.destination(context,path);
         requireRegular(set, path);
         String actual = files.version(set.projectId, set.stage, path);
         requireVersion(path, expectedVersion, actual);
+        if (oldText == null || oldText.isEmpty()) throw new AgentToolException("PATCH_TARGET_EMPTY", "oldText must contain a nonempty exact target",
+                Map.of("path", path, "actualVersion", actual, "action", "Read the file and choose a unique nonempty block"));
+        if (newText == null) throw new IllegalArgumentException("Missing replacement text");
         String content = readStagedText(set, path);
         int first = content.indexOf(oldText);
         if (first < 0) throw new AgentToolException("PATCH_TARGET_NOT_FOUND", "Expected patch target was not found",
                 Map.of("path", path, "actualVersion", actual, "action", "Re-read the file and construct a new patch"));
-        if (content.indexOf(oldText, first + Math.max(1, oldText.length())) >= 0) {
+        if (content.indexOf(oldText, first + 1) >= 0) {
             throw new AgentToolException("PATCH_TARGET_AMBIGUOUS", "Expected patch target occurs more than once",
                     Map.of("path", path, "actualVersion", actual, "action", "Use a larger unique oldText block"));
         }
@@ -96,6 +340,7 @@ public class ChangeSetService {
         requirePlan(context);
         requireRepairAvailable(set);
         String path = context.resolvePath(relative);
+        com.code.pal.agent.contract.UnitWriteScope.destination(context,path);
         requireRegular(set, path);
         String actual = files.version(set.projectId, set.stage, path);
         requireVersion(path, expectedVersion, actual);
@@ -114,6 +359,8 @@ public class ChangeSetService {
         requireRepairAvailable(set);
         String source = context.resolvePath(sourceRelative);
         String target = context.resolvePath(targetRelative);
+        com.code.pal.agent.contract.UnitWriteScope.destination(context,source);
+        com.code.pal.agent.contract.UnitWriteScope.destination(context,target);
         requireRegular(set, source);
         if (files.exists(set.projectId, set.stage, target)) throw failure("RENAME_TARGET_EXISTS", "Rename target already exists", target);
         String actual = files.version(set.projectId, set.stage, source);
@@ -138,21 +385,28 @@ public class ChangeSetService {
         requireRepairAvailable(set);
         String source = context.resolvePath(sourceRelative);
         String target = context.resolvePath(targetRelative);
+        com.code.pal.agent.contract.UnitWriteScope.source(context,source);
+        com.code.pal.agent.contract.UnitWriteScope.destination(context,target);
         requireRegular(set, source);
         if (files.exists(set.projectId, set.stage, target)) throw failure("FILE_ALREADY_EXISTS", "Copy target already exists", target);
         if (files.size(set.projectId, set.stage, source) > MAX_COPY_BYTES) {
             throw new AgentToolException("FILE_TOO_LARGE", "Files larger than 10 MB cannot be copied", Map.of("path", source));
         }
         rememberBaseline(set, target);
+        String sourceVersion=files.version(set.projectId,set.stage,source);
         try {
             files.copyFile(set.projectId, set.stage, source, set.stage, target);
+            if(!sourceVersion.equals(files.version(set.projectId,set.stage,source)) || !sourceVersion.equals(files.version(set.projectId,set.stage,target)))throw new IllegalStateException("Asset source/destination proof failed");
         } catch (RuntimeException error) {
+            if(files.exists(set.projectId,set.stage,target)){set.batchRecoveryRequired=true;throw batchRecoveryRequired();}
             throw new AgentToolException("COPY_FAILED", "Could not copy staged file", Map.of("path", source));
         }
-        return record(set, target, source, FileOperation.COPY, FileVersions.ABSENT, files.version(set.projectId, set.stage, target));
+        try{return record(set, target, source, FileOperation.COPY, FileVersions.ABSENT, sourceVersion);}
+        catch(RuntimeException uncertainAudit){set.batchRecoveryRequired=true;throw batchRecoveryRequired();}
     }
 
     public ValidationResult validate(AgentContext context) {
+        synchronizeBrief(context);
         ActiveChangeSet set = requireActive(context);
         List<ValidationIssue> issues = new ArrayList<>();
         for (String path : set.touched) {
@@ -167,12 +421,71 @@ public class ChangeSetService {
                 catch (RuntimeException error) { issues.add(new ValidationIssue(path, "INVALID_JSON", "JSON is not syntactically valid")); }
             }
         }
+        Set<String> packageRoots = new LinkedHashSet<>();
+        for (String path : set.touched) if (path.equals("package.json") || path.equals("package-lock.json")
+                || path.endsWith("/package.json") || path.endsWith("/package-lock.json"))
+            packageRoots.add(path.contains("/") ? path.substring(0, path.lastIndexOf('/')) : ".");
+        for (String root : packageRoots) {
+            String prefix = root.equals(".") ? "" : root + "/";
+            String manifestPath = prefix + "package.json", lockPath = prefix + "package-lock.json";
+            if (!files.regularFile(set.projectId, set.stage, manifestPath)) continue;
+            String packageRoot = root.equals(".") ? set.stage : set.stage + "/" + root;
+            if (!new com.code.pal.agent.stack.NodePack(objectMapper).inspect(files, set.projectId, packageRoot).packageManager().equals("npm")) continue;
+            if (!files.regularFile(set.projectId, set.stage, lockPath)) {
+                if (set.touched.contains(lockPath)) issues.add(new ValidationIssue(lockPath, "DEPENDENCY_LOCK_STALE", "Call refreshDependencies to restore the package lock"));
+                continue;
+            }
+            try {
+                var manifest = objectMapper.readTree(readStagedText(set, manifestPath));
+                var lockRoot = objectMapper.readTree(readStagedText(set, lockPath)).path("packages").path("");
+                if (!lockRoot.isMissingNode() && !com.code.pal.agent.stack.NpmLockfiles.matches(manifest, lockRoot))
+                    issues.add(new ValidationIssue(lockPath, "DEPENDENCY_LOCK_STALE", "Package dependencies changed; call refreshDependencies before validation"));
+            } catch (RuntimeException invalid) { issues.add(new ValidationIssue(lockPath, "DEPENDENCY_LOCK_INVALID", "Package/lock JSON is unreadable")); }
+        }
         boolean valid = issues.isEmpty() && !set.touched.isEmpty();
         return new ValidationResult(valid, set.revision, List.copyOf(issues),
                 valid ? "Deterministic file validation passed" : "Fix validation issues and validate again");
     }
 
+    /** Platform-owned brief blocks enter the same stage, archive and promotion proof as code. */
+    private void synchronizeBrief(AgentContext context) {
+        if(memory==null) return; // Focused legacy constructor fixtures; managed application injection is mandatory.
+        ActiveChangeSet set=requireActive(context);
+        if(set.touched.isEmpty()) return;
+        boolean[] writeAttempted={false};
+        Runnable update=()->{
+            String name=com.code.pal.project.brief.ProjectBriefFile.NAME;
+            String beforeVersion=files.version(set.projectId,set.stage,name);
+            if(!beforeVersion.equals(FileVersions.ABSENT) && files.size(set.projectId,set.stage,name)>128_000)
+                throw new AgentToolException("BRIEF_TOO_LARGE","Private brief exceeds synchronization limit");
+            String before=beforeVersion.equals(FileVersions.ABSENT)?"":files.readText(set.projectId,set.stage,name);
+            Map<String,String> versions=new TreeMap<>();
+            for(String path:set.touched) if(!path.equals(name)) versions.put(path,files.version(set.projectId,set.stage,path));
+            String after=memory.synchronize(set.projectId,set.runId,before,versions);
+            if(after.equals(before)) return;
+            rememberBaseline(set,name);
+            int repairs=set.repairAttempts;boolean pending=set.repairPending;
+            try {
+                writeAttempted[0]=true;
+                files.writeText(set.projectId,set.stage,name,after);
+                if(!files.version(set.projectId,set.stage,name).equals(textVersion(after))) throw new IllegalStateException("Brief write proof failed");
+                record(set,name,null,beforeVersion.equals(FileVersions.ABSENT)?FileOperation.CREATE:FileOperation.PATCH,beforeVersion,textVersion(after));
+                set.repairAttempts=repairs;set.repairPending=pending; // System metadata does not charge a model repair.
+            } catch(RuntimeException unknown) {set.batchRecoveryRequired=true;throw new AgentToolException("BRIEF_SYNC_RECOVERY_REQUIRED","Brief staging outcome is uncertain; recover from a proved checkpoint");}
+        };
+        try {if(leases==null) update.run(); else leases.guarded(set.projectId,update);}
+        catch(RuntimeException error) {if(writeAttempted[0]) set.batchRecoveryRequired=true;throw error;}
+    }
+
     public CommitResult commit(AgentContext context, AgentRun run) {
+        return leases==null?commitOwned(context,run):leases.guarded(context.projectId(),()->commitOwned(context,run));
+    }
+
+    private CommitResult commitOwned(AgentContext context, AgentRun run) {
+        if(!Objects.equals(context.runId(),run.getId()) || !Objects.equals(context.projectId(),run.getProjectId())
+                || !Objects.equals(context.userId(),run.getUserId())) throw new IllegalArgumentException("Save context does not match the accepted run");
+        // A successful tool-time check does not authorize promotion after membership revocation.
+        projects.requireCanEdit(context.userId(), context.projectId());
         ActiveChangeSet set = requireActive(context);
         if (set.touched.isEmpty()) { discard(run.getId()); return new CommitResult(null, List.of()); }
         if (set.validatedRevision != set.revision) {
@@ -188,30 +501,71 @@ public class ChangeSetService {
         }
         String archiveRoot = HISTORY + "/" + run.getId();
         String archive = archiveRoot + "/original";
-        // Archive first, on its own: restoring an incomplete archive would delete live files.
+        List<PromotionJournal.FileState> proof=set.touched.stream().sorted().map(path->
+                new PromotionJournal.FileState(path,set.baselines.get(path),files.version(set.projectId,set.stage,path))).toList();
+        PromotionJournal.validate(proof);
+        if(com.code.pal.agent.runtime.RunCancellation.current().isCancelled()) throw new com.code.pal.agent.llm.LlmCancelledException();
+        boolean started;
+        try { started=journal!=null ? journal.prepare(run,set.revision,proof)
+                : runs.beginCommit(run.getId(),run.getProjectId(),java.time.Instant.now())==1; }
+        catch(RuntimeException uncertain) { run.setStatus(com.code.pal.agent.domain.RunStatus.COMMITTING);throw new PromotionRecoveryPendingException(uncertain); }
+        if(!started) throw new com.code.pal.agent.llm.LlmCancelledException();
+        run.setStatus(com.code.pal.agent.domain.RunStatus.COMMITTING);
+        String snapshotRef=SNAPSHOT_PREFIX+run.getId();
+        boolean applied=false;
+        boolean finalizationAttempted=false;
         try {
-            sandbox.copyTree(set.projectId, ".", archive);
-        } catch (RuntimeException error) {
-            try { sandbox.removeTree(set.projectId, archiveRoot); } catch (RuntimeException ignored) { }
-            throw new IllegalStateException("Could not archive the project; nothing was committed", error);
-        }
-        // Record the restore point before the first live write: if the process dies mid-apply,
-        // AgentRunRecovery restores this archive instead of leaving a half-applied project.
-        String snapshotRef = SNAPSHOT_PREFIX + run.getId();
-        run.setSnapshotRef(snapshotRef);
-        runs.save(run);
-        try {
-            for (String path : set.touched.stream().sorted().toList()) {
-                if (files.regularFile(set.projectId, set.stage, path)) {
-                    files.copyFile(set.projectId, set.stage, path, ".", path);
-                } else {
-                    files.delete(set.projectId, ".", path);
-                }
+            sandbox.copyTree(set.projectId,".",archive);
+            verifyVersions(set.projectId,archive,proof,true);
+            if(journal!=null) journal.ready(run.getId());
+            else if(runs.recordSnapshot(run.getId(),snapshotRef)!=1) throw new IllegalStateException("Snapshot persistence refused");
+            run.setSnapshotRef(snapshotRef);
+            projects.requireCanEdit(context.userId(),context.projectId());
+            // Commands cannot rewrite a certified staged file between manifest creation and promotion.
+            verifyVersions(set.projectId,set.stage,proof,false);
+            if(journal!=null) journal.applying(run.getId());
+            applied=true;
+            for(var file:proof) {
+                if(!file.after().equals(FileVersions.ABSENT)) files.copyFile(set.projectId,set.stage,file.path(),".",file.path());
+                else files.delete(set.projectId,".",file.path());
             }
+            verifyVersions(set.projectId,".",proof,false);
             sandbox.enforceQuota(set.projectId);
-        } catch (RuntimeException error) {
-            restore(set, archive);
-            throw new IllegalStateException("Change-set commit failed; original files were restored", error);
+            java.time.Instant savedAt;
+            finalizationAttempted=true;
+            if(journal!=null) savedAt=journal.saved(run.getId());
+            else { savedAt=java.time.Instant.now();if(runs.recordCodeSaved(run.getId(),savedAt)!=1) throw new IllegalStateException("Save finalization refused"); }
+            run.setCodeSavedAt(savedAt);run.setPreviewStatus("NOT_REQUESTED");
+        } catch(RuntimeException error) {
+            // A committed DB transaction may have lost its response. Read durable truth BEFORE compensation.
+            if(journal!=null) {
+                PromotionJournal.Entry entry;
+                try { entry=journal.read(run.getId());if(entry==null) throw new IllegalStateException("Save evidence unavailable"); }
+                catch(RuntimeException unknown) { throw new PromotionRecoveryPendingException(unknown); }
+                if(entry.state().equals("SAVED")) {
+                    run.setSnapshotRef(snapshotRef);run.setCodeSavedAt(entry.savedAt());run.setPreviewStatus("NOT_REQUESTED");
+                } else {
+                    try {
+                        if(applied || Set.of("APPLYING","ROLLING_BACK","RECOVERY_REQUIRED").contains(entry.state())) restoreVerified(entry);
+                        else { verifyVersions(set.projectId,".",proof,true);journal.recoveryState(run.getId(),"ROLLED_BACK"); }
+                    } catch(RuntimeException uncertain) {
+                        try { journal.recoveryState(run.getId(),"RECOVERY_REQUIRED"); } catch(RuntimeException ignored) { }
+                        throw new PromotionRecoveryPendingException(uncertain);
+                    }
+                    throw new IllegalStateException("Code save failed; original touched files verified",error);
+                }
+            } else {
+                // Focused unmanaged fixtures have no durable journal; ambiguous finalization must stay pending.
+                var durable=runs.findById(run.getId()).orElse(null);
+                if(durable!=null && durable.getCodeSavedAt()!=null) {run.setCodeSavedAt(durable.getCodeSavedAt());run.setPreviewStatus(durable.getPreviewStatus());}
+                else if(applied && !finalizationAttempted) {
+                    try { restoreVerified(new PromotionJournal.Entry(run.getId(),set.projectId,null,0,set.revision,proof,"APPLYING",null)); }
+                    catch(RuntimeException uncertain) {throw new PromotionRecoveryPendingException(uncertain);}
+                    throw new IllegalStateException("Code save failed; original touched files verified",error);
+                }
+                else if(applied) throw new PromotionRecoveryPendingException(error);
+                else throw new IllegalStateException("Could not prepare code save; nothing was committed",error);
+            }
         }
         List<String> changed = set.touched.stream().sorted().toList();
         active.remove(run.getId());
@@ -238,6 +592,8 @@ public class ChangeSetService {
     public void discard(UUID runId) {
         ActiveChangeSet set = active.remove(runId);
         if (set == null) return;
+        if(journal!=null) { try { var entry=journal.read(runId);if(entry!=null && !entry.terminal()) return; }
+            catch(RuntimeException unavailable) { return; } }
         try { sandbox.removeTree(set.projectId, set.container); } catch (RuntimeException ignored) { }
     }
 
@@ -246,15 +602,7 @@ public class ChangeSetService {
      * the quota. Only the latest build can be rolled back, so older archives are removed.
      */
     private void pruneHistory(UUID projectId, UUID keepRunId) {
-        try {
-            for (ProjectFiles.Entry entry : files.list(projectId, HISTORY, 1)) {
-                if (entry.directory() && !entry.path().equals(keepRunId.toString())) {
-                    sandbox.removeTree(projectId, HISTORY + "/" + entry.path());
-                }
-            }
-        } catch (RuntimeException error) {
-            log.warn("sandbox_history_prune_failed projectId={} reason={}", projectId, error.getMessage());
-        }
+        // Restore/promotion proofs and quarantined operations may still own these archives.
     }
 
     /**
@@ -264,23 +612,71 @@ public class ChangeSetService {
     public void cleanupAbandoned(UUID projectId, UUID runId) {
         if (active.containsKey(runId)) return;    // still owned by a live run in this process
         try {
+            if(failedDrafts!=null) {
+                var run=runs.findByIdAndProjectId(runId,projectId).orElseThrow();
+                if(FailedDraftService.eligible(run)) {
+                    String container=CHANGESETS+"/"+runId;
+                    var roots=files.list(projectId,container,3).stream().filter(e->e.directory()
+                            && (e.path().equals("workspace") || e.path().matches("epoch-[0-9]+/workspace"))).map(e->container+"/"+e.path()).toList();
+                    if(roots.size()>1) throw new IllegalStateException("Ambiguous abandoned stages retained");
+                    if(roots.size()==1) {
+                        Map<String,String> before=new LinkedHashMap<>(),after=new LinkedHashMap<>();
+                        for(var change:changes.findByRunIdOrderByCreatedAtAsc(runId)) {
+                            before.putIfAbsent(change.getPath(),change.getBeforeVersion());after.put(change.getPath(),change.getAfterVersion());
+                        }
+                        String ownedContainer=roots.getFirst().substring(0,roots.getFirst().length()-"/workspace".length());
+                        failedDrafts.retain(run,roots.getFirst(),before.entrySet().stream().map(e->
+                                new FailedDraftArchive.Change(e.getKey(),e.getValue(),after.get(e.getKey()))).toList(),failedDrafts.readBasis(run,ownedContainer));
+                    }
+                }
+            }
             sandbox.removeTree(projectId, CHANGESETS + "/" + runId);
         } catch (RuntimeException error) {
             log.warn("abandoned_changeset_cleanup_failed runId={} reason={}", runId, error.getMessage());
         }
     }
 
-    private void restore(ActiveChangeSet set, String archive) {
-        for (String path : set.touched) {
-            try {
-                if (files.regularFile(set.projectId, archive, path)) {
-                    files.copyFile(set.projectId, archive, path, ".", path);
-                } else {
-                    files.delete(set.projectId, ".", path);
-                }
-            } catch (RuntimeException error) {
-                log.error("changeset_restore_failed runId={} path={} reason={}", set.runId, path, error.getMessage());
-            }
+    private void verifyVersions(UUID project,String root,List<PromotionJournal.FileState> proof,boolean before) {
+        for(var file:proof) if(!files.version(project,root,file.path()).equals(before?file.before():file.after()))
+            throw new IllegalStateException("File proof does not match: "+file.path());
+    }
+    private void restoreVerified(PromotionJournal.Entry entry) {
+        // Verify every source and target first; unknown edits are preserved and keep the quarantine.
+        verifyVersions(entry.projectId(),entry.archive(),entry.files(),true);
+        for(var file:entry.files()) {
+            String current=files.version(entry.projectId(),".",file.path());
+            if(!current.equals(file.before()) && !current.equals(file.after())) throw new IllegalStateException("Recovery target changed: "+file.path());
+        }
+        if(journal!=null) journal.recoveryState(entry.runId(),"ROLLING_BACK");
+        for(var file:entry.files()) {
+            if(files.version(entry.projectId(),".",file.path()).equals(file.before())) continue;
+            if(file.before().equals(FileVersions.ABSENT)) files.delete(entry.projectId(),".",file.path());
+            else files.copyFile(entry.projectId(),entry.archive(),file.path(),".",file.path());
+        }
+        verifyVersions(entry.projectId(),".",entry.files(),true);
+        if(journal!=null) journal.recoveryState(entry.runId(),"ROLLED_BACK");
+    }
+    /** Called only by the inactive-project recovery coordinator under its trusted critical section. */
+    public boolean recoverPromotion(AgentRun run) {
+        if(leases!=null) leases.requireRecovery(run.getProjectId());
+        PromotionJournal.Entry entry=journal==null?null:journal.read(run.getId());
+        if(entry==null) {
+            // Historical archives lack proof of completeness. Preserve evidence rather than destructive restore.
+            if(run.getCodeSavedAt()==null && (run.getSnapshotRef()!=null || run.getStatus()==com.code.pal.agent.domain.RunStatus.COMMITTING))
+                throw new PromotionRecoveryPendingException(null);
+            return false;
+        }
+        if(!entry.projectId().equals(run.getProjectId())) throw new PromotionRecoveryPendingException(null);
+        if(entry.state().equals("SAVED")) {run.setCodeSavedAt(entry.savedAt());return false;}
+        if(entry.state().equals("ROLLED_BACK")) return true;
+        try {
+            if(Set.of("PREPARING","READY").contains(entry.state())) {
+                verifyVersions(entry.projectId(),".",entry.files(),true);journal.recoveryState(run.getId(),"ROLLED_BACK");
+            } else restoreVerified(entry);
+            return true;
+        } catch(RuntimeException unknown) {
+            try{journal.recoveryState(run.getId(),"RECOVERY_REQUIRED");}catch(RuntimeException ignored){}
+            throw new PromotionRecoveryPendingException(unknown);
         }
     }
 
@@ -299,6 +695,19 @@ public class ChangeSetService {
         return new MutationResult(path, source, operation, before, after, set.revision);
     }
 
+    public String resumePlan(AgentContext context) {
+        var set=requireActive(context);
+        if(set.resumedPlan==null) return null;
+        context.plan().restore(set.resumedPlan);
+        return "WORKER RESUME: Reused proved outputs from staged revision "+set.revision+" for files "+set.touched+
+                ". Plan: "+set.resumedPlan+". Re-read retained files as needed; continue unresolved work. Required final validation must run again. Do not repeat completed file creation.";
+    }
+    public boolean requeueCheckpoint(AgentRun run) {
+        if(checkpoints==null || run.getMode()!=com.code.pal.project.domain.ProjectType.BUILD
+                || run.getStatus()!=com.code.pal.agent.domain.RunStatus.RUNNING || run.getCancelRequestedAt()!=null) return false;
+        try {return checkpoints.requeue(run);}
+        catch(RuntimeException invalid) {log.warn("checkpoint_resume_rejected runId={} errorType={}",run.getId(),invalid.getClass().getSimpleName());return false;}
+    }
     public WorkspaceView view(AgentContext context) {
         ActiveChangeSet set = requireActive(context);
         return new WorkspaceView(".", set.stage, set.container, set.revision, List.copyOf(set.touched));
@@ -348,10 +757,17 @@ public class ChangeSetService {
     public ValidationProgress recordProjectValidation(AgentContext context, boolean passed,
                                                        List<ProjectDiagnostic> diagnostics,
                                                        boolean certifyChangeSet) {
+        if(passed && certifyChangeSet) synchronizeBrief(context);
         ActiveChangeSet set = requireActive(context);
         set.lastDiagnostics = diagnostics == null ? List.of() : List.copyOf(diagnostics);
         if (passed) {
             if (certifyChangeSet) {
+                if(checkpoints!=null && !set.touched.isEmpty()) {
+                    var run=runs.findById(set.runId).orElseThrow();
+                    List<PromotionJournal.FileState> proof=set.touched.stream().sorted().map(path->
+                            new PromotionJournal.FileState(path,set.baselines.get(path),files.version(set.projectId,set.stage,path))).toList();
+                    checkpoints.save(run,set.stage,set.revision,set.repairAttempts,context.plan().snapshot(),proof);
+                }
                 set.validatedRevision = set.revision;
                 set.repairPending = false;
             }
@@ -398,6 +814,7 @@ public class ChangeSetService {
     private ActiveChangeSet requireActive(AgentContext context) {
         ActiveChangeSet set = active.get(context.runId());
         if (set == null || !set.projectId.equals(context.projectId())) throw new AgentToolException("CHANGE_SET_NOT_ACTIVE", "No active change set for this run");
+        if (set.batchRecoveryRequired) throw batchRecoveryRequired();
         return set;
     }
     private void rememberBaseline(ActiveChangeSet set, String path) {
@@ -426,7 +843,7 @@ public class ChangeSetService {
         }
     }
     private static void requireVersion(String path, String expected, String actual) {
-        if (expected == null || expected.isBlank()) throw new AgentToolException("EXPECTED_VERSION_REQUIRED", "An exact file version from readFile is required", Map.of("path", path, "actualVersion", actual));
+        if (expected == null || expected.isBlank()) throw new AgentToolException("EXPECTED_VERSION_REQUIRED", "An exact file version from readFile is required", Map.of("path", path, "actualVersion", actual, "action", "Call readFile and use its returned version"));
         if (!expected.equals(actual)) throw new AgentToolException("STALE_FILE_VERSION", "File version no longer matches", Map.of("path", path, "expectedVersion", expected, "actualVersion", actual, "action", "Re-read the file before retrying"));
     }
     private static AgentToolException failure(String code, String message, String path) { return new AgentToolException(code, message, Map.of("path", path)); }
@@ -435,7 +852,9 @@ public class ChangeSetService {
     private static final class ActiveChangeSet {
         final UUID runId; final UUID projectId; final String stage; final String container;
         final Map<String, String> baselines = new LinkedHashMap<>(); final Set<String> touched = new LinkedHashSet<>();
-        int revision; int validatedRevision = -1; int repairAttempts; boolean repairPending;
+        com.code.pal.agent.plan.AgentPlanState.Snapshot resumedPlan;
+        FailedDraftService.Basis failedDraftBasis;
+        int revision; int validatedRevision = -1; int repairAttempts; boolean repairPending; boolean batchRecoveryRequired;
         List<ProjectDiagnostic> lastDiagnostics = List.of();
         ActiveChangeSet(UUID runId, UUID projectId, String stage, String container) {
             this.runId = runId; this.projectId = projectId; this.stage = stage; this.container = container;

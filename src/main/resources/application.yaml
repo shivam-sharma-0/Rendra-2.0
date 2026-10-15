@@ -1,9 +1,14 @@
 server:
   port: ${SERVER_PORT:8080}
+  max-http-request-header-size: 16KB
 
 spring:
   application:
     name: Code-Pal
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 16MB
 
   # Local secrets (gitignored)
   # Loaded from .secrets/secrets.properties regardless of shell/IDE env, so a restart always picks up
@@ -44,7 +49,7 @@ spring:
       # Hibernate only VALIDATES the schema against the entities; it never mutates it. The schema is
       # owned by Flyway (enable with FLYWAY_ENABLED=true). Never set this to create/update in any
       # shared environment — it would fight Flyway and risk data loss.
-      ddl-auto: ${JPA_DDL_AUTO:update}
+      ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: false
     open-in-view: false         # avoid lazy-loading in the view layer; keep tx boundaries in services
     properties:
@@ -54,13 +59,12 @@ spring:
           time_zone: UTC
 
   # â”€â”€ Flyway (versioned schema migrations) 
-  # Disabled in dev because ddl-auto=create already rebuilds the schema from the entities (so new
-  # columns/constraints appear automatically). The V1/V2 migrations are kept for prod: set
-  # ddl-auto=validate and FLYWAY_ENABLED=true, and Flyway will own the versioned schema instead.
+  # Flyway owns schema creation/upgrades. The dev profile explicitly adopts an existing
+  # Hibernate schema at V16; shared environments require an existing history or reviewed baseline.
   flyway:
-    enabled: ${FLYWAY_ENABLED:false}
-    baseline-on-migrate: true
-    baseline-version: 1
+    enabled: ${FLYWAY_ENABLED:true}
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:false}
+    baseline-version: ${FLYWAY_BASELINE_VERSION:16}
     baseline-description: "Adopt existing Hibernate-managed schema"
 
   #  OAuth2 login (Google) 
@@ -115,12 +119,15 @@ app:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173}
 
   # Rate limiting (auth endpoints)
-  # Redis fixed-window limiter guarding login/signup/refresh against brute force. Fail-open if Redis
-  # is unavailable, so a limiter outage never blocks sign-in.
+  # Atomic Redis window; forwarded identity is accepted only through explicitly trusted proxies.
   rate-limit:
     enabled: ${RATE_LIMIT_ENABLED:true}
     auth-requests: ${RATE_LIMIT_AUTH_REQUESTS:20}
     auth-window-seconds: ${RATE_LIMIT_AUTH_WINDOW_SECONDS:60}
+    fail-open: ${RATE_LIMIT_FAIL_OPEN:false}
+    trusted-proxy-ips: ${APP_TRUSTED_PROXY_IPS:}
+  request:
+    max-bytes: ${APP_REQUEST_MAX_BYTES:16000000}
 
   # User-generated sites (agent previews /preview/** and published projects /p/**)
   # Untrusted generated code must never run on the API origin, so these are served ONLY from this
@@ -156,6 +163,19 @@ app:
   # the fallback; Groq is configured but not used (no model list names it).
   # api-key is a SECRET â†’ env-only, no default. All models below must support tool/function calling.
   agent:
+    structured-contracts: ${AGENT_STRUCTURED_CONTRACTS:false}
+    full-stack-contracts: ${AGENT_FULL_STACK_CONTRACTS:true}
+    batch-generation: ${AGENT_BATCH_GENERATION:true}
+    automatic-starter: ${AGENT_AUTOMATIC_STARTER:true}
+    polish-turn: ${AGENT_POLISH_TURN:false}
+    parallel-units: ${AGENT_PARALLEL_UNITS:false}
+    scheduling:
+      enabled: ${AGENT_SHARED_SCHEDULING:false}
+      global-concurrency: ${AGENT_GLOBAL_CALL_CONCURRENCY:4}
+      user-concurrency: ${AGENT_USER_CALL_CONCURRENCY:2}
+      run-concurrency: ${AGENT_RUN_CALL_CONCURRENCY:2}
+      max-wait-ms: ${AGENT_CALL_WAIT_MS:10000}
+      # pools is deliberately empty: account groups and caps require operator verification.
     billing-mode: ${BILLING_MODE:FREE}
     llm:
       base-url: ${AGENT_LLM_BASE_URL:https://integrate.api.nvidia.com/v1}
@@ -212,6 +232,7 @@ app:
       vision: "${AGENT_MODEL_VISION:nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia:meta/llama-3.2-11b-vision-instruct}"
     # Per-project code lives here (one dir per project).
     workspace-base-path: ${AGENT_WORKSPACE_PATH:./workspaces}
+    mutation-lock-path: ${AGENT_MUTATION_LOCK_PATH:}
     # Safety limits for a single run.
     # A fresh app (plan, ~10 files, type-check, build, one repair) needs ~30 turns with free models.
     max-iterations: ${AGENT_MAX_ITERATIONS:40}
@@ -241,6 +262,7 @@ app:
     heartbeat-interval-ms: ${AGENT_HEARTBEAT_INTERVAL_MS:15000}
     rollback-on-failure: ${AGENT_ROLLBACK_ON_FAILURE:true}
     max-repair-attempts: ${AGENT_MAX_REPAIR_ATTEMPTS:3}
+    max-patch-misses: ${AGENT_MAX_PATCH_MISSES:3}
     max-validation-diagnostics: ${AGENT_MAX_VALIDATION_DIAGNOSTICS:40}
     sandbox:
       required: ${AGENT_SANDBOX_REQUIRED:true}
@@ -249,7 +271,7 @@ app:
       allow-host-execution: ${AGENT_SANDBOX_ALLOW_HOST_EXECUTION:false}
       docker-command: ${AGENT_SANDBOX_DOCKER_COMMAND:wsl.exe}
       docker-command-args: ${AGENT_SANDBOX_DOCKER_COMMAND_ARGS:-e docker}
-      image: ${AGENT_SANDBOX_IMAGE:node:22-bookworm-slim}
+      image: ${AGENT_SANDBOX_IMAGE:node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c}
       # "none": generated code gets no network while validated; older containers are recreated.
       network: ${AGENT_SANDBOX_NETWORK:none}
       container-prefix: ${AGENT_SANDBOX_CONTAINER_PREFIX:codepal-sandbox-}

@@ -165,6 +165,8 @@ export function useProjectWorkspace(id: string) {
         // Covers both the file tree and every open file's content query (prefix match) — a build may
         // have changed either, so re-fetch on next access instead of trusting stale cached files.
         void queryClient.invalidateQueries({ queryKey: qk.fileTree(id) })
+        void queryClient.invalidateQueries({ queryKey: qk.analytics(id) })
+        void queryClient.invalidateQueries({ queryKey: qk.dailyUsage })
       }
     }
   }, [addTimelineStep, id, loadLatestMessages, refreshTimeline, upsert, queryClient])
@@ -225,7 +227,7 @@ export function useProjectWorkspace(id: string) {
   }, [id])
 
   const cancel = useCallback(async () => {
-    if (!selectedRun) return
+    if (!selectedRun || selectedRun.status === 'COMMITTING') return
     setCancelling(true)
     try {
       await agentApi.cancel(id, selectedRun.id)
@@ -233,6 +235,7 @@ export function useProjectWorkspace(id: string) {
     } catch {
       // ignore — the run may have just finished; the timeline refresh reflects the real state
     } finally {
+      await refreshTimeline()
       setCancelling(false)
     }
   }, [id, refreshTimeline, selectedRun])
@@ -267,6 +270,7 @@ export function useProjectWorkspace(id: string) {
     }
   }, [id, refreshTimeline, queryClient])
   return {
+    acceptRetriedRun: (run: AgentRun) => { setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]); void loadLatestMessages().then(setMessages).catch(() => { /* realtime/polling recovers message updates */ }) },
     project, setProject, messages, previewUpdate, draftUpdate,
     runs, stepsByRun, selectedRun, steps, loading, notFound,
     hasOlder, loadingOlder, loadOlder,

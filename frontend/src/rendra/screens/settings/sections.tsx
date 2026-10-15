@@ -209,7 +209,7 @@ export function BillingSection() {
   const { data: usage, isError } = useDailyUsage()
   const { data: projects } = useProjects(selectedId)
   const unlimited = usage?.quota === 0
-  const percent = usage && !unlimited ? Math.min(100, Math.round((usage.tokensUsed / usage.quota) * 100)) : 0
+  const percent = usage && !unlimited ? Math.min(100, Math.round(((usage.capacityUsed ?? usage.tokensUsed) / usage.quota) * 100)) : 0
   return (
     <>
       <section className="st-card st-plan">
@@ -229,6 +229,8 @@ export function BillingSection() {
         {usage && (
           <small>
             {compact.format(usage.tokensUsed)}{unlimited ? ' tokens used today' : ` of ${compact.format(usage.quota)} tokens`} · resets {new Date(usage.resetsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+            {(usage.unknownTokens ?? 0) > 0 && ` · ${compact.format(usage.unknownTokens!)} held for unreported usage`}
+            {(usage.reservedTokens ?? 0) > 0 && ` · ${compact.format(usage.reservedTokens!)} reserved for active calls`}
           </small>
         )}
         <div className="st-usage__row">

@@ -13,6 +13,7 @@ package com.code.pal.agent.domain;
 public enum RunStatus {
     QUEUED,
     RUNNING,
+    COMMITTING,
     AWAITING_INPUT,
     DONE,
     FAILED,

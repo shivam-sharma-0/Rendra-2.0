@@ -109,6 +109,7 @@ export function useDailyUsage(enabled = true) {
     queryFn: ({ signal }) => usageApi.daily({ signal }),
     enabled,
     staleTime: 30_000,
+    refetchInterval: enabled ? 15_000 : false,
   })
 }
 
@@ -137,6 +138,7 @@ export function useAnalytics(projectId: string | null | undefined, enabled = tru
     queryKey: qk.analytics(projectId ?? ''),
     queryFn: ({ signal }) => insightsApi.analytics(projectId!, { signal }),
     enabled: !!projectId && enabled,
+    refetchInterval: enabled ? 15_000 : false,
   })
 }
 

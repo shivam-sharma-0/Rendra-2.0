@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "description": "Acceptance inventory, not evidence of completed application behavior",
+  "scenarios": [
+    {
+      "id": "conversation",
+      "step": "1,7",
+      "acceptance": "Clear Chat, Plan, Build and Hindi/Hinglish negation",
+      "status": "PENDING"
+    },
+    {
+      "id": "queue-identity",
+      "step": "1.1",
+      "acceptance": "Queued A uses its own text, actor and images after B",
+      "status": "PENDING"
+    },
+    {
+      "id": "authorization",
+      "step": "1.2",
+      "acceptance": "Viewer Stop denied; revoked editor cannot save",
+      "status": "PENDING"
+    },
+    {
+      "id": "durable-dispatch",
+      "step": "1.3",
+      "acceptance": "Acceptance crash and duplicate delivery preserve one run",
+      "status": "PENDING"
+    },
+    {
+      "id": "budget-races",
+      "step": "2",
+      "acceptance": "Concurrent reservations and settlements have no capacity gap",
+      "status": "PENDING"
+    },
+    {
+      "id": "usage-unknown",
+      "step": "2",
+      "acceptance": "Missing usage, cancellation and crash retain conservative charge",
+      "status": "PENDING"
+    },
+    {
+      "id": "attempts",
+      "step": "2,8",
+      "acceptance": "HTTP 401/403/429/413, retries and fallback retain attempt ownership",
+      "status": "PENDING"
+    },
+    {
+      "id": "midnight",
+      "step": "2",
+      "acceptance": "Attempt period determines usage day",
+      "status": "PENDING"
+    },
+    {
+      "id": "stop-boundaries",
+      "step": "3",
+      "acceptance": "Queued, HTTP, tool, build, save, preview and restart cancellation",
+      "status": "PENDING"
+    },
+    {
+      "id": "lease-recovery",
+      "step": "3,8",
+      "acceptance": "Old worker cannot save; interrupted promotion recoverable",
+      "status": "PENDING"
+    },
+    {
+      "id": "storage-capabilities",
+      "step": "4,7",
+      "acceptance": "Browser, connected Supabase, MERN and server secrets agree",
+      "status": "PENDING"
+    },
+    {
+      "id": "requirements-revisions",
+      "step": "4",
+      "acceptance": "Concurrent edits cannot approve stale assessment",
+      "status": "PENDING"
+    },
+    {
+      "id": "atomic-starter",
+      "step": "4",
+      "acceptance": "Conflict and Nth-write failure roll back and permit retry",
+      "status": "PENDING"
+    },
+    {
+      "id": "patch-loops",
+      "step": "4",
+      "acceptance": "Ambiguous match refuses mutation; repeated miss bounded",
+      "status": "PENDING"
+    },
+    {
+      "id": "memory",
+      "step": "5",
+      "acceptance": "Changed decisions and failed tools survive long conversation",
+      "status": "PENDING"
+    },
+    {
+      "id": "retrieval",
+      "step": "5",
+      "acceptance": "Revision-aware symbols locate relevant existing code",
+      "status": "PENDING"
+    },
+    {
+      "id": "activity",
+      "step": "5",
+      "acceptance": "Old events, failed tools and nested telemetry handled safely",
+      "status": "PENDING"
+    },
+    {
+      "id": "runtime-validation",
+      "step": "6",
+      "acceptance": "Skipped required probe fails; staged routes/auth/CRUD/persistence tested",
+      "status": "PENDING"
+    },
+    {
+      "id": "release-restore",
+      "step": "6",
+      "acceptance": "Published A API isolated from draft B; restore limitations explicit",
+      "status": "PENDING"
+    },
+    {
+      "id": "contract-reuse",
+      "step": "7",
+      "acceptance": "Approved compatible Plan reused; stale contract invalidated",
+      "status": "PENDING"
+    },
+    {
+      "id": "units-waves",
+      "step": "7,8",
+      "acceptance": "Owned paths, shared interfaces, barrier validation and checkpoints",
+      "status": "PENDING"
+    },
+    {
+      "id": "fairness",
+      "step": "8",
+      "acceptance": "Shared account limits, bounded waits and cancellation",
+      "status": "PENDING"
+    },
+    {
+      "id": "parallel-evaluation",
+      "step": "8",
+      "acceptance": "Opt-in two workers compared under same controlled conditions",
+      "status": "PENDING"
+    },
+    {
+      "id": "external-boundaries",
+      "step": "4,7",
+      "acceptance": "Imported instructions untrusted; external mutations require approval",
+      "status": "PENDING"
+    },
+    {
+      "id": "cost-install",
+      "step": "2,5",
+      "acceptance": "Token and tool costs distinct; cold/warm installs measured",
+      "status": "PENDING"
+    }
+  ]
+}

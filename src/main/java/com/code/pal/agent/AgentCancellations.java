@@ -27,12 +27,17 @@ public class AgentCancellations {
     static final long POLL_MS = 250;
 
     private final AgentJobQueue queue;
+    private final com.code.pal.agent.repository.AgentRunRepository runs;
     private final Map<UUID, RunCancellation> active = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler;
     private volatile ScheduledFuture<?> poller;
 
-    public AgentCancellations(AgentJobQueue queue) {
+    public AgentCancellations(AgentJobQueue queue) { this(queue,null); }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentCancellations(AgentJobQueue queue,com.code.pal.agent.repository.AgentRunRepository runs) {
         this.queue = queue;
+        this.runs=runs;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "agent-cancel-poll");
             t.setDaemon(true);
@@ -44,7 +49,7 @@ public class AgentCancellations {
     public RunCancellation register(UUID runId) {
         RunCancellation cancellation = active.computeIfAbsent(runId, RunCancellation::new);
         startPolling();
-        if (queue.isCancelRequested(runId)) cancellation.cancel();
+        if (cancelRequested(runId)) cancellation.cancel();
         return cancellation;
     }
 
@@ -65,11 +70,16 @@ public class AgentCancellations {
         for (Map.Entry<UUID, RunCancellation> entry : active.entrySet()) {
             if (entry.getValue().isCancelled()) continue;
             try {
-                if (queue.isCancelRequested(entry.getKey())) entry.getValue().cancel();
+                if (cancelRequested(entry.getKey())) entry.getValue().cancel();
             } catch (RuntimeException e) {
                 log.debug("Cancel poll failed for run {}: {}", entry.getKey(), e.getMessage());
             }
         }
+    }
+
+    private boolean cancelRequested(UUID id) {
+        if(runs!=null && runs.findById(id).map(r->r.getCancelRequestedAt()!=null).orElse(false)) return true;
+        return queue.isCancelRequested(id);
     }
 
     private void startPolling() {

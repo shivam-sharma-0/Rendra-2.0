@@ -72,8 +72,8 @@
 
 		<!-- ── Schema migrations (Flyway) — replaces ddl-auto for a validated, versioned schema ─ -->
 		<dependency>
-			<groupId>org.flywaydb</groupId>
-			<artifactId>flyway-core</artifactId>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
@@ -165,10 +165,21 @@
 				<configuration>
 					<!-- Same as CodePalApplication.main: the JVM's zone (e.g. Windows' legacy
 					     "Asia/Calcutta") is sent to Postgres, which rejects names its tzdata dropped. -->
-					<argLine>-Duser.timezone=UTC</argLine>
+					<!-- Load the test-only mock agent at startup instead of unreliable Windows self-attachment. -->
+					<argLine>-javaagent:"${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar" -Duser.timezone=UTC</argLine>
 				</configuration>
 			</plugin>
 		</plugins>
 	</build>
 
+    <profiles>
+        <!-- Verification output is isolated from IDE-managed target/classes. No runtime configuration changes. -->
+        <profile>
+            <id>codex-verification</id>
+            <properties><codex.verification.directory>${project.basedir}/target/codex-verify</codex.verification.directory></properties>
+            <build>
+                <directory>${codex.verification.directory}</directory>
+            </build>
+        </profile>
+    </profiles>
 </project>

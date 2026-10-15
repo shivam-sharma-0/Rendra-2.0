@@ -33,6 +33,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private static final String BEARER = "Bearer ";
 
     private final JwtService jwtService;
+    private final AuthSessions sessions;
 
     @Override
     protected void doFilterInternal(@NonNull HttpServletRequest request,
@@ -47,7 +48,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 var claims = jwtService.parse(header.substring(BEARER.length()));
 
                 // Refresh tokens must never authorize a business call.
-                if (JwtService.ACCESS.equals(jwtService.tokenType(claims))) {
+                if (JwtService.ACCESS.equals(jwtService.tokenType(claims)) && sessions.accessAllowed(claims)) {
                     AuthPrincipal principal = jwtService.toPrincipal(claims);
                     var authority = new SimpleGrantedAuthority("ROLE_" + principal.role());
                     var auth = new UsernamePasswordAuthenticationToken(
@@ -56,7 +57,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 }
             } catch (JwtException | IllegalArgumentException e) {
                 // Malformed / expired / bad signature — stay unauthenticated.
-                log.debug("Rejected JWT: {}", e.getMessage());
+                log.debug("Rejected invalid access token");
             }
         }
 

@@ -87,4 +87,47 @@ class ConversationCompactorTest {
         assertSame(broken.toolCalls().getFirst(), messages.get(4).toolCalls().getFirst());
         assertFalse(messages.get(3).content().contains("y".repeat(100)), "other parts are still compacted");
     }
+
+    @Test void failedWriteRetainsFailureAndDoesNotClaimArgumentsWereWritten() {
+        var messages=conversation();
+        messages.set(5,LlmMessage.toolResult("c2",json.writeValueAsString(Map.of("success",false,"error",Map.of("code","WRITE_FAILED",
+                "message","Disk write failed","details",Map.of("path","src/Game.tsx","actualVersion","absent","action","Retry after verification","diagnostics",List.of(Map.of("message","x".repeat(3000)))))))));
+        compactor.compact(messages);
+        var result=json.readTree(messages.get(5).content());
+        assertFalse(result.path("success").asBoolean());assertEquals("WRITE_FAILED",result.path("error").path("code").asString());
+        assertEquals("absent",result.path("error").path("details").path("actualVersion").asString());
+        assertFalse(messages.get(4).toolCalls().getFirst().arguments().contains("already written"));
+        assertEquals(Map.of("signature","s-c2"),messages.get(4).toolCalls().getFirst().extraContent());
+    }
+    @Test void executionSuccessDoesNotHideValidationFailureOrUnresolvedDiagnostics() {
+        String original=json.writeValueAsString(Map.of("success",true,"output",Map.of("changeValidationPassed",false,"repairAttemptsRemaining",2,
+                "changeSetRevision",7,"introducedDiagnostics",List.of(Map.of("file","src/App.tsx","code","TS2307","message","missing dependency")),"stdout","x".repeat(4000))));
+        String compact=new ToolResultMemory(json).compact(original,null,"Test");var result=json.readTree(compact);
+        assertTrue(result.path("success").asBoolean());assertFalse(result.path("output").path("changeValidationPassed").asBoolean());
+        assertEquals(7,result.path("output").path("changeSetRevision").asInt());
+        assertEquals("TS2307",result.path("output").path("introducedDiagnostics").get(0).path("code").asString());
+        assertFalse(compact.contains("x".repeat(100)));assertTrue(compact.length()<original.length());
+        assertEquals(compact,new ToolResultMemory(json).compact(compact,null,"Again"));
+    }
+    @Test void unknownBodiesStayUnknownAndMetadataCannotGrowWithoutBound() {
+        var reducer=new ToolResultMemory(json);
+        assertEquals("UNKNOWN",json.readTree(reducer.compact("not JSON "+"x".repeat(3000),null,"Test")).path("outcome").asString());
+        List<Map<String,Object>> diagnostics=new ArrayList<>();for(int i=0;i<1000;i++)diagnostics.add(Map.of("file","a".repeat(500),"message","m".repeat(2000)));
+        String result=reducer.compact(json.writeValueAsString(Map.of("success",true,"output",Map.of("diagnostics",diagnostics,"changeValidationPassed",false))),null,"Test");
+        assertTrue(result.length()<12000,result.length()+" chars");assertTrue(json.readTree(result).path("metadataPartial").asBoolean());
+        assertFalse(json.readTree(result).path("output").path("changeValidationPassed").asBoolean());
+    }
+    @Test void compactedReadsCanBeReFetchedInsteadOfDeduplicatedAway() {
+        var trace=new ProjectContextTrace();trace.recordRead("src/App.tsx",100,"v1",100);
+        var saved=compactor.compact(conversation());assertTrue(saved.omittedReadPaths().contains("src/App.tsx"));
+        saved.omittedReadPaths().forEach(trace::forgetRead);
+        assertFalse(trace.wasReadUnchanged("src/App.tsx",100,"v1"));
+    }
+    @Test void unresolvedPlanStepsAndStableSourceVersionsRemainAvailable() {
+        String result=new ToolResultMemory(json).compact(json.writeValueAsString(Map.of("success",true,"output",Map.of("revision",3,
+                "steps",List.of(Map.of("id",1,"description","Repair API","status","IN_PROGRESS","note","Still missing auth")),
+                "actualVersion","sha256:abc","content","x".repeat(3000)))),null,"Test");
+        var output=json.readTree(result).path("output");assertEquals("IN_PROGRESS",output.path("steps").get(0).path("status").asString());
+        assertEquals("sha256:abc",output.path("actualVersion").asString());assertEquals(3,output.path("revision").asInt());
+    }
 }

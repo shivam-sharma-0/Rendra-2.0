@@ -12,6 +12,18 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class AgentCancellationsTest {
+    @Test void durableStopReachesAnotherWorkerWhileRedisIsUnavailable() {
+        var queue=mock(AgentJobQueue.class);var runs=mock(com.code.pal.agent.repository.AgentRunRepository.class);var id=UUID.randomUUID();
+        var run=com.code.pal.agent.domain.AgentRun.builder().id(id).build();
+        when(runs.findById(id)).thenReturn(java.util.Optional.of(run));
+        var registry=new AgentCancellations(queue,runs);
+        try {
+            var signal=registry.register(id);assertFalse(signal.isCancelled());
+            run.setCancelRequestedAt(java.time.Instant.now());
+            when(queue.isCancelRequested(id)).thenThrow(new IllegalStateException("Redis unavailable"));
+            registry.pollOnce();assertTrue(signal.isCancelled());
+        } finally { registry.shutdown(); }
+    }
 
     @Test
     void aStopRequestedWhileQueuedCancelsAtRegistration() {
