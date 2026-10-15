@@ -85,12 +85,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
+import java.nio.charset.StandardCharsets;
 import com.code.pal.agent.change.PromotionRecoveryPendingException;
 import com.code.pal.agent.change.SequentialCheckpoints;
 import com.code.pal.agent.context.ToolResultMemory;
 import com.code.pal.agent.contract.BatchBudget;
 import com.code.pal.agent.contract.ContractCoordinator;
 import com.code.pal.agent.contract.ContractModelCalls;
+import com.code.pal.agent.llm.LlmLogicalCall;
 import com.code.pal.agent.contract.StaticAssets;
 import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.lease.TrustedOperationPendingException;
@@ -127,6 +129,8 @@ public class AgentRunner implements AgentRuntime {
     private static final int SPEC_INPUT_BYTES = 32_000;
     private static final int SPEC_CONTEXT_TOKENS = 32_000;
     private static final int SPEC_PROVIDER_OVERHEAD_TOKENS = 512;
+    /** Final validation failures retried with no successful file change in between before the run stops. */
+    private static final int MAX_UNCHANGED_FINISH_RETRIES = 2;
     /** Room kept for tool schemas, the reply and later tool results when preloading edit files. */
     private static final int PRELOAD_HEADROOM_CHARS = 24_000;
     private static final Set<String> READ_ONLY_FOUNDATION_TOOLS = Set.of(
@@ -296,6 +300,9 @@ public class AgentRunner implements AgentRuntime {
         boolean polished;
         String firstSummary;
         int reviewedRevision = -1;
+        /** Revision of the last failed final validation and how often finishing was retried on it unchanged. */
+        int failedRevision = -1;
+        int unchangedRetries;
     }
 
     /**
@@ -452,7 +459,17 @@ public class AgentRunner implements AgentRuntime {
         if (attachments.isEmpty() && contractCoordinator != null) {
             ContractCoordinator.SpecPlanning planning = specPlanning(run, state.ctx.root());
             if (contractCoordinator.eligible(run, setup.size(), userRequest, planning)) {
-                return runStructured(state, setup.size(), userRequest, planning);
+                try {
+                    return runStructured(state, setup.size(), userRequest, planning);
+                } catch (IllegalArgumentException invalidPlan) {
+                    // A plan the model could not produce, before any file changed, is not worth failing the build:
+                    // the ordinary tool loop builds it from the same request within the remaining budget.
+                    if (run.getMode() != ProjectType.BUILD || !changeSets.view(state.ctx).touchedPaths().isEmpty()) {
+                        throw invalidPlan;
+                    }
+                    log.warn("structured_plan_fallback runId={} reason={}", run.getId(), invalidPlan.getMessage());
+                    events.emit(run, AgentStepType.STATUS, "Building step by step", null);
+                }
             }
         }
         prepareStarter(state, project, setup, userRequest);
@@ -610,24 +627,33 @@ public class AgentRunner implements AgentRuntime {
         return new ContractModelCalls(routes, System::nanoTime).execute(budgeted, new ContractModelCalls.Attempts() {
             @Override
             public LlmResult call(UUID logicalId, int ordinal, LlmRequest routed) {
-                return attempt.apply(routed);
+                try (var metered = LlmLogicalCall.bind(attemptId(logicalId, ordinal))) {
+                    return attempt.apply(routed);
+                }
             }
 
+            /** A refused request (rate limit, server error status, model unavailable) with settled ledger proof only. */
             @Override
             public boolean noCompletion(UUID logicalId, int ordinal, RuntimeException failure) {
-                return failure instanceof RetryableLlmException
+                boolean refused = failure instanceof RetryableLlmException retryable
+                        && (retryable.rateLimited() || retryable.getMessage() != null && retryable.getMessage().startsWith("HTTP 5"))
                         || failure instanceof LlmHttpException http && http.modelUnavailable();
+                return refused && checkpoints.provedNoCompletion(run, attemptId(logicalId, ordinal));
             }
 
             @Override
             public void refund(UUID logicalId, int ordinal) {
-                if (checkpoints.refundModelIteration(run, logicalId, ordinal)) {
+                if (checkpoints.refundModelIteration(run, attemptId(logicalId, ordinal), ordinal)) {
                     synchronized (runtime) {
                         runtime.refundModelCall();
                     }
                 }
             }
         });
+    }
+
+    private static UUID attemptId(UUID logicalId, int ordinal) {
+        return UUID.nameUUIDFromBytes((logicalId + ":" + ordinal).getBytes(StandardCharsets.UTF_8));
     }
 
     private AgentRunResult runStructured(RunState state, RunSize size, String userRequest,
@@ -950,6 +976,13 @@ public class AgentRunner implements AgentRuntime {
                     "repairAttempts", finalReport.repairAttempts()));
             if (!finalReport.changeValidationPassed()) {
                 if (changeSets.validationProgress(ctx).repairLimitExhausted()) {
+                    throw new AgentValidationFailedException(validationFailureMessage(run.getId()));
+                }
+                // Finishing again without any successful change cannot pass; stop instead of spending the budget.
+                int revision = changeSets.view(ctx).revision();
+                gates.unchangedRetries = revision == gates.failedRevision ? gates.unchangedRetries + 1 : 0;
+                gates.failedRevision = revision;
+                if (gates.unchangedRetries >= MAX_UNCHANGED_FINISH_RETRIES) {
                     throw new AgentValidationFailedException(validationFailureMessage(run.getId()));
                 }
                 runtime.messages().add(LlmMessage.user(finalValidationRepairPrompt(finalReport)));

@@ -92,9 +92,22 @@ public class SequentialCheckpoints {
         return reserve(run, 0);
     }
 
+    /** Settled ledger evidence that every physical attempt of this logical call failed with known zero completion. */
+    private static final String NO_COMPLETION = "exists(select 1 from agent_model_calls c where c.run_id=r.id and c.logical_call_id=? "
+            + "and c.outcome='FAILED' and c.usage_known=true and coalesce(c.completion_tokens,0)=0) "
+            + "and not exists(select 1 from agent_model_calls c where c.run_id=r.id and c.logical_call_id=? "
+            + "and (c.usage_known is distinct from true or c.outcome<>'FAILED' or coalesce(c.completion_tokens,0)>0))";
+
+    /** True only with settled ledger proof that the logical call produced no completion; unknown usage never counts. */
+    public boolean provedNoCompletion(AgentRun run, UUID logicalId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("select count(*)>0 from agent_runs r where r.id=? and r.status='RUNNING' "
+                + "and r.cancel_requested_at is null and " + NO_COMPLETION, Boolean.class, run.getId(), logicalId, logicalId));
+    }
+
     /**
-     * Returns one reserved model/iteration slot for an attempt that provably produced no completion. The
-     * refund row makes it idempotent across retries and restarts; tokens, cost, tools and time are never refunded.
+     * Returns one reserved model/iteration slot for a logical attempt with settled proof of no completion, only for
+     * a running, unstopped run. The refund row makes it idempotent across retries and restarts; tokens, cost, tools
+     * and time are never refunded.
      */
     public boolean refundModelIteration(AgentRun run, UUID logicalId, int ordinal) {
         return leases.guarded(run.getProjectId(), () -> {
@@ -102,12 +115,16 @@ public class SequentialCheckpoints {
             if (fence == null || !fence.runId().equals(run.getId()))
                 throw new IllegalStateException("Execution progress requires run ownership");
             return Boolean.TRUE.equals(tx.execute(status -> {
-                int inserted = jdbc.update("insert into agent_model_call_refunds(run_id,logical_id,ordinal) values (?,?,?) "
-                        + "on conflict do nothing", run.getId(), logicalId, ordinal);
+                int inserted = jdbc.update("insert into agent_model_call_refunds(run_id,logical_id,ordinal) select r.id,?,? "
+                        + "from agent_runs r where r.id=? and r.status='RUNNING' and r.cancel_requested_at is null and "
+                        + NO_COMPLETION + " and exists(select 1 from agent_execution_progress p where p.run_id=r.id "
+                        + "and p.model_calls>0 and p.iterations>0) on conflict do nothing",
+                        logicalId, ordinal, run.getId(), logicalId, logicalId);
                 if (inserted != 1)
                     return false;
-                jdbc.update("update agent_execution_progress set iterations=greatest(iterations-1,0),"
-                        + "model_calls=greatest(model_calls-1,0) where run_id=?", run.getId());
+                if (jdbc.update("update agent_execution_progress set iterations=iterations-1,model_calls=model_calls-1 "
+                        + "where run_id=? and model_calls>0 and iterations>0", run.getId()) != 1)
+                    throw new IllegalStateException("Refund lost its reserved slot");
                 return true;
             }));
         });

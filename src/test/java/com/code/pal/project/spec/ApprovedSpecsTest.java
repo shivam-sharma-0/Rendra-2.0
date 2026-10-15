@@ -80,8 +80,8 @@ class ApprovedSpecsTest {
         approve(null, 1, Storage.BROWSER);
         assertTrue(specs.current(project).isEmpty(), "legacy approval");
 
-        approve(TASKS.replace("\"/\"", "\"no-slash\""), 1, Storage.BROWSER);
-        assertTrue(specs.current(project).isEmpty(), "invalid draft");
+        approve("[\"not a spec\"]", 1, Storage.BROWSER);
+        assertTrue(specs.current(project).isEmpty(), "a draft that is not an object");
 
         approve(TASKS, 1, Storage.MERN);
         assertTrue(specs.current(project).isEmpty(), "MERN keeps its own contract path");

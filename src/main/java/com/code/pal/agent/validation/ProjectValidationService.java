@@ -111,6 +111,23 @@ public class ProjectValidationService {
 
     /** Required final gate: structural checks plus every applicable type-check/build operation. */
     public ValidationReport validateAll(AgentContext context) {
+        return validateAll(context, false);
+    }
+
+    /**
+     * Final gate when bound compiler receipts already prove TYPE_CHECK/BUILD for this exact staged identity:
+     * structure, runtime/browser acceptance and the production baseline run without re-entering the compilers.
+     */
+    public ValidationReport validateFinal(AgentContext context) {
+        return validateAll(context, true);
+    }
+
+    /** Drops a run's cached command and browser results, for a compilation identity that changed in place. */
+    public void forgetResults(UUID runId) {
+        results.remove(runId);
+    }
+
+    private ValidationReport validateAll(AgentContext context, boolean compilersProven) {
         String capabilityProblem = buildDecisions == null ? null
                 : buildDecisions.validate(context.projectId(), files, context.root());
         if (capabilityProblem != null) {
@@ -152,6 +169,11 @@ public class ProjectValidationService {
                 "Deterministic staged file validation passed"));
         List<String> executed = new ArrayList<>();
         for (ValidationOperation operation : List.of(ValidationOperation.TYPE_CHECK, ValidationOperation.BUILD)) {
+            if (compilersProven) {
+                checks.add(new ValidationCheck(operation.name(), ValidationCheck.Outcome.PASS, false,
+                        "Proven by a bound compiler receipt"));
+                continue;
+            }
             CommandPlan plan = plan(context, operation, null);
             if (!plan.available()) {
                 checks.add(new ValidationCheck(operation.name(), ValidationCheck.Outcome.SKIPPED, false,

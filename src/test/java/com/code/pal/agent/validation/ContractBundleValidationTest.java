@@ -90,7 +90,7 @@ class ContractBundleValidationTest {
 
     @Test
     void theFinalGateRunsFullValidationOnTheSameRevisionAndCanCertify() {
-        when(validation.validateAll(ctx)).thenReturn(report(ValidationOperation.BUILD, true, List.of(
+        when(validation.validateFinal(ctx)).thenReturn(report(ValidationOperation.BUILD, true, List.of(
                 pass("STRUCTURE"), pass("TYPE_CHECK"), pass("BUILD"), pass("RUNTIME"), pass("BASELINE"))));
 
         var bundle = adapter.validateBundle(ctx, run, contract, null, Set.of("pageBatch"));
@@ -107,7 +107,7 @@ class ContractBundleValidationTest {
 
         var bundle = adapter.validateBundle(ctx, run, contract, null, Set.of());
 
-        verify(validation, never()).validateAll(any());
+        verify(validation, never()).validateFinal(any());
         assertFalse(bundle.certifyEligible());
         assertEquals(List.of(error), bundle.diagnostics());
         assertTrue(bundle.checks().stream().noneMatch(ValidationCheck::unavailable), bundle.checks().toString());

@@ -5,7 +5,7 @@ const [evidence, destination, commit] = process.argv.slice(2);
 if (!/^[a-f0-9]{40}$/.test(commit)) throw Error('Invalid benchmark commit');
 const archive = path.resolve(__dirname, '../../codex-archive/benchmarks');
 const output = path.resolve(destination);
-if (path.dirname(output) !== archive || !/^\d{4}-\d{2}-\d{2}-[a-f0-9]{12}\.json$/.test(path.basename(output))) {
+if (path.dirname(output) !== archive || !/^\d{4}-\d{2}-\d{2}-[a-f0-9]{12}(-structured)?\.json$/.test(path.basename(output))) {
   throw Error('Benchmark result escaped its archive');
 }
 function read(name, fallback) {

@@ -3,6 +3,7 @@ package com.code.pal.agent.usage;
 import com.code.pal.agent.llm.LlmCallContext;
 import com.code.pal.agent.llm.LlmCancelledException;
 import com.code.pal.agent.llm.LlmClient;
+import com.code.pal.agent.llm.LlmLogicalCall;
 import com.code.pal.agent.llm.LlmException;
 import com.code.pal.agent.llm.LlmQuotaExceededException;
 import com.code.pal.agent.llm.OpenAiCompatibleLlmClient;
@@ -62,7 +63,7 @@ public class MeteredLlmClient implements LlmClient {
         String provider = original.provider() == null || original.provider().isBlank() ? "openrouter" : original.provider().trim().toLowerCase(Locale.ROOT);
         LlmRequest request = new LlmRequest(provider, original.model(), original.messages(), original.tools(),
                 original.temperature(), original.budget(), original.toolChoice(), cap,original.jsonSchema());
-        UUID logicalId = UUID.randomUUID();
+        UUID logicalId = LlmLogicalCall.currentOrNew();
         if (delegate instanceof OpenAiCompatibleLlmClient) {
             try (var ignored = LlmAttemptScope.bind((attempt, transmission) ->
                     executeAttempt(context, attempt, logicalId, transmission))) {

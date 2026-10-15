@@ -469,7 +469,8 @@ public class RequirementServiceImpl implements RequirementService {
      */
     private Drafted generate(ProjectBrief project) {
         try {
-            AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
+            // The first listed (fast) PLAN model: a round-robin pick of a slow reasoning model misses the request budget.
+            AgentProperties.ModelSelection selection = properties.preferredModel(ProjectType.PLAN);
             boolean withSpec = properties.isStructuredContracts();
             String prompt = """
                     Return only one JSON object {"questions": [...]%s} for this software project.

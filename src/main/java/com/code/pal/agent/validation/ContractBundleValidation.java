@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * S7 side of the S6 validation bundle: collects the server-owned identity of the staged change, runs the
@@ -53,6 +54,7 @@ public class ContractBundleValidation implements ContractValidation {
     private final RunBehaviorCriteria criteria;
     private final ProjectLeaseService leases;
     private final ObjectMapper mapper;
+    private final Map<UUID, String> compilations = new ConcurrentHashMap<>();
 
     public ContractBundleValidation(ProjectValidationService validation, ChangeSetService changes, ProjectFiles files,
             ContractStore store, RunBehaviorCriteria criteria, ProjectLeaseService leases, ObjectMapper mapper) {
@@ -69,6 +71,17 @@ public class ContractBundleValidation implements ContractValidation {
     public ValidationBundle validateBundle(AgentContext ctx, AgentRun run, BuildContract contract, String batchId,
             Set<String> completedBatchIds) {
         var request = request(ctx, run, contract, batchId, completedBatchIds);
+        // The service's command cache is per staged revision; a compilation identity that changed in place
+        // (commands, dependencies, validator) must not reuse it.
+        String compilation = digest(Arrays.asList(request.stagedRevision(), request.snapshotHash(), request.dependencyHash(),
+                request.commandPlanHash(), request.capabilityRevision(), request.validatorRevision()));
+        if (compilations.size() > 1_000) {
+            compilations.clear();
+        }
+        String previous = compilations.put(run.getId(), compilation);
+        if (previous != null && !previous.equals(compilation)) {
+            validation.forgetResults(run.getId());
+        }
         var bundles = new ValidationBundles(mapper,
                 new ValidationReceipts(files, mapper, leases, current -> requireCurrent(ctx, current)));
         return bundles.validateBundle(request, new Adapter(ctx, request, bundles));
@@ -113,6 +126,9 @@ public class ContractBundleValidation implements ContractValidation {
         public CommandReceipt command(ValidationRequest current, String checkId) {
             requireCurrent(ctx, current);
             var report = validation.run(ctx, ValidationOperation.valueOf(checkId), null);
+            if (report.operation() != ValidationOperation.valueOf(checkId) || report.changeSetRevision() != current.stagedRevision()) {
+                throw new WorkflowStageException("Compiler evidence belongs to another operation or staged revision");
+            }
             reports.put(checkId, report);
             var status = !report.available() ? ValidationCheck.Outcome.SKIPPED
                     : report.commandSucceeded() && report.changeValidationPassed() ? ValidationCheck.Outcome.PASS
@@ -126,7 +142,7 @@ public class ContractBundleValidation implements ContractValidation {
             requireCurrent(ctx, current);
             boolean compiled = commands.stream().allMatch(command -> command.status() == ValidationCheck.Outcome.PASS);
             if (current.phase() == ValidationRequest.Phase.FINAL && compiled) {
-                return validation.validateAll(ctx);
+                return validation.validateFinal(ctx);
             }
             var diagnostics = reports.values().stream().flatMap(report -> report.introducedDiagnostics().stream()).toList();
             boolean passed = compiled && diagnostics.isEmpty();

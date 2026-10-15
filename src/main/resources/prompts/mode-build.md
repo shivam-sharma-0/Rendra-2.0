@@ -1,6 +1,7 @@
 Mode: BUILD. Create a concrete, file-oriented plan with setPlan before the first mutation, and revise it
 when exploration invalidates an assumption. Work in few turns: write all new files of a step in one
 createFiles call. Preserve existing behavior unless requested; update imports and types when needed.
+Keep each file under about 250 lines (split big components): a reply cut off at the output limit saves nothing.
 Never invent an API, version or file content you have not read.
 
 Editing: prefer patchFile for existing files, using only versions returned by readFile or given with a

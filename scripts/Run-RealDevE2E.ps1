@@ -25,7 +25,7 @@ if ($AgentBenchmark) {
     $benchmarkArchive = [IO.Path]::GetFullPath((Join-Path $taskRoot '../codex-archive/benchmarks'))
     $benchmarkOutput = [IO.Path]::GetFullPath($BenchmarkResultPath)
     if ($BenchmarkCommit -notmatch '^[a-f0-9]{40}$' -or [IO.Path]::GetDirectoryName($benchmarkOutput) -ne $benchmarkArchive `
-            -or [IO.Path]::GetFileName($benchmarkOutput) -notmatch '^\d{4}-\d{2}-\d{2}-[a-f0-9]{12}\.json$') {
+            -or [IO.Path]::GetFileName($benchmarkOutput) -notmatch '^\d{4}-\d{2}-\d{2}-[a-f0-9]{12}(-structured)?\.json$') {
         throw 'Invalid benchmark output/commit identity'
     }
     if (Test-Path -LiteralPath $benchmarkOutput) { throw 'Refusing to overwrite a benchmark result' }

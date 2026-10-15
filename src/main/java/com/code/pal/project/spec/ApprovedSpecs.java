@@ -5,9 +5,7 @@ import com.code.pal.project.brief.ApprovedProjectMemory;
 import com.code.pal.project.capability.BuildDecisions;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ObjectNode;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
@@ -53,7 +51,11 @@ public class ApprovedSpecs {
                 return Optional.empty();
             }
             var storage = ApprovedSpec.Storage.valueOf(choice.storage().name());
-            var spec = body(approved.specJson(), storage);
+            var draft = mapper.readTree(approved.specJson());
+            if (!draft.isObject()) {
+                return Optional.empty();
+            }
+            var spec = SpecNormalizer.normalize(draft, storage);
             var desired = new ApprovedSpec.Desired(renderStack(spec, storage), storage,
                     ApprovedSpec.Auth.valueOf(choice.auth().name()));
             UUID specId = UUID.nameUUIDFromBytes(("spec:" + approved.projectionId()).getBytes(StandardCharsets.UTF_8));
@@ -62,24 +64,10 @@ public class ApprovedSpecs {
                     approved.revision(), ApprovedSpec.Status.APPROVED, "sha256:" + binding.capabilityRevision(), desired,
                     ApprovedSpec.Readiness.READY, spec));
         } catch (RuntimeException unusable) {
-            log.info("approved_spec_unavailable project={} reason={}", projectId, unusable.getClass().getSimpleName());
+            log.info("approved_spec_unavailable project={} reason={} detail={}", projectId, unusable.getClass().getSimpleName(),
+                    unusable.getMessage() == null ? "" : unusable.getMessage().lines().findFirst().orElse(""));
             return Optional.empty();
         }
-    }
-
-    private ApprovedSpec.Spec body(String json, ApprovedSpec.Storage storage) {
-        var node = (ObjectNode) mapper.readTree(json);
-        node.putArray("assets");
-        if (!node.path("language").isString()) {
-            node.put("language", "en");
-        }
-        for (var entity : node.path("entities")) {
-            if (entity instanceof ObjectNode object) {
-                object.put("persistence", storage.name());
-            }
-        }
-        return mapper.readerFor(ApprovedSpec.Spec.class).without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                .readValue(mapper.writeValueAsString(node));
     }
 
     /** No saved data, one page and only content features render as a static site; anything else uses Vite. */
