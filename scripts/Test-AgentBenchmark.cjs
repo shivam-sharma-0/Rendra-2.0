@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const browserCheck = require('./AgentBenchmarkBrowser.cjs');
+const { createBenchmarkApi } = require('./AgentBenchmarkAuth.cjs');
 
 const [base, workspace, evidence] = process.argv.slice(2);
 if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base)) throw Error('Owned loopback backend required');
@@ -9,7 +10,10 @@ const owner = path.basename(evidence);
 if (!/^codex_e2e_[a-f0-9]{12}$/.test(owner)) throw Error('Owned evidence directory required');
 const projects = [];
 const journeys = [];
-let token;
+const identity = crypto.randomUUID().replaceAll('-', '');
+const client = createBenchmarkApi(base, { email: `benchmark-${identity}@example.invalid`,
+  password: crypto.randomBytes(16).toString('hex'), name: 'Synthetic benchmark' });
+const api = client.api;
 let workspaceId;
 let browserIndex = 0;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -32,17 +36,6 @@ const definitions = [
   { id: 8, name: 'new-todo-browser-substitute', prompt: todoPrompt, expected: 'BUILD', storage: 'BROWSER', fresh: true },
   { id: 9, name: 'plan-then-build-this', prompt: 'Add a Reset button id=reset to the existing counter that resets #count to 0. Preserve increment behavior. Plan the change first.', expected: 'PLAN' },
 ];
-
-async function api(route, method = 'GET', body, timeoutMs = 20000) {
-  const response = await fetch(base + route, { method, signal: AbortSignal.timeout(timeoutMs),
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
-    ...(body ? { body: JSON.stringify(body) } : {}) });
-  const text = await response.text();
-  let data;
-  try { data = text ? JSON.parse(text) : null; } catch { throw Error(`Non-JSON response at ${route} (HTTP ${response.status})`); }
-  if (!response.ok) throw Error(`HTTP ${response.status} at ${route}: ${data?.message || 'request refused'}`);
-  return data;
-}
 
 function sourceProof(root) {
   const files = {};
@@ -199,10 +192,7 @@ async function stopActive(record) {
 }
 
 (async () => {
-  const identity = crypto.randomUUID().replaceAll('-', '');
-  const auth = await api('/api/auth/signup', 'POST', { email: `benchmark-${identity}@example.invalid`,
-    password: crypto.randomBytes(16).toString('hex'), name: 'Synthetic benchmark' });
-  token = auth.accessToken;
+  await client.signup();
   workspaceId = (await api('/api/workspaces'))[0].id;
   for (const definition of definitions) {
     const start = Date.now();
@@ -212,6 +202,7 @@ async function stopActive(record) {
       deadline: start + 900000, acceptance: { passed: false, reason: 'Not completed' } };
     journeys.push(record);
     try {
+      await client.renew();
       const project = await api(`/api/workspaces/${workspaceId}/projects`, 'POST', { name: 'Benchmark ' + definition.id,
         type: definition.id === 9 ? 'PLAN' : 'BUILD', ...(definition.fresh ? { pendingPrompt: definition.prompt } : {}) });
       record.projectId = project.id;
