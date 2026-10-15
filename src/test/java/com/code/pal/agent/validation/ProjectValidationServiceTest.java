@@ -268,6 +268,29 @@ class ProjectValidationServiceTest {
         assertTrue(fixture.changeSets.hasUnvalidatedChanges(fixture.context));assertTrue(fixture.changeSets.validationProgress(fixture.context).repairLimitExhausted());
     }
 
+    @Test void aFixedBuildTheChangeIntroducedRunsEvenWhenTheLiveProjectUsesTheSamePack() throws Exception {
+        var pack = mock(com.code.pal.agent.stack.StackPack.class);
+        var unavailable = com.code.pal.agent.stack.StackCapabilities.unavailable("static", "no build");
+        when(pack.inspect(any(), any(), anyString())).thenReturn(unavailable);
+        when(pack.resolve(any(), any(), anyString(), any(), any())).thenAnswer(call ->
+                com.code.pal.agent.stack.CommandPlan.unavailable(call.getArgument(3), unavailable, "no build"));
+        when(pack.resolveFixed(any(), any(), anyString(), any())).thenAnswer(call ->
+                call.getArgument(3) == ValidationOperation.BUILD && !".".equals(call.getArgument(2))
+                        ? new com.code.pal.agent.stack.CommandPlan(ValidationOperation.BUILD, true, "npm", "fixed compiler",
+                                List.of("node", "validate.cjs"), null)
+                        : com.code.pal.agent.stack.CommandPlan.unavailable(call.getArgument(3), unavailable, "no build"));
+        stackOverride = mock(com.code.pal.agent.stack.StackPacks.class);
+        when(stackOverride.detect(any(), any(), anyString())).thenReturn(pack);
+        var fixture = fixture(3);
+        fixture.changeSets.create(fixture.context, "src/theme.ts", "export const theme=true;");
+
+        var report = fixture.validation.validateAll(fixture.context);
+
+        assertTrue(report.checks().stream().anyMatch(c -> c.id().equals("BUILD") && c.outcome() == ValidationCheck.Outcome.PASS),
+                report.checks().toString());
+        assertTrue(executionCount() >= 1, "the fixed compiler ran instead of being skipped");
+    }
+
     private Fixture fixture(int maxRepairs) throws Exception {
         return fixture(maxRepairs, "OK");
     }

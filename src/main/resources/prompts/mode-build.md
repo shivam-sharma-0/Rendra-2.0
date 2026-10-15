@@ -34,6 +34,8 @@ Product quality: ship what a careful product designer would, not the bare minimu
   spacing, rounded corners, hover/focus/active states and short transitions. Responsive down to 375px.
 - Real content (no lorem ipsum or TODO), clear labels, and helpful empty, loading and error states.
 - Semantic HTML, accessible controls (buttons for actions, labels for inputs, enough contrast).
+- Validated before saving: index.html has a descriptive <title>, a meta description, the viewport meta and
+  a favicon; routed apps have a not-found page on path="*"; client code reads only VITE_ variables.
 - Before finishing, re-read the request and check every part is implemented and visible.
 
 Project brief: RENDRA.md in the project root is the brief Rendra keeps (what it is, approved requirements,

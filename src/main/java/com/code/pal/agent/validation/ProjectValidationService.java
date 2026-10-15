@@ -49,6 +49,13 @@ public class ProjectValidationService {
     private BuildDecisions buildDecisions;
     private MernBehaviorCheck mernBehavior;
     private RunBehaviorCriteria behaviorCriteria;
+    /** Production checklist; null in focused tests that construct the service directly. */
+    private ProductionBaseline baseline;
+
+    @Autowired
+    public void useProductionBaseline(ProductionBaseline baseline) {
+        this.baseline = Objects.requireNonNull(baseline);
+    }
 
     @Autowired
     public void useBehaviorCriteria(RunBehaviorCriteria criteria) {
@@ -241,6 +248,16 @@ public class ProjectValidationService {
                     terminal = true;
             }
         }
+        if (baseline != null) {
+            var missing = introducedBaseline(context, view);
+            checks.add(new ValidationCheck("BASELINE", missing.isEmpty() ? ValidationCheck.Outcome.PASS
+                    : ValidationCheck.Outcome.FAIL, true, missing.isEmpty() ? "Production checklist met"
+                            : "Production checklist items are missing"));
+            if (!missing.isEmpty()) {
+                introduced.addAll(missing);
+                passed = false;
+            }
+        }
         if (terminal)
             changeSets.recordTerminalValidationFailure(context, introduced);
         else
@@ -256,6 +273,14 @@ public class ProjectValidationService {
                 + ":" + check.outcome() + (check.skipCause() == null ? "" : ":" + check.skipCause())).toList());
         lastReports.put(context.runId(), report);
         return report;
+    }
+
+    /** Only items the change broke or a new app lacks; an existing project's old gaps never block an edit. */
+    private List<ProjectDiagnostic> introducedBaseline(AgentContext context, ChangeSetService.WorkspaceView view) {
+        var before = baseline.check(context.projectId(), view.liveRoot()).stream()
+                .map(issue -> issue.code() + "|" + issue.file()).collect(Collectors.toSet());
+        return baseline.check(context.projectId(), view.stagedRoot()).stream()
+                .filter(issue -> !before.contains(issue.code() + "|" + issue.file())).toList();
     }
 
     /** The stack of the live project: commands come from its original, trusted manifests. */
@@ -383,9 +408,8 @@ public class ProjectValidationService {
         if (plan.available())
             return plan;
         String staged = changeSets.view(context).stagedRoot();
+        // Asked even for the same pack: a first static build adds a pinned compiler the legacy live root lacks.
         StackPack next = stacks.detect(files, context.projectId(), staged);
-        if (next == live)
-            return plan;
         CommandPlan fixed = next.resolveFixed(files, context.projectId(), staged, operation);
         return fixed.available() ? fixed : plan;
     }
