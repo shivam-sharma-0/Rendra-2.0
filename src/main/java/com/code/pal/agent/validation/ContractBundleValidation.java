@@ -70,6 +70,10 @@ public class ContractBundleValidation implements ContractValidation {
     @Override
     public ValidationBundle validateBundle(AgentContext ctx, AgentRun run, BuildContract contract, String batchId,
             Set<String> completedBatchIds) {
+        if (batchId == null) {
+            // The final gate synchronizes the system brief into staging; do it first so the identity includes it.
+            changes.validate(ctx);
+        }
         var request = request(ctx, run, contract, batchId, completedBatchIds);
         // The service's command cache is per staged revision; a compilation identity that changed in place
         // (commands, dependencies, validator) must not reuse it.

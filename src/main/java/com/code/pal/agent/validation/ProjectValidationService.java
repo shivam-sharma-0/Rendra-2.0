@@ -105,6 +105,8 @@ public class ProjectValidationService {
                     report.introducedDiagnostics(), false);
         }
         report = withProgress(report, changeSets.validationProgress(context));
+        if (!report.changeValidationPassed())
+            logDiagnostics(context, operation, report.introducedDiagnostics());
         lastReports.put(context.runId(), report);
         return report;
     }
@@ -313,6 +315,13 @@ public class ProjectValidationService {
                 .map(issue -> issue.code() + "|" + issue.file()).collect(Collectors.toSet());
         return baseline.check(context.projectId(), view.stagedRoot()).stream()
                 .filter(issue -> !before.contains(issue.code() + "|" + issue.file())).toList();
+    }
+
+    /** First few failing diagnostics of generated code, bounded, so a failed build can be diagnosed from logs. */
+    private static void logDiagnostics(AgentContext context, ValidationOperation operation, List<ProjectDiagnostic> diagnostics) {
+        diagnostics.stream().limit(3).forEach(d -> log.info("validation_diagnostic runId={} operation={} file={} line={} code={} message={}",
+                context.runId(), operation, d.file(), d.line(), d.code(),
+                d.message() == null ? "" : d.message().length() > 200 ? d.message().substring(0, 200) + "..." : d.message()));
     }
 
     /** The stack of the live project: commands come from its original, trusted manifests. */
