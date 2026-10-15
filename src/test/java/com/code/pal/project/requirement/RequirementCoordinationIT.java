@@ -221,6 +221,32 @@ class RequirementCoordinationIT {
         assertEquals("READY", service.get(7L, project).artifactStatus());
     }
 
+    @Test void theSpecDraftedWithTheQuestionsIsApprovedWhenTheRecommendedAnswersAreKept() {
+        model.answer("{\"questions\":[],\"spec\":{\"title\":\"Tasks\"}}");
+        var started = service.start(7L, project);
+        assertEquals(RequirementStatus.APPROVAL_REQUIRED, started.status());
+        service.approve(7L, project, started.revision());
+        assertEquals("{\"title\":\"Tasks\"}", approvedSpecJson());
+        assertEquals(1, model.calls.get(), "questions and spec come from one call");
+    }
+
+    @Test void aChangedAnswerLeavesTheStaleDraftSpecOutOfTheApproval() {
+        model.answer("{\"questions\":[{\"key\":\"audience\",\"prompt\":\"Who?\",\"required\":true,\"recommended\":\"me\",\"options\":["
+                + "{\"id\":\"me\",\"label\":\"Me\"},{\"id\":\"team\",\"label\":\"Team\"},{\"id\":\"other\",\"label\":\"Other\"}]}],"
+                + "\"spec\":{\"title\":\"Tasks\"}}");
+        var started = service.start(7L, project);
+        var answered = service.answer(7L, project, question("audience").getId(), new RequirementDtos.AnswerRequest("team", null, started.revision()));
+        assertEquals(RequirementStatus.APPROVAL_REQUIRED, answered.status());
+        service.approve(7L, project, answered.revision());
+        assertNull(approvedSpecJson());
+        assertEquals(1, model.calls.get());
+    }
+
+    private String approvedSpecJson() {
+        String payload = jdbc.queryForObject("select payload_json from requirement_projections where project_id=?", String.class, project);
+        return context.getBean(ObjectMapper.class).readValue(payload, RequirementProjection.Payload.class).specJson();
+    }
+
     private RequirementSession seed(RequirementStatus status) {
         var session = sessions.saveAndFlush(RequirementSession.builder().projectId(project).sourcePrompt("fixture").answerRevision(2).status(status).build());
         saveQuestion(session, BuildDecisions.STORAGE_KEY, "BROWSER", "[{\"id\":\"NONE\"},{\"id\":\"BROWSER\"},{\"id\":\"MERN\"}]", 1);
@@ -261,7 +287,7 @@ class RequirementCoordinationIT {
     static class Services {
         @Bean AgentProperties props(org.springframework.core.env.Environment env) {
             var p = new AgentProperties(); p.setWorkspaceBasePath(env.getRequiredProperty("app.agent.workspace-base-path"));
-            p.getSandbox().setRequired(true); p.getLlm().setApiKey("disposable-dummy"); p.getLlm().setBaseUrl("http://127.0.0.1:1"); p.getModels().setPlan(List.of("fixture-model")); return p;
+            p.getSandbox().setRequired(true); p.getLlm().setApiKey("disposable-dummy"); p.getLlm().setBaseUrl("http://127.0.0.1:1"); p.getModels().setPlan(List.of("fixture-model")); p.setStructuredContracts(true); return p;
         }
         @Bean WorkspaceStorage storage(AgentProperties p) { return new WorkspaceStorage(p); }
         @Bean HostProjectFiles host(WorkspaceStorage s) { return spy(new HostProjectFiles(s)); }

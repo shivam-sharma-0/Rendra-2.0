@@ -43,8 +43,13 @@ public class RequirementServiceImpl implements RequirementService {
     private static final java.time.Duration LLM_BUDGET = java.time.Duration.ofSeconds(30);
     /** Section 7 target: at most two questions, none when the request is clear. */
     private static final int MAX_QUESTIONS = 2;
-    /** Enough for three questions with options; the old cap reserved a full generation budget. */
+    /** Enough for two questions with options; the old cap reserved a full generation budget. */
     private static final int QUESTION_OUTPUT_TOKENS = 1_500;
+    /** Two questions plus a bounded spec draft, only when the spec-driven build path is enabled. */
+    private static final int SPEC_OUTPUT_TOKENS = 4_000;
+    private static final java.time.Duration SPEC_LLM_BUDGET = java.time.Duration.ofSeconds(45);
+    /** A spec draft larger than this cannot fit the approved spec envelope, so it is not kept. */
+    private static final int MAX_SPEC_DRAFT_CHARS = 24_000;
 
     private final ProjectService projects;
     private final RequirementSessionRepository sessions;
@@ -119,13 +124,13 @@ public class RequirementServiceImpl implements RequirementService {
         });
         RequirementDtos.Session result = interview.view();
         if (interview.project() != null) {
-            List<QuestionDraft> generated;
-            if (interview.claim() != null && interview.claim().fallback()) generated = defaults(interview.project().initialPrompt());
+            Drafted generated;
+            if (interview.claim() != null && interview.claim().fallback()) generated = new Drafted(defaults(interview.project().initialPrompt()), null);
             else try (LlmCallContext.Scope call = LlmCallContext.bind(new LlmCallContext(userId, projectId, null, CallPurpose.REQUIREMENTS, false))) {
                 generated = generate(interview.project());
             }
             // A modern default look is used (or the attached images decide it), so style is never asked.
-            List<QuestionDraft> drafts = generated.stream().filter(draft -> !isAboutTheLook(draft)).toList();
+            List<QuestionDraft> drafts = generated.questions().stream().filter(draft -> !isAboutTheLook(draft)).toList();
             result = tx.execute(status -> {
                 lockRequirements(projectId);
                 projects.requireCanEdit(userId, projectId);
@@ -133,6 +138,7 @@ public class RequirementServiceImpl implements RequirementService {
                 boolean current = session.getId().equals(interview.session()) && session.getAnswerRevision() == interview.revision();
                 boolean owned = coordinator == null || coordinator.finish(interview.session(), interview.revision(), "QUESTIONS", interview.claim(), current ? "COMPLETE" : "STALE");
                 if (current && owned && questions.findBySessionIdOrderBySequenceAsc(session.getId()).isEmpty()) {
+                    session.setSpecDraftJson(generated.spec());
                     saveQuestions(session, capabilityQuestions(projectId, drafts));
                     ensureCapabilityQuestions(session);
                     if (drafts.isEmpty()) {
@@ -242,7 +248,8 @@ public class RequirementServiceImpl implements RequirementService {
                 manifest.put("revision", session.getAnswerRevision()); manifest.put("buildDecision", objectMapper.readTree(session.getBuildDecisionJson()));
                 manifest.put("answers", answered.stream().map(q -> new ProjectBriefFile.Requirement(q.getPrompt(), answerLabel(q))).toList());
                 session.setProjectionId(projection.enqueue(session.getId(), projectId, session.getAnswerRevision(),
-                        new com.code.pal.project.requirement.RequirementProjection.Payload(write(manifest), brief)));
+                        new com.code.pal.project.requirement.RequirementProjection.Payload(write(manifest), brief,
+                                approvedSpecDraft(session, answered))));
                 sessions.flush();
             }
             String suffix = UUID.randomUUID().toString().replace("-", "");
@@ -456,35 +463,75 @@ public class RequirementServiceImpl implements RequirementService {
         return text.matches(".*\\b(visual|style|look|theme|colou?rs?|layout)\\b.*");
     }
 
-    private List<QuestionDraft> generate(ProjectBrief project) {
+    /**
+     * One call returns the blocking questions and, when the spec-driven build path is enabled, a spec draft
+     * that assumes each recommended answer.
+     */
+    private Drafted generate(ProjectBrief project) {
         try {
             AgentProperties.ModelSelection selection = properties.modelFor(ProjectType.PLAN);
+            boolean withSpec = properties.isStructuredContracts();
             String prompt = """
-                    Return only a valid JSON array of 0 to 3 blocking requirement questions for a software project.
-                    Ask only what a sensible production default cannot decide: the core purpose or main features
-                    when they are unclear, and who uses it when that changes the product. Return [] when the
-                    request is clear enough to build. Never ask about visual style (a modern default is used),
-                    storage, database, backend or sign-in (the backend decides those), and never use platform_ keys.
-                    Each item has key, prompt, required (boolean), recommended (option id) and options; each option
-                    has id, label and description, and every question includes an option with id "other".
+                    Return only one JSON object {"questions": [...]%s} for this software project.
+                    questions: 0 to 2 blocking questions, only what a sensible production default cannot decide (the
+                    core purpose or main features when unclear, who uses it when that changes the product); [] when
+                    the request is clear. Never ask about visual style, storage, database, backend or sign-in, and never
+                    use platform_ keys. Each question has key, prompt, required (boolean), recommended (option id) and
+                    options (id, label, description), including an option with id "other".
+                    %s
                     User prompt: %s
-                    """.formatted(project.initialPrompt()) + attachmentNote(project.attachments());
+                    """.formatted(withSpec ? ", \"spec\": {...}" : "", withSpec ? SPEC_INSTRUCTIONS : "",
+                    project.initialPrompt()) + attachmentNote(project.attachments());
             LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
-                    List.of(LlmMessage.system("You are a product requirements analyst."), LlmMessage.user(prompt)), List.of(), 0.0, LLM_BUDGET)
-                    .withMaxTokens(QUESTION_OUTPUT_TOKENS));
+                    List.of(LlmMessage.system("You are a product requirements analyst."), LlmMessage.user(prompt)), List.of(), 0.0,
+                    withSpec ? SPEC_LLM_BUDGET : LLM_BUDGET).withMaxTokens(withSpec ? SPEC_OUTPUT_TOKENS : QUESTION_OUTPUT_TOKENS));
             String content = result.content() == null ? "" : stripJsonFence(result.content()).strip();
-            if (content.equals("[]")) return List.of();
-            List<QuestionDraft> parsed = parseQuestions(content);
-            if (!parsed.isEmpty()) return parsed.stream().filter(draft -> !isAboutTheLook(draft)).limit(MAX_QUESTIONS).toList();
+            if (content.equals("[]")) return new Drafted(List.of(), null);
+            JsonNode root = content.isBlank() ? null : objectMapper.readTree(content);
+            if (root != null && root.isObject() && root.path("questions").isArray()) {
+                return new Drafted(limited(parseQuestionDrafts(root.path("questions"))), withSpec ? specDraft(root.path("spec")) : null);
+            }
+            List<QuestionDraft> parsed = parseQuestionDrafts(root);
+            if (!parsed.isEmpty()) return new Drafted(limited(parsed), null);
         } catch (RuntimeException error) {
             log.warn("requirement_questions_fallback project={} reason={}", project.id(), error.getClass().getSimpleName());
         }
-        return defaults(project.initialPrompt());
+        return new Drafted(defaults(project.initialPrompt()), null);
     }
 
-    private List<QuestionDraft> parseQuestions(String content) {
-        if (content == null || content.isBlank()) return List.of();
-        return parseQuestionDrafts(objectMapper.readTree(stripJsonFence(content)));
+    private static final String SPEC_INSTRUCTIONS = """
+                    spec: what to build, assuming each question's recommended option. Fields: title, language (e.g. "en"),
+                    goal; pages [{id, path ("/" first), title, featureIds}]; entities [{id, fields [{name, kind:
+                    STRING|NUMBER|BOOLEAN|DATE, required}], ownership: USER|SHARED}] only for data the user saves;
+                    features [{id, kind, description, pageIds, entityIds}] with kind CONTENT, CONTACT_LINK, NAV_ANCHOR,
+                    CALCULATOR, COUNTER, LOCAL_CRUD or a short custom UPPER_CASE kind; theme {background, foreground,
+                    accent, muted (hex colors), radius, spacing (like "8px"), font: system|serif|mono}; acceptance
+                    [{id, featureId, kind: "BROWSER", steps [{kind: CLICK|FILL|SELECT|ASSERT_TEXT|ASSERT_COUNT|
+                    ASSERT_ROUTE|RELOAD, selector, value}], expected}] with at least one scenario per feature;
+                    constraints {responsive: true, accessibility: true, exclusions: []}. Ids are letters, digits and _.
+                    Page featureIds and feature pageIds must agree.""";
+
+    private static List<QuestionDraft> limited(List<QuestionDraft> parsed) {
+        return parsed.stream().filter(draft -> !isAboutTheLook(draft)).limit(MAX_QUESTIONS).toList();
+    }
+
+    /** Kept as data only; the approved spec envelope validates every field before anything uses it. */
+    private String specDraft(JsonNode spec) {
+        if (spec == null || !spec.isObject()) return null;
+        String json = write(spec);
+        return json.length() > MAX_SPEC_DRAFT_CHARS ? null : json;
+    }
+
+    /**
+     * The draft assumed each recommended answer, so it is approved only when the user kept them all;
+     * otherwise the build plans from the answers without a stale spec.
+     */
+    private String approvedSpecDraft(RequirementSession session, List<RequirementQuestion> answered) {
+        if (session.getSpecDraftJson() == null) return null;
+        boolean keptRecommendations = answered.stream().filter(question -> !question.getQuestionKey().startsWith("platform_"))
+                .allMatch(question -> (question.getOtherText() == null || question.getOtherText().isBlank())
+                        && Objects.equals(question.getSelectedOption(), question.getRecommendedOption()));
+        return keptRecommendations ? session.getSpecDraftJson() : null;
     }
 
     private List<QuestionDraft> parseQuestionDrafts(JsonNode root) {
@@ -544,6 +591,7 @@ public class RequirementServiceImpl implements RequirementService {
     private static String clean(String value, int max) { if (value == null) return null; String v = value.trim(); return v.isBlank() ? null : v.substring(0, Math.min(max, v.length())); }
     private static boolean nonBlank(String value) { return value != null && !value.isBlank(); }
     private record OptionDraft(String id, String label, String description) {}
+    private record Drafted(List<QuestionDraft> questions, String spec) {}
     private record QuestionDraft(String key, String prompt, boolean required, String recommended, List<OptionDraft> options) {}
     /** What the model calls need from a project, read inside a transaction and used outside it. */
     /** {@code attachments}: files attached to the opening prompt (screenshots, mock-ups). */

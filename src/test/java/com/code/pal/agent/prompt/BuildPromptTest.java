@@ -15,20 +15,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BuildPromptTest {
     /** system-base.md + mode-build.md sent on every BUILD call before the split (2026-10-15 baseline). */
     private static final int OLD_FIXED_BUILD_PROMPT_CHARS = 4_080 + 10_051;
-    private static final ProjectShape EMPTY = new ProjectShape(false, false, false);
+    private static final ProjectShape EMPTY = new ProjectShape(false, false, false, false);
 
     @Test
     void theApprovedStorageDecisionWinsOverProjectFiles() {
-        assertEquals(Stack.MERN, BuildPrompt.stack(new ProjectShape(false, true, true), Storage.MERN));
-        assertEquals(Stack.SUPABASE, BuildPrompt.stack(new ProjectShape(false, true, true), Storage.SUPABASE));
-        assertEquals(Stack.SUPABASE, BuildPrompt.stack(new ProjectShape(false, false, true), Storage.SUPABASE));
+        assertEquals(Stack.MERN, BuildPrompt.stack(new ProjectShape(false, false, true, true), Storage.MERN));
+        assertEquals(Stack.SUPABASE, BuildPrompt.stack(new ProjectShape(false, false, true, true), Storage.SUPABASE));
+        assertEquals(Stack.SUPABASE, BuildPrompt.stack(new ProjectShape(false, false, false, true), Storage.SUPABASE));
     }
 
     @Test
     void withoutACloudDecisionProjectFilesTellTheStacksApart() {
-        assertEquals(Stack.MERN, BuildPrompt.stack(new ProjectShape(true, true, true), Storage.BROWSER));
-        assertEquals(Stack.VITE, BuildPrompt.stack(new ProjectShape(false, true, true), null));
-        assertEquals(Stack.STATIC, BuildPrompt.stack(new ProjectShape(false, false, true), Storage.NONE));
+        assertEquals(Stack.MERN, BuildPrompt.stack(new ProjectShape(true, false, true, true), Storage.BROWSER));
+        assertEquals(Stack.VITE, BuildPrompt.stack(new ProjectShape(false, false, true, true), null));
+        assertEquals(Stack.STATIC, BuildPrompt.stack(new ProjectShape(false, false, false, true), Storage.NONE));
+    }
+
+    @Test
+    void aValidatedStaticStarterStaysStaticDespiteItsCssBuildManifest() {
+        assertEquals(Stack.STATIC, BuildPrompt.stack(new ProjectShape(false, true, true, true), Storage.NONE));
+        assertEquals(Stack.STATIC, BuildPrompt.stack(new ProjectShape(false, true, true, true), null));
+        assertEquals(Stack.SUPABASE, BuildPrompt.stack(new ProjectShape(false, true, true, true), Storage.SUPABASE));
     }
 
     @Test

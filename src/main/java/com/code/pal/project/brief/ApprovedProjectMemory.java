@@ -9,7 +9,11 @@ import java.util.*;
 /** Current immutable approved projection; conversation history and editable files are never authority. */
 @Service
 public class ApprovedProjectMemory {
-    public record Approved(UUID projectionId, long revision, String requirementsJson, String brief) {}
+    public record Approved(UUID projectionId, long revision, String requirementsJson, String brief, String specJson) {
+        public Approved(UUID projectionId, long revision, String requirementsJson, String brief) {
+            this(projectionId, revision, requirementsJson, brief, null);
+        }
+    }
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private static final String BEGIN = "<!-- rendra-code-snapshot:start -->";
@@ -21,7 +25,7 @@ public class ApprovedProjectMemory {
                 (r,n)->{
                     var payload=mapper.readValue(r.getString(3),RequirementProjection.Payload.class);
                     if(payload.requirementsJson()==null || payload.brief()==null) throw new IllegalStateException("Invalid approved memory");
-                    return new Approved(r.getObject(1,UUID.class),r.getLong(2),payload.requirementsJson(),payload.brief());
+                    return new Approved(r.getObject(1,UUID.class),r.getLong(2),payload.requirementsJson(),payload.brief(),payload.specJson());
                 },project);
         return rows.isEmpty()?null:rows.getFirst();
     }

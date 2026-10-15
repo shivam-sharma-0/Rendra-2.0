@@ -22,8 +22,12 @@ public final class BuildPrompt {
         }
     }
 
-    /** Files that reveal an existing project's stack, checked in the project being built. */
-    public record ProjectShape(boolean serverPackage, boolean packageJson, boolean indexHtml) {
+    /**
+     * Files that reveal an existing project's stack, checked in the project being built. staticSite is a
+     * server-validated static starter marker: such an app has a package.json for its CSS build but is not Vite.
+     */
+    public record ProjectShape(boolean serverPackage, boolean staticSite, boolean packageJson, boolean indexHtml) {
+        public static final ProjectShape EMPTY = new ProjectShape(false, false, false, false);
     }
 
     private BuildPrompt() {
@@ -39,6 +43,9 @@ public final class BuildPrompt {
         }
         if (shape.serverPackage()) {
             return Stack.MERN;
+        }
+        if (shape.staticSite()) {
+            return Stack.STATIC;
         }
         if (shape.packageJson()) {
             return Stack.VITE;

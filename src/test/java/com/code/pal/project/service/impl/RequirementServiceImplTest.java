@@ -54,8 +54,9 @@ class RequirementServiceImplTest {
     private final MessageService messages = mock(MessageService.class);
     private final ProjectArtifactService artifacts = mock(ProjectArtifactService.class);
 
+    private final AgentProperties properties = new AgentProperties();
     private final RequirementServiceImpl service = new RequirementServiceImpl(projects, sessions, questions, model(),
-            new AgentProperties(), new ObjectMapper(), artifacts, messages,
+            properties, new ObjectMapper(), artifacts, messages,
             new FakeTransactions());
 
     RequirementServiceImplTest() {
@@ -141,6 +142,39 @@ class RequirementServiceImplTest {
         RequirementDtos.Session view = service.start(7L, projectId);
 
         assertEquals(List.of("audience", "features"), view.questions().stream().map(RequirementDtos.Question::key).toList());
+    }
+
+    @Test
+    void oneCallReturnsTheQuestionsAndASpecDraft() {
+        properties.setStructuredContracts(true);
+        modelReply = () -> "```json\n{\"questions\":[" + question("audience") + "],\"spec\":{\"title\":\"Coffee\"}}\n```";
+
+        RequirementDtos.Session view = service.start(7L, projectId);
+
+        assertEquals(List.of("audience"), view.questions().stream().map(RequirementDtos.Question::key).toList());
+        assertEquals("{\"title\":\"Coffee\"}", session.getSpecDraftJson());
+        assertEquals(1, modelCalls.get());
+        assertTrue(prompts.stream().anyMatch(prompt -> prompt.contains("acceptance")), "the spec is requested");
+    }
+
+    @Test
+    void withoutTheSpecDrivenPathNoSpecIsRequestedOrKept() {
+        modelReply = () -> "{\"questions\":[" + question("audience") + "],\"spec\":{\"title\":\"Coffee\"}}";
+
+        service.start(7L, projectId);
+
+        assertNull(session.getSpecDraftJson());
+        assertFalse(prompts.stream().anyMatch(prompt -> prompt.contains("acceptance")));
+    }
+
+    @Test
+    void anObjectWithNoQuestionsAsksNothingAndAMissingSpecIsNotInvented() {
+        modelReply = () -> "{\"questions\":[]}";
+
+        RequirementDtos.Session view = service.start(7L, projectId);
+
+        assertTrue(view.questions().isEmpty());
+        assertNull(session.getSpecDraftJson());
     }
 
     @Test

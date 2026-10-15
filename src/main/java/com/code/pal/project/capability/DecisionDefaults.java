@@ -19,6 +19,9 @@ public final class DecisionDefaults {
             + "|multi-?user|each user|per user|user roles?|admin panel)\\b");
     private static final Pattern CLOUD = Pattern.compile("\\b(?:supabase|cloud|database|backend|server|online sync|"
             + "sync across devices|across devices|every device)\\b");
+    /** Data other people see or edit together needs cloud storage even without sign-in. */
+    private static final Pattern SHARED_DATA = Pattern.compile("\\b(?:shared\\s+(?:notes?|lists?|boards?|tasks?|data|"
+            + "docs?|documents?|files?|calendars?|expenses?|todos?)|collaborat\\w*|real-?time|share (?:it |them )?with)\\b");
     private static final Pattern PERSISTENCE = Pattern.compile("\\b(?:save[sd]?|remember\\w*|persist\\w*|stored?|"
             + "history|to-?dos?|notes?|tasks?|tracker|track\\w*|diary|journal|bookmarks?|inventory|crud|records?|"
             + "entries|expenses?|budget|list of)\\b");
@@ -33,7 +36,7 @@ public final class DecisionDefaults {
         String signals = NO_SIGN_IN.matcher(RequestRouter.positiveSignals(request == null ? "" : request))
                 .replaceAll(" ");
         boolean accounts = ACCOUNTS.matcher(signals).find();
-        if (accounts || CLOUD.matcher(signals).find()) {
+        if (accounts || CLOUD.matcher(signals).find() || SHARED_DATA.matcher(signals).find()) {
             if (!supabaseConnected) {
                 return new Inferred(null, null);
             }

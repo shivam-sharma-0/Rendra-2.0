@@ -18,7 +18,10 @@ import java.util.UUID;
 /** Durable approval projection. Pending/partial files never authorize build dispatch. */
 @Service @Slf4j
 public class RequirementProjection {
-    public record Payload(String requirementsJson, String brief) {}
+    /** specJson is the approved spec body (null for legacy approvals and when answers left the draft stale). */
+    public record Payload(String requirementsJson, String brief, String specJson) {
+        public Payload(String requirementsJson, String brief) { this(requirementsJson, brief, null); }
+    }
     private record Entry(UUID id, UUID session, UUID project, long revision, String payload, String state) {}
     static final String BEGIN = "<!-- rendra-approved-requirements:start -->";
     static final String END = "<!-- rendra-approved-requirements:end -->";

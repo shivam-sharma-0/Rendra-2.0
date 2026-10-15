@@ -87,7 +87,9 @@ import java.util.concurrent.TimeUnit;
 import com.code.pal.agent.change.PromotionRecoveryPendingException;
 import com.code.pal.agent.change.SequentialCheckpoints;
 import com.code.pal.agent.context.ToolResultMemory;
+import com.code.pal.agent.contract.BatchBudget;
 import com.code.pal.agent.contract.ContractCoordinator;
+import com.code.pal.agent.contract.StaticAssets;
 import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.lease.TrustedOperationPendingException;
 import com.code.pal.agent.llm.RetryableLlmException;
@@ -96,6 +98,7 @@ import com.code.pal.agent.validation.ValidationCheck;
 import com.code.pal.message.domain.MessageRole;
 import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.exception.WorkflowStageException;
+import com.code.pal.project.spec.ApprovedSpecs;
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -118,6 +121,10 @@ public class AgentRunner implements AgentRuntime {
 
     private static final int HISTORY_CANDIDATE_LIMIT = 100;
     private static final int TOOL_RESULT_MAX = 30_000;
+    /** Spec batches stay well inside the free models' context windows, which all honour max_tokens. */
+    private static final int SPEC_INPUT_BYTES = 32_000;
+    private static final int SPEC_CONTEXT_TOKENS = 32_000;
+    private static final int SPEC_PROVIDER_OVERHEAD_TOKENS = 512;
     private static final Set<String> READ_ONLY_FOUNDATION_TOOLS = Set.of(
             "listFiles", "readFile", "searchCode", "getProjectMetadata", "getFileSummary", "getApprovedRequirement",
             "findProjectFiles");
@@ -169,6 +176,13 @@ public class AgentRunner implements AgentRuntime {
     @Autowired
     void useContractCoordinator(ContractCoordinator coordinator) {
         this.contractCoordinator = coordinator;
+    }
+
+    private ApprovedSpecs approvedSpecs;
+
+    @Autowired
+    void useApprovedSpecs(ApprovedSpecs specs) {
+        this.approvedSpecs = specs;
     }
 
     private final ProjectValidationService validation;
@@ -430,9 +444,11 @@ public class AgentRunner implements AgentRuntime {
 
         requireBuildAllowed(run);
         LoopSetup setup = prepareLoop(state, project, accepted, userRequest, attachments);
-        if (attachments.isEmpty() && contractCoordinator != null
-                && contractCoordinator.eligible(run, setup.size(), userRequest)) {
-            return runStructured(state, setup.size(), userRequest);
+        if (attachments.isEmpty() && contractCoordinator != null) {
+            ContractCoordinator.SpecPlanning planning = specPlanning(run, state.ctx.root());
+            if (contractCoordinator.eligible(run, setup.size(), userRequest, planning)) {
+                return runStructured(state, setup.size(), userRequest, planning);
+            }
         }
         prepareStarter(state, project, setup, userRequest);
         return runToolLoop(state, setup, userRequest);
@@ -524,7 +540,20 @@ public class AgentRunner implements AgentRuntime {
         return convo;
     }
 
-    private AgentRunResult runStructured(RunState state, RunSize size, String userRequest) {
+    /** The approved spec plans only a new project's first build; later edits use the tool loop. */
+    private ContractCoordinator.SpecPlanning specPlanning(AgentRun run, String root) {
+        if (approvedSpecs == null || !props.isStructuredContracts()
+                || !projectShape(run.getProjectId(), root).equals(BuildPrompt.ProjectShape.EMPTY)) {
+            return null;
+        }
+        var budget = new BatchBudget.Limits(SPEC_INPUT_BYTES, props.getLlm().getMaxOutputTokens(), SPEC_CONTEXT_TOKENS,
+                SPEC_PROVIDER_OVERHEAD_TOKENS, true);
+        return approvedSpecs.current(run.getProjectId())
+                .map(spec -> new ContractCoordinator.SpecPlanning(spec, budget)).orElse(null);
+    }
+
+    private AgentRunResult runStructured(RunState state, RunSize size, String userRequest,
+            ContractCoordinator.SpecPlanning planning) {
         AgentRun run = state.run;
         if (checkpoints == null) {
             throw new AgentLimitExceededException("Durable structured execution is unavailable");
@@ -573,7 +602,7 @@ public class AgentRunner implements AgentRuntime {
         };
         var outcome = contractCoordinator.execute(state.ctx, run, size, userRequest,
                 state.projectContext.projectContextMessage(), checkedCall, beforeIo,
-                title -> events.emit(run, AgentStepType.STATUS, title, null));
+                title -> events.emit(run, AgentStepType.STATUS, title, null), planning);
         if (run.getMode() == ProjectType.BUILD) {
             beforeIo.run();
             projects.requireCanEdit(run.getUserId(), run.getProjectId());
@@ -1602,8 +1631,21 @@ public class AgentRunner implements AgentRuntime {
     }
 
     private BuildPrompt.ProjectShape projectShape(UUID projectId, String root) {
-        return new BuildPrompt.ProjectShape(files.exists(projectId, root, "server/package.json"),
+        return new BuildPrompt.ProjectShape(files.exists(projectId, root, "server/package.json"), validStaticSite(projectId, root),
                 files.exists(projectId, root, "package.json"), files.exists(projectId, root, "index.html"));
+    }
+
+    /** Only a marker the server can validate makes a package.json project static; a tampered one does not. */
+    private boolean validStaticSite(UUID projectId, String root) {
+        if (!files.exists(projectId, root, StaticAssets.MARKER)) {
+            return false;
+        }
+        try {
+            StaticAssets.require(files, projectId, root);
+            return true;
+        } catch (RuntimeException tampered) {
+            return false;
+        }
     }
 
     private BuildDecisions.Storage approvedStorage(AgentRun run) {
