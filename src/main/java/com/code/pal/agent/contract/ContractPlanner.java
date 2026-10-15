@@ -14,6 +14,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.DeserializationFeature;
+import com.code.pal.project.spec.ApprovedSpec;
 
 /** One logical planner invocation plus at most one schema correction. Caller owns durable call caps. */
 @Component
@@ -31,6 +32,13 @@ public final class ContractPlanner {
                 BuildDecisions.Choice choice, BuildContract.Limits limits) {
             this(id, request, approvedRequirements, projectMap, choice, limits, null);
         }
+    }
+
+    public record SpecInput(Input base, ApprovedSpec spec, BatchBudget.Limits budget) {}
+
+    public BuildContract plan(SpecInput input, AgentProperties.ModelSelection model,
+            Function<LlmClient.LlmRequest, LlmClient.LlmResult> checkedCall, Consumer<BuildContract> sources) {
+        return new SpecContractPlanner(mapper).plan(input, model, checkedCall, sources);
     }
 
     public BuildContract plan(Input input, AgentProperties.ModelSelection model,

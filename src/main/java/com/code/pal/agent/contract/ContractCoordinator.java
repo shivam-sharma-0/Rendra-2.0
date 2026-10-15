@@ -6,6 +6,7 @@ import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.plan.AgentPlanState;
+import com.code.pal.agent.starter.Starter;
 import com.code.pal.agent.route.*;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.validation.*;
@@ -13,6 +14,7 @@ import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.project.brief.ApprovedProjectMemory;
 import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.domain.ProjectType;
+import com.code.pal.project.spec.ApprovedSpec;
 import com.code.pal.project.exception.WorkflowStageException;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
@@ -93,13 +95,39 @@ public final class ContractCoordinator {
     public record Outcome(BuildContract contract, String summary) {
     }
 
+    /** S4 supplies this server-loaded approved envelope, never model text or a client approval flag. */
+    public record SpecPlanning(ApprovedSpec spec, BatchBudget.Limits budget) {
+        public SpecPlanning {
+            Objects.requireNonNull(spec);
+            Objects.requireNonNull(budget);
+        }
+    }
+
+    public boolean eligible(AgentRun run, RunSize size, String request, SpecPlanning planning) {
+        if (planning == null) {
+            return eligible(run, size, request);
+        }
+        return props.isStructuredContracts() && RequestRouter.route(request) == RequestRouter.Route.CHANGE
+                && (run.getMode() == ProjectType.BUILD || run.getMode() == ProjectType.PLAN)
+                && planning.spec().projectId().equals(run.getProjectId()) && memory.current(run.getProjectId()) != null;
+    }
+
     public Outcome execute(AgentContext ctx, AgentRun run, RunSize size, String request, String projectMap,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checkedCall, Runnable beforeIo,
             Consumer<String> activity) {
+        return execute(ctx, run, size, request, projectMap, checkedCall, beforeIo, activity, null);
+    }
+
+    public Outcome execute(AgentContext ctx, AgentRun run, RunSize size, String request, String projectMap,
+            Function<LlmClient.LlmRequest, LlmClient.LlmResult> checkedCall, Runnable beforeIo,
+            Consumer<String> activity, SpecPlanning planning) {
         var allowed = new BuildContract.Limits(size.maxModelCalls(), size.maxToolCalls(),
                 props.getLlm().getMaxOutputTokens(), size.timeoutMs());
         var basis = store.current(ctx.projectId());
         var approved = memory.current(ctx.projectId());
+        if (planning != null) {
+            requireSpec(ctx, basis, planning.spec());
+        }
         var stored = store.forRun(ctx.projectId(), run.getId());
         UUID acceptedPlan = run.getMode() == ProjectType.BUILD ? store.acceptedPlanRun(run) : null;
         if (stored == null && run.getMode() == ProjectType.BUILD
@@ -118,18 +146,37 @@ public final class ContractCoordinator {
             var choice = decisions.state(ctx.projectId()).choice();
             String root = choice.storage() == BuildDecisions.Storage.MERN ? "client/src/App.tsx"
                     : choice.storage() == BuildDecisions.Storage.NONE ? null : "src/App.tsx";
+            if (planning != null && planning.spec().desired().renderStack() == ApprovedSpec.RenderStack.VITE) {
+                root = "src/App.tsx";
+            }
             String requiredRoot = root != null && !files.regularFile(ctx.projectId(), ctx.root(), root) ? root : null;
-            var contract = planner.plan(
-                    new ContractPlanner.Input(UUID.randomUUID(), request, approved.requirementsJson(), projectMap,
-                            choice, allowed, requiredRoot),
-                    props.preferredModel(run.getMode()), checkedCall,
-                    proposal -> store.validateSources(ctx.projectId(), proposal));
+            var input = new ContractPlanner.Input(UUID.randomUUID(), request, approved.requirementsJson(), projectMap,
+                    choice, allowed, requiredRoot);
+            BuildContract contract;
+            if (planning == null) {
+                contract = planner.plan(input, props.preferredModel(run.getMode()), checkedCall,
+                        proposal -> store.validateSources(ctx.projectId(), proposal));
+            } else {
+                var layout = new DeterministicPlan(mapper).plan(planning.spec(), planning.budget());
+                contract = layout.isPresent() ? ContractPlans.fromLayout(input.id(), planning.spec(), layout.get(), allowed)
+                        : planner.plan(new ContractPlanner.SpecInput(input, planning.spec(), planning.budget()),
+                                props.preferredModel(run.getMode()), checkedCall,
+                                proposal -> store.validateSources(ctx.projectId(), proposal));
+                contract = ContractPlans.sealInterfaces(contract, render(ctx, contract));
+                requireBasis(ctx, basis);
+            }
             stored = store.create(run, contract, basis, allowed);
         }
         if (!stored.binding().equals(basis) || !stored.contract().limits().within(allowed)
                 || "INVALIDATED".equals(stored.state()))
             throw new WorkflowStageException("Stored plan no longer matches this run");
         var c = stored.contract();
+        if (planning != null && c.schemaVersion() != 2) {
+            throw new WorkflowStageException("Review a spec-bound plan before using this approved spec");
+        }
+        if (c.schemaVersion() == 2) {
+            requireCurrentPlan(c, planning);
+        }
         if (run.getMode() == ProjectType.PLAN)
             return new Outcome(c,
                     "Implementation plan:\n"
@@ -144,8 +191,10 @@ public final class ContractCoordinator {
                 "Approved immutable build contract");
         beforeIo.run();
         activity.accept("Preparing shared interfaces");
-        Map<String, String> common = scaffold.render(c, "App",
-                p -> files.regularFile(ctx.projectId(), ctx.root(), p) ? bounded(ctx, p) : null);
+        Map<String, String> common = render(ctx, c);
+        if (c.schemaVersion() == 2 && !ContractPlans.sealInterfaces(c, common).equals(c)) {
+            throw new WorkflowStageException("Shared template changed; review a current plan before building");
+        }
         merge(ctx, common.entrySet().stream().map(e -> new UnitGenerator.Delta(e.getKey(),
                 files.version(ctx.projectId(), ctx.root(), e.getKey()), e.getValue())).toList());
         for (var asset : c.assets()) {
@@ -163,22 +212,32 @@ public final class ContractCoordinator {
         }
         criteria.install(run.getId(), ctx.projectId(), basis.requirementsProjection(), basis.requirementsRevision(),
                 c.acceptance());
-        for (var wave : c.waves()) {
+        var completedBatches = new HashSet<String>();
+        var orderedBatches = c.schemaVersion() == 2 ? ContractPlans.ordered(c.batches()) : List.<ContractBatch>of();
+        var executionWaves = c.schemaVersion() == 2 ? orderedBatches.stream().map(batch -> batch.unitIds().stream()
+                .map(id -> c.units().stream().filter(unit -> unit.id().equals(id)).findFirst().orElseThrow()).toList()).toList() : c.waves();
+        for (int waveIndex = 0; waveIndex < executionWaves.size(); waveIndex++) {
+            var wave = executionWaves.get(waveIndex);
             requireBasis(ctx, basis);
             var outputs = new ArrayList<UnitGenerator.Delta>();
             var inputs = new ArrayList<UnitGenerator.Input>();
             for (var unit : wave) {
                 activity.accept(unit.objective());
-                if (c.assets().stream().map(BuildContract.Asset::destination).toList().containsAll(unit.ownedPaths()))
+                if (c.schemaVersion() == 1
+                        && c.assets().stream().map(BuildContract.Asset::destination).toList().containsAll(unit.ownedPaths()))
                     continue;
                 var in = input(ctx, c, unit, request, approved.requirementsJson(), common.keySet(), "");
+                if (c.schemaVersion() == 2) {
+                    inputs.add(in);
+                    continue;
+                }
                 var cached = unitCheckpoints == null ? null : unitCheckpoints.reuse(run, in, ctx);
                 if (cached == null)
                     inputs.add(in);
                 else
                     outputs.addAll(cached.files());
             }
-            int width = props.isParallelUnits() && inputs.size() > 1 ? 2 : 1;
+            int width = c.schemaVersion() == 1 && props.isParallelUnits() && inputs.size() > 1 ? 2 : 1;
             if (width == 2) {
                 var scheduling = props.getScheduling();
                 var model = props.preferredModel(ProjectType.BUILD);
@@ -193,7 +252,10 @@ public final class ContractCoordinator {
             if (progress == null)
                 throw new WorkflowStageException("Durable wave deadline unavailable");
             var batching = new BatchUnitGenerator(mapper);
-            if (width == 1 && props.isBatchGeneration() && !props.isParallelUnits() && batching.eligible(inputs)) {
+            if (c.schemaVersion() == 2) {
+                var batch = orderedBatches.get(waveIndex);
+                outputs.addAll(plannedOutputs(ctx, run, c, batch, inputs, completedBatches, planning, checkedCall));
+            } else if (width == 1 && props.isBatchGeneration() && !props.isParallelUnits() && batching.eligible(inputs)) {
                 var frozen = BatchUnitGenerator.checkpointInputs(inputs);
                 var recovered = new ArrayList<UnitGenerator.Output>();
                 if (unitCheckpoints != null)
@@ -242,6 +304,9 @@ public final class ContractCoordinator {
             if (report.available() && !report.changeValidationPassed())
                 repair(ctx, run, c, wave, request, approved.requirementsJson(), common.keySet(), report, checkedCall,
                         beforeIo, activity);
+            if (c.schemaVersion() == 2) {
+                completedBatches.add(orderedBatches.get(waveIndex).id());
+            }
         }
         for (int attempt = 0;; attempt++) {
             beforeIo.run();
@@ -278,6 +343,9 @@ public final class ContractCoordinator {
     private void repair(AgentContext ctx, AgentRun run, BuildContract c, List<BuildContract.Unit> units, String request,
             String req, Set<String> shared, ValidationReport report,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, Runnable beforeIo, Consumer<String> activity) {
+        if (c.schemaVersion() == 2) {
+            throw new WorkflowStageException("Planned batch checks failed; scoped patch repair requires the S6 adapter");
+        }
         if (changes.validationProgress(ctx).repairLimitExhausted())
             throw new WorkflowStageException("Repair limit reached");
         var output = new ArrayList<UnitGenerator.Delta>();
@@ -381,5 +449,69 @@ public final class ContractCoordinator {
     private void requireBasis(AgentContext ctx, ContractStore.Binding expected) {
         if (!store.current(ctx.projectId()).equals(expected))
             throw new WorkflowStageException("Approval/code/capabilities changed; create a current plan");
+    }
+
+    private Map<String, String> render(AgentContext ctx, BuildContract contract) {
+        return scaffold.render(contract, "App", path -> files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null);
+    }
+
+    private void requireSpec(AgentContext ctx, ContractStore.Binding basis, ApprovedSpec spec) {
+        var state = decisions.state(ctx.projectId());
+        if (!spec.projectId().equals(ctx.projectId()) || !spec.requirementsProjection().equals(basis.requirementsProjection())
+                || spec.requirementsRevision() != basis.requirementsRevision()
+                || !(spec.capabilityRevision().equals(basis.capabilityRevision())
+                        || spec.capabilityRevision().equals("sha256:" + basis.capabilityRevision()))
+                || spec.readiness() != ApprovedSpec.Readiness.READY || state.blocked() || state.choice() == null
+                || !spec.desired().storage().name().equals(state.choice().storage().name())
+                || !spec.desired().auth().name().equals(state.choice().auth().name())) {
+            throw new WorkflowStageException("Approved spec no longer matches current requirements/capabilities");
+        }
+    }
+
+    private void requireCurrentPlan(BuildContract contract, SpecPlanning planning) {
+        if (planning == null || !planning.spec().specId().equals(contract.specId())
+                || planning.spec().specRevision() != contract.specRevision() || !planning.spec().specHash().equals(contract.specHash())
+                || !Starter.TEMPLATE_VERSION.equals(contract.templateVersion())) {
+            throw new WorkflowStageException("Load the current approved spec/template before executing this versioned plan");
+        }
+        if (!ContractPlans.splitOversized(contract, planning.budget(), mapper).equals(contract)) {
+            throw new WorkflowStageException("Stored plan needs a versioned repartition and fresh review");
+        }
+    }
+
+    private List<UnitGenerator.Output> recoverBatch(AgentRun run, AgentContext ctx, List<UnitGenerator.Input> inputs) {
+        var recovered = new ArrayList<UnitGenerator.Output>();
+        if (unitCheckpoints == null) {
+            return recovered;
+        }
+        for (var input : inputs) {
+            var cached = unitCheckpoints.reuse(run, input, ctx);
+            if (cached == null) {
+                return List.of();
+            }
+            recovered.add(cached);
+        }
+        return List.copyOf(recovered);
+    }
+
+    private List<UnitGenerator.Delta> plannedOutputs(AgentContext ctx, AgentRun run, BuildContract contract, ContractBatch batch,
+            List<UnitGenerator.Input> inputs, Set<String> completed, SpecPlanning planning,
+            Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked) {
+        // Partial cache hits never shrink a batch into a different, unapproved request. The receipt
+        // binds exactly the snapshot supplied to generation, rather than a larger unsent context.
+        var frozen = BatchUnitGenerator.plannedInputs(contract, batch, inputs);
+        var generated = recoverBatch(run, ctx, frozen);
+        if (generated.size() != frozen.size()) {
+            try (var scope = UnitWriteScope.worker(ctx)) {
+                generated = new BatchUnitGenerator(mapper).generatePlanned(contract, batch, frozen, completed,
+                        planning.spec(), props.preferredModel(ProjectType.BUILD), checked);
+            }
+            for (int index = 0; index < frozen.size(); index++) {
+                if (unitCheckpoints != null && !generated.get(index).files().isEmpty()) {
+                    unitCheckpoints.save(run, frozen.get(index), generated.get(index));
+                }
+            }
+        }
+        return generated.stream().flatMap(output -> output.files().stream()).toList();
     }
 }

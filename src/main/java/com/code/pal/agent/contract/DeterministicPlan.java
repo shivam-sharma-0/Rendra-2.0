@@ -19,7 +19,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
-/** Pure single-batch layout for S5. No callers, model, persistence or file writes until coordinator integration. */
+/** Pure single-batch layout for the approved-spec coordinator path; no model, persistence or file writes. */
 public final class DeterministicPlan {
     private static final Set<String> FEATURES = Set.of("CONTENT", "CONTACT_LINK", "NAV_ANCHOR",
             "CALCULATOR", "COUNTER", "LOCAL_CRUD");

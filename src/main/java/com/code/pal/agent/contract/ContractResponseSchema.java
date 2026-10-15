@@ -6,6 +6,7 @@ import java.lang.reflect.*;
 import java.util.*;
 import com.code.pal.agent.validation.BehaviorCriteria;
 import com.code.pal.project.capability.BuildDecisions;
+import com.code.pal.agent.starter.Starter;
 
 /** Provider grammar covers shape/types. Backend still verifies all ownership, DAG and behavior rules. */
 final class ContractResponseSchema {
@@ -18,6 +19,10 @@ final class ContractResponseSchema {
     static LlmClient.JsonSchema planner(ContractPlanner.Input input, ObjectMapper mapper) {
         Map<String, Object> schema = type(BuildContract.class);
         var properties = properties(schema);
+        for (String key : List.of("specId", "specRevision", "specHash", "planRevision", "replacesContractId", "templateVersion", "batches")) {
+            properties.remove(key);
+        }
+        schema.put("required", List.copyOf(properties.keySet()));
         properties.put("id", Map.of("type", "string", "const", input.id().toString()));
         properties.put("schemaVersion", Map.of("type", "integer", "const", 1));
         properties.put("storage", Map.of("type", "string", "const", input.choice().storage().name()));
@@ -48,6 +53,24 @@ final class ContractResponseSchema {
                     Map.of("type", "boolean", "const", input.choice().auth() == BuildDecisions.Auth.ACCOUNTS));
         }
         return new LlmClient.JsonSchema("build_contract", mapper.writeValueAsString(schema));
+    }
+
+    static LlmClient.JsonSchema planner(ContractPlanner.SpecInput input, ObjectMapper mapper) {
+        var schema = mapper.readValue(planner(input.base(), mapper).schema(), Map.class);
+        var fields = properties(schema);
+        fields.put("schemaVersion", Map.of("type", "integer", "const", 2));
+        fields.put("stack", Map.of("type", "string", "const", input.spec().desired().renderStack().name()));
+        fields.put("specId", Map.of("type", "string", "const", input.spec().specId().toString()));
+        fields.put("specRevision", Map.of("type", "integer", "const", input.spec().specRevision()));
+        fields.put("specHash", Map.of("type", "string", "const", input.spec().specHash()));
+        fields.put("planRevision", Map.of("type", "integer", "const", 1));
+        fields.put("replacesContractId", Map.of("type", "null"));
+        fields.put("templateVersion", Map.of("type", "string", "const", Starter.TEMPLATE_VERSION));
+        fields.put("batches", Map.of("type", "array", "minItems", 1, "maxItems", 12, "items", type(ContractBatch.class)));
+        var required = new ArrayList<>(fields.keySet());
+        required.remove("replacesContractId");
+        schema.put("required", required);
+        return new LlmClient.JsonSchema("build_contract_v2", mapper.writeValueAsString(schema));
     }
 
     static LlmClient.JsonSchema unit(UnitGenerator.Input input, ObjectMapper mapper) {
@@ -96,7 +119,7 @@ final class ContractResponseSchema {
             schema.put("maxLength", clazz == UUID.class ? 36 : 48_000);
             return schema;
         }
-        if (clazz == int.class || clazz == long.class) {
+        if (clazz == int.class || clazz == long.class || clazz == Long.class) {
             schema.put("type", "integer");
             return schema;
         }

@@ -1,5 +1,6 @@
 package com.code.pal.agent.contract;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.code.pal.agent.validation.BehaviorCriteria;
 import com.code.pal.agent.workspace.ProjectPaths;
 import com.code.pal.project.capability.BuildDecisions;
@@ -9,11 +10,25 @@ import java.nio.file.Path;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-/** Model-proposed data, validated before persistence/use. It cannot grant tools or raise budgets. */
+/** Model-proposed data with nullable v2 metadata for historical v1 JSON. Validation never grants tools or raises budgets. */
 public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisions.Storage storage,
         BuildDecisions.Auth auth, Limits limits, Map<String, String> theme, List<Route> routes,
         List<DataType> types, List<DataType> models, List<Api> api, List<Asset> assets,
-        Set<String> envNames, List<Unit> units, BehaviorCriteria acceptance) {
+        Set<String> envNames, List<Unit> units, BehaviorCriteria acceptance,
+        @JsonInclude(JsonInclude.Include.NON_NULL) UUID specId,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Long specRevision,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String specHash,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Long planRevision,
+        @JsonInclude(JsonInclude.Include.NON_NULL) UUID replacesContractId,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String templateVersion,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<ContractBatch> batches) {
+    public BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisions.Storage storage,
+            BuildDecisions.Auth auth, Limits limits, Map<String, String> theme, List<Route> routes,
+            List<DataType> types, List<DataType> models, List<Api> api, List<Asset> assets,
+            Set<String> envNames, List<Unit> units, BehaviorCriteria acceptance) {
+        this(schemaVersion, id, stack, storage, auth, limits, theme, routes, types, models, api, assets,
+                envNames, units, acceptance, null, null, null, null, null, null, List.of());
+    }
     public enum Stack {
         STATIC, VITE, MERN
     }
@@ -113,7 +128,7 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
     }
 
     public BuildContract {
-        if (schemaVersion != 1)
+        if (schemaVersion != 1 && schemaVersion != 2)
             bad("Unsupported contract version");
         Objects.requireNonNull(id);
         Objects.requireNonNull(stack);
@@ -273,6 +288,24 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             }
         // The constructor cannot use record accessors until assignment; validate DAG directly.
         waves(units);
+        batches = batches == null ? List.of() : List.copyOf(batches);
+        if (schemaVersion == 1) {
+            if (specId != null || (specRevision != null && specRevision != 0) || specHash != null
+                    || (planRevision != null && planRevision != 0)
+                    || replacesContractId != null || templateVersion != null || !batches.isEmpty()) {
+                bad("Legacy contract cannot carry partial versioned metadata");
+            }
+            specRevision = null;
+            planRevision = null;
+        } else {
+            if (specId == null || specRevision == null || specRevision < 1 || specHash == null || !specHash.matches("sha256:[a-f0-9]{64}")
+                    || planRevision == null || planRevision < 1 || templateVersion == null || templateVersion.isBlank()
+                    || templateVersion.length() > 80 || id.equals(replacesContractId)
+                    || (planRevision == 1) != (replacesContractId == null)) {
+                bad("Invalid versioned plan identity");
+            }
+            ContractPlans.validateBatches(units, batches, limits);
+        }
     }
 
     public String clientRoot() {
