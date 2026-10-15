@@ -1,0 +1,131 @@
+package com.code.pal.agent.intent;
+
+import com.code.pal.project.domain.ProjectType;
+
+import java.text.Normalizer;
+import java.util.List;
+import java.util.Locale;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+/** Deterministic routing reduces authority; message text never grants permission or approves a plan. */
+public final class RequestRouter {
+    public enum Route { SMALL_TALK, QUESTION, CHANGE, CONTINUE, UNCLEAR }
+
+    private static final Pattern ACTION = Pattern.compile(
+            "\\b(build|create|make|develop|implement|add|fix|update|change|modify|edit|remove|delete|"
+                    + "design|refactor|rename|connect|integrate|generate|clone|deploy|migrate|optimi[sz]e|"
+                    + "banao|bnao|bana do|bna do|badlo|hatao|jodo|theek karo|sudhar)\\b");
+    private static final Pattern NEGATED = Pattern.compile(
+            "\\b(?:do not|don't|dont|never)\\s+(?:build|create|make|implement|change|modify|edit|write|code|add|delete|remove)\\b"
+                    + "(?:(?!\\bbut\\b)[^,;.!?])*|\\b(?:mat\\s+(?:banao|badlo|karo|likho)|"
+                    + "(?:build|change|code|modify|edit|changes?)\\s+(?:mat karo|nahi karna|nahi krna|nahi chahiye))\\b"
+                    + "(?:(?!\\blekin\\b)[^,;.!?])*");
+    private static final Pattern PLAN_ONLY = Pattern.compile(
+            "\\b(?:only plan|plan only|sirf plan|bas plan|pehle plan|first plan|plan first|make a plan|plan an? )\\b");
+    private static final Pattern EXPLANATION = Pattern.compile(
+            "\\b(?:explain|describe|samjhao|samjha do|batao|btao|kaise|how|why|who|when|where|"
+                    + "what|which|kya hai|kya h|kyun|kyu|kon ho|kaun ho|kisne|samjha sakte|bata sakte)\\b");
+    private static final Pattern QUESTION_PREFIX = Pattern.compile(
+            "^(?:(?:hey|hi|hello)[, !]+)?(?:can|could|would|will) (?:you|u) "
+                    + "(?:tell|explain|describe|help me understand|show me how|say|answer)\\b|"
+                    + "^kya\\b.*\\b(?:sakte|sakti|sakta)\\b|"
+                    + "^(?:can|could) (?:you|u) (?:build|create|make) (?:apps|applications|websites)\\b");
+    private static final Pattern CONTRAST_ACTION = Pattern.compile(
+            "\\b(?:but|lekin|aur phir)\\b.*" + ACTION.pattern());
+    private static final Pattern DIRECT_CHANGE = Pattern.compile(
+            "^(?:(?:please|can you|can u|could you|could u|would you|will you|let's|lets|"
+                    + "i want to|i want you to|i would like to) )?" + ACTION.pattern());
+    private static final Pattern QUESTION_START = Pattern.compile("^(?:is|are|do|does|did|should|could|can|would|will|kya)\\b");
+    private static final Pattern RESUME = Pattern.compile(
+            "^(?:ok(?:ay)?\\s+)?(?:yes|sure|go ahead|continue|start|start karo|shuru karo|aage badho|"
+                    + "agla step|next step|next|haan|han|h[a]+n)[.!? ]*$");
+    private static final Pattern SMALL_TALK = Pattern.compile(
+            "^(?:hi+|hey+|hello+|yo|sup|namaste|namaskar|good (?:morning|evening|afternoon|night)|"
+                    + "how are (?:you|u)|kaise ho|kya haal hai|sab badhiya|thanks?(?: you)?|thank you|"
+                    + "shukriya|dhanyavaad|ok(?:ay)?|cool|nice|great|awesome|perfect|got it|sounds good|"
+                    + "bye|goodbye|see ya|test|testing|ping|no|alright)(?:[,.!? ]|$).*");
+    private static final Pattern APP_REQUEST = Pattern.compile(
+            "^(?:(?:a|an|ek|simple|small|basic|responsive|modern) )*(?:to[- ]?do|calculator|counter|"
+                    + "timer|quiz|portfolio|dashboard|crm|blog|website|app|application|store|shop)\\b.*");
+    private static final Pattern APPROVED_PLAN = Pattern.compile(
+            "^(?:build (?:the )?(?:approved )?plan|implement (?:this|the) plan)[.! ]*$");
+
+    private RequestRouter() {}
+
+    public static Route route(String request) {
+        return route(request, List.of(), false);
+    }
+
+    public static Route route(String request, List<String> attachments, boolean pendingProposal) {
+        String text = normalize(instructions(request));
+        boolean hasAttachments = attachments != null && !attachments.isEmpty();
+        if (RESUME.matcher(text).matches()) {
+            return pendingProposal ? Route.CONTINUE : hasAttachments ? Route.UNCLEAR : Route.SMALL_TALK;
+        }
+        String positive = NEGATED.matcher(text).replaceAll(" ");
+        boolean change = ACTION.matcher(positive).find();
+        if (PLAN_ONLY.matcher(text).find()) {
+            return Route.CHANGE;
+        }
+        if (QUESTION_PREFIX.matcher(text).find()) {
+            return Route.QUESTION;
+        }
+        if ((EXPLANATION.matcher(text).find() || QUESTION_START.matcher(text).find())
+                && !DIRECT_CHANGE.matcher(positive).find()
+                && !CONTRAST_ACTION.matcher(positive).find()) {
+            return Route.QUESTION;
+        }
+        if (NEGATED.matcher(text).find() && !change) {
+            return Route.QUESTION;
+        }
+        if (change || APP_REQUEST.matcher(text).matches()) {
+            return Route.CHANGE;
+        }
+        if (!hasAttachments && SMALL_TALK.matcher(text).matches()) {
+            return Route.SMALL_TALK;
+        }
+        return Route.UNCLEAR;
+    }
+
+    public static ProjectType mode(ProjectType requested, String request, List<String> attachments) {
+        if (requested == ProjectType.CHAT) {
+            return ProjectType.CHAT;
+        }
+        if (PLAN_ONLY.matcher(normalize(instructions(request))).find()) {
+            return ProjectType.PLAN;
+        }
+        Route route = route(request, attachments, false);
+        return route == Route.QUESTION || route == Route.UNCLEAR || route == Route.SMALL_TALK
+                ? ProjectType.CHAT : requested;
+    }
+
+    /** Quotes and pasted code are context, never the instruction being classified. */
+    public static String instructions(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.replaceAll("(?s)```.*?```", " ").lines()
+                .filter(line -> !line.stripLeading().startsWith(">"))
+                .collect(Collectors.joining("\n"));
+    }
+
+    public static String normalize(String text) {
+        return Normalizer.normalize(text == null ? "" : text, Normalizer.Form.NFKC)
+                .replace('\u2019', '\'').toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").strip();
+    }
+
+    public static boolean buildApprovedPlan(String request) {
+        return APPROVED_PLAN.matcher(normalize(instructions(request))).matches();
+    }
+
+    /** Capability sizing excludes explicitly unwanted services without changing request authority. */
+    public static String positiveSignals(String text) {
+        String value = normalize(text);
+        String data = "(?:database|backend|back-end|auth|authentication|login|signup|accounts|server|api|payments?|cloud|supabase|mongodb|crud)";
+        value = value.replaceAll("\\b(?:without|no|not|don't need|do not need|bina)\\s+(?:a |any |the )?"
+                + data + "(?:\\s*(?:,|or|and|aur)\\s*" + data + ")*", " ");
+        value = value.replaceAll("\\b" + data + "\\s+(?:nahi chahiye|nahi chaiye|nahi|mat chahiye)\\b", " ");
+        return value.replace("ek page", "single page").replace("chhota", "small").replace("chota", "small");
+    }
+}

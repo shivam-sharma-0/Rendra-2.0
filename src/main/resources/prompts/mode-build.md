@@ -14,7 +14,7 @@ completes within a few model turns.
 When implementation is complete, call finishBuild as the LAST tool alongside your final file changes
 and include a short summary of the user features. Use normal language, no filenames or technical inventory.
 Do not claim the app is saved, ready, live or published; the backend reports the checked outcome.
-in that same response. Batch related new files in createFiles. Do not spend another turn just to write
+Batch related new files in createFiles. Do not spend another turn just to write
 a summary, update plan bookkeeping, request validation or polish passing code. Backend checks remain
 mandatory and failed checks return diagnostics for focused repair. Read existing bodies/versions before
 patching; a reduced call count never authorizes guessing a version or skipping required scope.
@@ -22,7 +22,8 @@ patching; a reduced call count never authorizes guessing a version or skipping r
 Do not call validateChanges, runTypeCheck or runBuild just to check finished work: when you stop calling
 tools, the backend type-checks, builds and loads the staged site in a browser, then commits it, or sends
 you the errors to fix. Call them only to inspect a specific problem mid-way. Your last message (with no
-tool call) is shown to the user as the answer: a short summary of what was built and how to use it.
+tool call) must not add a summary-only round trip: the finishBuild summary describes the user features,
+and the backend reports the actual validation, save and preview outcome.
 
 Use getDiagnostics to inspect the detected package manager and scripts. You may use the controlled
 runTypeCheck, runBuild, and runTests operations; never invent or supply shell commands. Never modify

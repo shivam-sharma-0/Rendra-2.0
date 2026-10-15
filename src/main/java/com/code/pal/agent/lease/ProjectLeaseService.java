@@ -120,4 +120,23 @@ public class ProjectLeaseService {
             restoring.set(true);try{action.run();}finally{restoring.remove();}
         });
     }
+
+    /** Only inactive recovery may enter a quarantined restore; ordinary writes remain blocked. */
+    public void recoveringRestore(UUID project, Runnable action) {
+        if (restoring.get() != null || recovery.get() != null) {
+            throw new IllegalStateException("Nested restore recovery");
+        }
+        restoring.set(true);
+        try {
+            recovering(project, () -> {
+                requireRecovery(project);
+                if (hasPendingPromotion(project)) {
+                    throw new IllegalStateException("Restore waits for pending project operations");
+                }
+                action.run();
+            });
+        } finally {
+            restoring.remove();
+        }
+    }
 }

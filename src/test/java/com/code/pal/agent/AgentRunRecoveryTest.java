@@ -1,6 +1,8 @@
 package com.code.pal.agent;
 
 import com.code.pal.agent.change.ChangeSetService;
+import com.code.pal.agent.change.RestoreRecoveryService;
+import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.domain.*;
 import com.code.pal.agent.preview.SiteBuildService;
@@ -21,13 +23,23 @@ class AgentRunRecoveryTest {
     private final SandboxPort sandbox=mock(SandboxPort.class);
     private final SiteBuildService sites=mock(SiteBuildService.class);
     private final ChangeSetService changes=mock(ChangeSetService.class);
-    private final AgentRunRecovery recovery=new AgentRunRecovery(new AgentProperties(),runs,mock(AgentJobQueue.class),
+    private final ProjectLeaseService leases = mock(ProjectLeaseService.class);
+    private final AgentRunRecovery recovery=new AgentRunRecovery(leases, mock(RestoreRecoveryService.class), new AgentProperties(),runs,mock(AgentJobQueue.class),
             mock(AgentEvents.class),mock(MessageRepository.class),mock(RealtimeService.class),sandbox,changes,sites);
+    AgentRunRecoveryTest() {
+        doAnswer(call -> {
+            ((Runnable) call.getArgument(1)).run();
+            return null;
+        }).when(leases).recovering(any(), any());
+        when(sandbox.reconcilePendingOperations(any())).thenReturn(true);
+    }
     private AgentRun abandoned(boolean saved) {
         var id=UUID.randomUUID();
         var run=AgentRun.builder().id(id).projectId(UUID.randomUUID()).userId(7L).messageId("fixture")
                 .status(RunStatus.COMMITTING).snapshotRef("archive:"+id).codeSavedAt(saved ? Instant.now() : null).build();
-        when(runs.findByStatusAndHeartbeatAtBefore(eq(RunStatus.COMMITTING),any())).thenReturn(List.of(run));return run;
+        when(runs.findByStatusAndHeartbeatAtBefore(eq(RunStatus.COMMITTING),any())).thenReturn(List.of(run));
+        when(runs.findById(run.getId())).thenReturn(Optional.of(run));
+        return run;
     }
     @Test void uncertainRecoveryKeepsCommittingAndDoesNotClaimRestoration() {
         var run=abandoned(false);when(changes.recoverPromotion(run)).thenThrow(new com.code.pal.agent.change.PromotionRecoveryPendingException(null));

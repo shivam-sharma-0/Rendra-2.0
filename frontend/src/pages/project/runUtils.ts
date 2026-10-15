@@ -6,10 +6,7 @@ export function isActive(run: AgentRun) {
 }
 
 export function needsRequirementInterview(project: Project | null): boolean {
-  if (!project || project.type !== 'BUILD' || project.lifecycleStage !== 'REQUIREMENTS') return false
-  const prompt = (project.initialPrompt ?? '').trim().toLowerCase()
-  if (!prompt || /^(hi|hello|hey|yo|good morning|good evening|ok|okay)[.! ]*$/.test(prompt)) return false
-  return prompt.length >= 9 && /\b(build|create|make|develop|design|implement|generate|clone|app|application|website|dashboard|todo|tool|platform|system|project|page|portal|crm|portfolio|store|shop|blog|mern)\b/.test(prompt)
+  return project?.type === 'BUILD' && project.lifecycleStage === 'REQUIREMENTS'
 }
 
 export function isInternalWorkflowMessage(message: Message): boolean {

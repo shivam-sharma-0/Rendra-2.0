@@ -3,8 +3,8 @@ package com.code.pal.agent.prompt;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.EnumMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class PromptLoader {
 
@@ -13,15 +13,14 @@ public final class PromptLoader {
         MODE_BUILD("mode-build"),
         MODE_CHAT("mode-chat"),
         MODE_PLAN("mode-plan"),
-        CONVERSATIONAL("conversational"),
-        INTENT_CLASSIFIER("intent-classifier");
+        CONVERSATIONAL("conversational");
 
         private final String filename;
         Prompt(String filename) { this.filename = filename; }
         String filename() { return filename; }
     }
 
-    private static final Map<Prompt, String> CACHE = new EnumMap<>(Prompt.class);
+    private static final Map<Prompt, String> CACHE = new ConcurrentHashMap<>();
 
     private PromptLoader() {}
 

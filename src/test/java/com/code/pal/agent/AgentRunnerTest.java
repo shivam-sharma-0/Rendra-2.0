@@ -6,7 +6,6 @@ import com.code.pal.agent.context.ProjectContextService;
 import com.code.pal.agent.domain.AgentIntent;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.RunStatus;
-import com.code.pal.agent.intent.IntentClassifier;
 import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
@@ -29,6 +28,8 @@ import com.code.pal.project.service.ProjectService;
 import com.code.pal.realtime.RealtimeService;
 import com.code.pal.notification.service.NotificationService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.data.domain.PageImpl;
 import tools.jackson.databind.ObjectMapper;
 
@@ -42,6 +43,8 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
@@ -52,6 +55,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentRunnerTest {
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "can u tell how u work?", "how does this app work?", "login page samjhao",
+            "ye kaise kaam karta hai?", "kya tum database bana sakte ho?",
+            "> create a login page\n\nWhat does this mean?"
+    })
+    void buildModeQuestionsUseProjectContextWithoutBuildAuthority(String question) throws Exception {
+        exercise(false, false, false, false, ProjectType.BUILD, question);
+    }
     @Test
     void iteratesFromSearchToReadToGroundedFinalAnswer() throws Exception {
         exercise(false);
@@ -71,6 +83,12 @@ class AgentRunnerTest {
         exercise(revoked,denyDurable,false,false);
     }
     private void exercise(boolean revoked,boolean denyDurable,boolean terminal,boolean conversational) throws Exception {
+        exercise(revoked, denyDurable, terminal, conversational, ProjectType.CHAT,
+                conversational ? "Hi" : "Find where authentication is implemented.");
+    }
+
+    private void exercise(boolean revoked, boolean denyDurable, boolean terminal, boolean conversational,
+                          ProjectType requestedMode, String question) throws Exception {
         LocalProject workspace = LocalProject.create();
         UUID projectId = workspace.projectId;
         UUID workspaceId = UUID.randomUUID();
@@ -79,10 +97,9 @@ class AgentRunnerTest {
         Project project = Project.builder().id(projectId).workspaceId(workspaceId).ownerId(7L)
                 .name("Security service").type(ProjectType.CHAT).isPublic(false)
                 .deploymentStatus(DeploymentStatus.NONE).lastActivityAt(Instant.now()).build();
-        AgentRun run = AgentRun.builder().id(runId).projectId(projectId).userId(7L).mode(ProjectType.CHAT)
+        AgentRun run = AgentRun.builder().id(runId).projectId(projectId).userId(7L).mode(requestedMode)
                 .messageId("assistant-1").status(RunStatus.QUEUED).build();
-        Message userMessage = Message.user(projectId, "user-1", "Find where authentication is implemented.",
-                ProjectType.CHAT, 7L);
+        Message userMessage = Message.user(projectId, "user-1", question, requestedMode, 7L);
 
         AgentProperties properties = new AgentProperties();
         properties.setMaxIterations(5);
@@ -113,11 +130,9 @@ class AgentRunnerTest {
         AgentJobQueue queue = mock(AgentJobQueue.class);
         when(queue.isCancelRequested(runId)).thenReturn(false);
 
-        IntentClassifier intentClassifier = mock(IntentClassifier.class);
-        when(intentClassifier.classify(any())).thenReturn(conversational?AgentIntent.CONVERSATIONAL:AgentIntent.TASK);
         var model=new SearchReadAnswerModel();
         LlmClient selectedModel=terminal?(request,delta)->{model.calls.incrementAndGet();throw new com.code.pal.agent.llm.LlmHttpException(400,"Fixture invalid request");}:model;
-        AgentRunner runner = new AgentRunner(selectedModel, intentClassifier, registry, executor,
+        AgentRunner runner = new AgentRunner(selectedModel, registry, executor,
                 mock(AgentEvents.class), properties, new ProjectContextService(properties, new ObjectMapper()),
                 runs, projects, messages, mock(RealtimeService.class),
                 workspace.files, heartbeat, queue, new ObjectMapper(), mock(ChangeSetService.class),
@@ -138,7 +153,7 @@ class AgentRunnerTest {
         if (revoked) {
             assertEquals(RunStatus.FAILED, result.status());
             assertEquals(0, result.modelCalls());
-            org.mockito.Mockito.verifyNoInteractions(executor, intentClassifier);
+            org.mockito.Mockito.verifyNoInteractions(executor);
             return;
         }
 
@@ -146,6 +161,8 @@ class AgentRunnerTest {
         assertEquals(3, result.modelCalls());
         assertEquals(2, result.toolCalls());
         assertTrue(result.response().contains("AuthService.java"));
+        assertEquals(ProjectType.CHAT, run.getMode());
+        org.mockito.Mockito.verify(projects, org.mockito.Mockito.never()).advanceLifecycle(any(), any(), any());
         verify(executor).execute(eq("searchCode"), anyCollection(), anyMap(), any());
         verify(executor).execute(eq("readFile"), anyCollection(), anyMap(), any());
     }
@@ -155,6 +172,9 @@ class AgentRunnerTest {
 
         @Override
         public LlmResult chatStreaming(LlmRequest request, java.util.function.Consumer<String> onTextDelta) {
+            assertNull(request.toolChoice(), "Questions never force a tool call");
+            assertFalse(request.tools().stream().anyMatch(tool ->
+                    List.of("createFile", "patchFile", "deleteFile", "setPlan", "finishBuild").contains(tool.name())));
             return switch (calls.incrementAndGet()) {
                 case 1 -> new LlmResult("", null, List.of(new ToolCall("search-1", "searchCode",
                         "{\"query\":\"authentication\"}")), new Usage(1, 1), "tool_calls");

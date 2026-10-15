@@ -1,5 +1,6 @@
 package com.code.pal.project.service.impl;
 
+import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.identity.dto.UserSummary;
 import com.code.pal.identity.service.UserDirectory;
 import com.code.pal.notification.domain.NotificationType;
@@ -83,7 +84,10 @@ public class ProjectServiceImpl implements ProjectService {
         CreateMessageRequest initial = request.initialMessage();
         String firstPrompt = initial != null ? initial.message() : request.pendingPrompt();
         ProjectType type = request.type() != null ? request.type() : ProjectType.BUILD;
-        boolean requirementsNeeded = type == ProjectType.BUILD && needsRequirements(firstPrompt);
+        boolean requirementsNeeded = type == ProjectType.BUILD
+                && RequestRouter.route(firstPrompt, initial == null ? List.of() : initial.attachments(), false)
+                == RequestRouter.Route.CHANGE
+                && RequestRouter.mode(type, firstPrompt, initial == null ? List.of() : initial.attachments()) == ProjectType.BUILD;
         boolean startsAgentTurn = initial != null && !requirementsNeeded
                 && initial.aiMessageId() != null && !initial.aiMessageId().isBlank();
         // Before anything is saved, so a rejected first turn does not leave an empty project behind.
@@ -101,10 +105,11 @@ public class ProjectServiceImpl implements ProjectService {
 
         if (initial != null) {
             // Actionable BUILD prompts pause for requirements; greetings and short chat prompts answer normally.
-            if (requirementsNeeded) seedInitialPrompt(project.getId(), initial, type, userId);
-            else if (type == ProjectType.BUILD) {
-                seedConversation(project.getId(), new CreateMessageRequest(initial.id(), initial.message(), ProjectType.CHAT, initial.aiMessageId()), type, userId);
-            } else seedConversation(project.getId(), initial, type, userId);
+            if (requirementsNeeded) {
+                seedInitialPrompt(project.getId(), initial, type, userId);
+            } else {
+                seedConversation(project.getId(), initial, type, userId);
+            }
         }
 
         log.info("Project created id={} workspace={} owner={}", project.getId(), workspaceId, userId);
@@ -374,8 +379,10 @@ public class ProjectServiceImpl implements ProjectService {
      */
     private void seedConversation(UUID projectId, CreateMessageRequest initial, ProjectType projectType,
             Long authorId) {
-        ProjectType mode = initial.mode() != null ? initial.mode() : projectType;
+        ProjectType requestedMode = initial.mode() != null ? initial.mode() : projectType;
+        ProjectType mode = RequestRouter.mode(requestedMode, initial.message(), initial.attachments());
         Message userMessage = Message.user(projectId, initial.id(), initial.message(), mode, authorId);
+        userMessage.setRequestedMode(requestedMode);
         userMessage.setSeq(messageSequence.next());
         messageRepository.save(userMessage);
         if (initial.aiMessageId() != null && !initial.aiMessageId().isBlank()) {
@@ -406,10 +413,4 @@ public class ProjectServiceImpl implements ProjectService {
         return "Untitled project";
     }
 
-    private static boolean needsRequirements(String firstPrompt) {
-        if (firstPrompt == null) return false;
-        String prompt = firstPrompt.trim().toLowerCase();
-        if (prompt.isBlank() || prompt.matches("^(hi|hello|hey|yo|good morning|good evening|ok|okay)[.! ]*$")) return false;
-        return prompt.length() >= 9 && prompt.matches(".*\\b(build|create|make|develop|design|implement|generate|clone|app|application|website|dashboard|todo|tool|platform|system|project|page|portal|crm|portfolio|store|shop|blog|mern)\\b.*");
-    }
 }

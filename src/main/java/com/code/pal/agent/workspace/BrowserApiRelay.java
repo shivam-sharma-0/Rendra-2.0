@@ -2,13 +2,28 @@ package com.code.pal.agent.workspace;
 
 import com.code.pal.agent.runtime.RunCancellation;
 import tools.jackson.databind.ObjectMapper;
-import java.io.*;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.URI;
-import java.net.http.*;
-import java.nio.file.*;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.Base64;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 /** Private file transport between an offline browser and one backend-selected candidate API.
  * Request/response bodies never enter model diagnostics or logs. Only the relay directory is writable. */
@@ -16,10 +31,13 @@ final class BrowserApiRelay implements AutoCloseable {
     static final int MAX_BYTES=1_048_576;
     private static final Set<String> METHODS=Set.of("GET","HEAD","POST","PUT","PATCH","DELETE","OPTIONS");
     private static final Set<String> REQUEST_HEADERS=Set.of("content-type","accept","authorization");
+    private static final Pattern API_PATH = Pattern.compile("/api(?:/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*");
+    private static final Pattern AMBIGUOUS_PATH_ENCODING = Pattern.compile("%(?:2f|5c|40|25)", Pattern.CASE_INSENSITIVE);
     private final Path directory;
     private final SandboxPort.ServerEndpoint endpoint;
+    private final URI candidateBase;
     private final ObjectMapper mapper=new ObjectMapper();
-    private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).followRedirects(HttpClient.Redirect.NEVER).build();
+    private final HttpClient http;
     private final ExecutorService worker=Executors.newSingleThreadExecutor(Thread.ofVirtual().name("candidate-api-relay").factory());
     private final RunCancellation cancellation=RunCancellation.current();
     private volatile boolean closing;
@@ -29,10 +47,23 @@ final class BrowserApiRelay implements AutoCloseable {
     record Reply(int status,Map<String,String> headers,String body,boolean unavailable) {}
 
     BrowserApiRelay(Path directory,SandboxPort.ServerEndpoint endpoint) throws IOException {
-        this.directory=directory;this.endpoint=Objects.requireNonNull(endpoint);
-        URI base=URI.create(endpoint.baseUrl());
-        if(!"http".equals(base.getScheme()) || base.getHost()==null || base.getUserInfo()!=null || base.getQuery()!=null || base.getFragment()!=null
-                || !(base.getPath().isEmpty() || base.getPath().equals("/")))throw new IllegalArgumentException("Invalid candidate endpoint");
+        this(directory, endpoint, HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(2))
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build());
+    }
+
+    BrowserApiRelay(Path directory, SandboxPort.ServerEndpoint endpoint, HttpClient http) throws IOException {
+        this.directory = directory;
+        this.endpoint = Objects.requireNonNull(endpoint);
+        this.http = Objects.requireNonNull(http);
+        candidateBase = URI.create(endpoint.baseUrl());
+        if (!"http".equals(candidateBase.getScheme()) || candidateBase.getHost() == null
+                || candidateBase.getUserInfo() != null || candidateBase.getQuery() != null
+                || candidateBase.getFragment() != null
+                || !(candidateBase.getPath().isEmpty() || candidateBase.getPath().equals("/"))) {
+            throw new IllegalArgumentException("Invalid candidate endpoint");
+        }
         Files.createDirectory(directory);
         worker.submit(this::serve);
     }
@@ -62,34 +93,94 @@ final class BrowserApiRelay implements AutoCloseable {
         catch(Throwable unavailable){failure=unavailable;}
     }
     private Reply forward(Request data) throws Exception {
-        if(data==null || !METHODS.contains(data.method()) || data.path()==null || data.path().length()>2048)throw new IOException("Invalid API request");
-        URI path=URI.create(data.path());String decoded=path.getPath();
-        if(path.isAbsolute() || path.getRawAuthority()!=null || path.getFragment()!=null || decoded==null
-                || !(decoded.equals("/api") || decoded.startsWith("/api/")) || decoded.contains("//") || decoded.contains("\\")
-                || Arrays.stream(decoded.split("/")).anyMatch(p->p.equals(".") || p.equals("..")))throw new IOException("Invalid API path");
-        byte[] body=Base64.getDecoder().decode(data.body()==null?"":data.body());
-        if(body.length>MAX_BYTES || data.headers()==null || data.headers().size()>16)throw new IOException("API request exceeds capacity");
-        var request=HttpRequest.newBuilder(URI.create(endpoint.baseUrl().replaceAll("/$","")+data.path())).timeout(Duration.ofSeconds(5));
-        for(var header:data.headers().entrySet()) {
-            if(REQUEST_HEADERS.contains(header.getKey().toLowerCase(Locale.ROOT))) {
-                if(header.getValue()==null || header.getValue().length()>8192)throw new IOException("Invalid API header");
-                request.header(header.getKey(),header.getValue());
+        if (data == null || !METHODS.contains(data.method()) || data.path() == null
+                || data.path().length() > 2048) {
+            throw new IOException("Invalid API request");
+        }
+        URI target = resolveTarget(data.path());
+        byte[] body = Base64.getDecoder().decode(data.body() == null ? "" : data.body());
+        if (body.length > MAX_BYTES || data.headers() == null || data.headers().size() > 16) {
+            throw new IOException("API request exceeds capacity");
+        }
+        var request = HttpRequest.newBuilder(target).timeout(Duration.ofSeconds(5));
+        for (var header : data.headers().entrySet()) {
+            if (REQUEST_HEADERS.contains(header.getKey().toLowerCase(Locale.ROOT))) {
+                if (header.getValue() == null || header.getValue().length() > 8192) {
+                    throw new IOException("Invalid API header");
+                }
+                request.header(header.getKey(), header.getValue());
             }
         }
         endpoint.headers().forEach(request::header);
-        request.method(data.method(),body.length==0?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofByteArray(body));
-        var future=http.sendAsync(request.build(),HttpResponse.BodyHandlers.ofInputStream());active=future;
-        try(var stop=cancellation.onCancel(()->future.cancel(true))) {
-            var response=future.get(5,TimeUnit.SECONDS);
-            if(response.headers().firstValue("x-codepal-relay-error").isPresent()){response.body().close();return unavailable();}
-            try(var stream=response.body();var stopRead=cancellation.onCancel(()->{try{stream.close();}catch(IOException ignored){}});
-                var reader=Executors.newVirtualThreadPerTaskExecutor()) {
-                var reading=reader.submit(()->stream.readNBytes(MAX_BYTES+1));byte[] bytes;
-                try{bytes=reading.get(5,TimeUnit.SECONDS);}finally{stream.close();reading.cancel(true);}
-                if(bytes.length>MAX_BYTES)throw new IOException("API response exceeds capacity");
-                return new Reply(response.statusCode(),Map.of("content-type",response.headers().firstValue("content-type").orElse("application/octet-stream")),Base64.getEncoder().encodeToString(bytes),false);
+        request.method(data.method(), body.length == 0
+                ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
+        var future = http.sendAsync(request.build(), HttpResponse.BodyHandlers.ofInputStream());
+        active = future;
+        try (var stop = cancellation.onCancel(() -> future.cancel(true))) {
+            var response = future.get(5, TimeUnit.SECONDS);
+            if (response.headers().firstValue("x-codepal-relay-error").isPresent()) {
+                response.body().close();
+                return unavailable();
             }
-        }finally{active=null;future.cancel(true);}
+            try (var stream = response.body();
+                    var stopRead = cancellation.onCancel(() -> {
+                        try {
+                            stream.close();
+                        } catch (IOException ignored) {
+                            // Cancellation is best-effort; the normal close path still owns cleanup.
+                        }
+                    });
+                    var reader = Executors.newVirtualThreadPerTaskExecutor()) {
+                var reading = reader.submit(() -> stream.readNBytes(MAX_BYTES + 1));
+                byte[] bytes;
+                try {
+                    bytes = reading.get(5, TimeUnit.SECONDS);
+                } finally {
+                    stream.close();
+                    reading.cancel(true);
+                }
+                if (bytes.length > MAX_BYTES) {
+                    throw new IOException("API response exceeds capacity");
+                }
+                return new Reply(response.statusCode(),
+                        Map.of("content-type", response.headers().firstValue("content-type")
+                                .orElse("application/octet-stream")),
+                        Base64.getEncoder().encodeToString(bytes), false);
+            }
+        } finally {
+            active = null;
+            future.cancel(true);
+        }
+    }
+
+    private URI resolveTarget(String value) throws IOException {
+        URI path = URI.create(value);
+        String rawPath = path.getRawPath();
+        if (path.isAbsolute() || path.getRawAuthority() != null || path.getFragment() != null
+                || rawPath == null || !API_PATH.matcher(rawPath).matches()
+                || AMBIGUOUS_PATH_ENCODING.matcher(rawPath).find()) {
+            throw new IOException("Invalid API path");
+        }
+
+        String decoded = path.getPath();
+        if (decoded.contains("//") || decoded.contains("\\")
+                || decoded.codePoints().anyMatch(Character::isISOControl)) {
+            throw new IOException("Invalid API path");
+        }
+        for (String segment : decoded.split("/")) {
+            if (segment.equals(".") || segment.equals("..")) {
+                throw new IOException("Invalid API path");
+            }
+        }
+
+        // Resolve only a validated absolute path, then prove the transport cannot change origin.
+        URI target = candidateBase.resolve(path);
+        if (!candidateBase.getScheme().equals(target.getScheme())
+                || !candidateBase.getHost().equalsIgnoreCase(target.getHost())
+                || candidateBase.getPort() != target.getPort() || target.getRawUserInfo() != null) {
+            throw new IOException("Invalid candidate API origin");
+        }
+        return target;
     }
     private static Reply unavailable(){return new Reply(503,Map.of("content-type","application/json"),Base64.getEncoder().encodeToString("{\"error\":\"Candidate API validation unavailable\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8)),true);}
     private static String read(Path file,int limit) throws IOException {

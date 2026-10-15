@@ -67,6 +67,28 @@ class RunCancellationTest {
     @Test
     void noneIsNeverCancelled() {
         RunCancellation.NONE.cancel();
+        RunCancellation.NONE.loseOwnership();
         assertFalse(RunCancellation.NONE.isCancelled());
+    }
+
+    @Test
+    void ownershipLossStopsHooksOnceAndIsNotAUserStop() {
+        RunCancellation run = new RunCancellation(UUID.randomUUID());
+        AtomicInteger calls = new AtomicInteger();
+        run.onCancel(calls::incrementAndGet);
+        run.loseOwnership();
+        run.cancel();
+        assertTrue(run.isCancelled());
+        assertTrue(run.isOwnershipLost());
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void acceptedStopKeepsItsReasonWhenOwnershipIsLostLater() {
+        RunCancellation run = new RunCancellation(UUID.randomUUID());
+        run.cancel();
+        run.loseOwnership();
+        assertTrue(run.isCancelled());
+        assertFalse(run.isOwnershipLost());
     }
 }

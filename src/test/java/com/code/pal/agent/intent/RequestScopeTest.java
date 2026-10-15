@@ -25,7 +25,7 @@ class RequestScopeTest {
     }
     @Test void clearHinglishAndEnglishRequestsNeedNoIntentModel() {
         var llm=mock(LlmClient.class);var classifier=new IntentClassifier(llm,new AgentProperties());
-        for(String text:List.of("calculator banao","header ka color badlo","aage badho","shuru karo","app bana do","a simple calculator"))
+        for(String text:List.of("calculator banao","header ka color badlo","app bana do","a simple calculator"))
             assertEquals(AgentIntent.TASK,classifier.classify(text),text);
         assertEquals(AgentIntent.CONVERSATIONAL,classifier.classify("namaste"));
         verifyNoInteractions(llm);

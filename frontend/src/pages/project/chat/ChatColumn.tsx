@@ -27,7 +27,7 @@ type ChatColumnProps = {
   rollbackError?: string
   sendError?: string
   editRequest: { text: string; nonce: number } | null
-  onSend: (prompt: string, mode: ProjectType, files?: File[]) => Promise<void>
+  onSend: (prompt: string, mode: ProjectType, files?: File[], attachmentPaths?: string[], proposalId?: string) => Promise<void>
   onFeedback: (messageId: string, feedback: MessageFeedback | null) => void
   onEdit: (text: string) => void
   onOpenDetails: (runId?: string) => void
@@ -97,7 +97,8 @@ export function ChatColumn({
                 return (
                   <ChatMessage key={m.id} message={m} run={msgRun} steps={msgSteps} currentPreview={msgRun?.id === latestSavedRun}
                     onOpenDetails={() => onOpenDetails(msgRun?.id)} onOpenPreview={onOpenPreview} onOpenThinking={onOpenThinking}
-                    onFeedback={(feedback) => onFeedback(m.id, feedback)} onEdit={onEdit} />
+                    onFeedback={(feedback) => onFeedback(m.id, feedback)} onEdit={onEdit}
+                    onBuild={(action) => onSend(action.message, action.mode, [], action.attachments, action.proposalId)} />
                 )
               })}
           {rollbackError && <p className="ws-chat__error">{rollbackError}</p>}
@@ -107,7 +108,7 @@ export function ChatColumn({
           <div ref={bottomRef} />
         </div>
       </div>
-      <Composer defaultMode={project?.type ?? 'BUILD'} onSend={onSend} quote={quote} onClearQuote={() => setQuote(null)}
+      <Composer project={project} onSend={onSend} quote={quote} onClearQuote={() => setQuote(null)}
         editRequest={editRequest} />
     </section>
   )

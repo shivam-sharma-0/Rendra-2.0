@@ -1,5 +1,6 @@
 package com.code.pal.message.service.impl;
 
+import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.message.MessageSequence;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.domain.MessageFeedback;
@@ -8,6 +9,7 @@ import com.code.pal.message.dto.MessageResponse;
 import com.code.pal.message.exception.MessageNotFoundException;
 import com.code.pal.message.repository.MessageRepository;
 import com.code.pal.message.service.MessageService;
+import com.code.pal.message.service.ConversationProposals;
 import com.code.pal.project.domain.Project;
 import com.code.pal.project.domain.ProjectStage;
 import com.code.pal.project.domain.ProjectType;
@@ -44,6 +46,7 @@ public class MessageServiceImpl implements MessageService {
     private final MessageSequence sequence;
     private final AgentTurnAdmission admission;
     private final com.code.pal.agent.workspace.ProjectFiles files;
+    private final ConversationProposals proposals;
 
     @Override
     @Transactional
@@ -61,6 +64,7 @@ public class MessageServiceImpl implements MessageService {
                     || !java.util.Objects.equals(accepted.getAuthorId(), userId)
                     || !java.util.Objects.equals(accepted.getContent(), request.message())
                     || !accepted.attachmentPaths().equals(retryAttachments)
+                    || (request.proposalId() != null && !request.proposalId().equals(accepted.getSourceProposalId()))
                     || (request.mode() != null && accepted.getRequestedMode() != null
                         && request.mode() != accepted.getRequestedMode()))
                 throw new com.code.pal.message.exception.MessageConflictException();
@@ -76,15 +80,13 @@ public class MessageServiceImpl implements MessageService {
 
         ProjectType mode = request.mode() != null ? request.mode() : project.getType();
         ProjectType requestedMode = mode;
-        mode = com.code.pal.agent.intent.RequestScope.mode(mode, request.message());
+        var resolution = proposals.resolve(userId, projectId, request, requestedMode);
+        mode = RequestRouter.mode(mode, resolution.prompt(), resolution.attachments());
         // The opening prompt of a project created with pendingPrompt (its attachments uploaded first):
         // stored for the requirements step, which builds from it once approved, so no turn starts now.
         boolean openingPrompt = false;
         if (mode == ProjectType.BUILD && project.getLifecycleStage() == ProjectStage.REQUIREMENTS) {
-            if (isConversationalPrompt(request.message())) {
-                project.setLifecycleStage(ProjectStage.DESIGN);
-                mode = ProjectType.CHAT;
-            } else if (messageRepository.countByProjectId(projectId) == 0) {
+            if (messageRepository.countByProjectId(projectId) == 0) {
                 openingPrompt = true;
             } else {
                 throw new RequirementApprovalRequiredException();
@@ -95,10 +97,22 @@ public class MessageServiceImpl implements MessageService {
         // Check limits before anything is saved, so a rejected turn leaves no orphan message behind.
         if (startsAgentTurn) admission.requireAdmitted(userId);
 
+        Message consumedProposal = resolution.proposal();
+        if (startsAgentTurn && consumedProposal == null
+                && RequestRouter.route(request.message(), request.attachments(), false) == RequestRouter.Route.CHANGE) {
+            consumedProposal = proposals.retirePrevious(userId, projectId, request.id());
+        }
+
         List<Message> created = new ArrayList<>(2);
         Message userMessage = Message.user(projectId, request.id(), request.message(), mode, userId);
         userMessage.setRequestedMode(requestedMode);
         userMessage.setAttachments(attachments(projectId, request.attachments()));
+        if (resolution.proposal() != null) {
+            userMessage.setSourceProposalId(resolution.proposal().getId());
+            userMessage.setResolvedRequestText(resolution.prompt());
+            String executionAttachments = attachments(projectId, resolution.attachments());
+            userMessage.setResolvedAttachments(executionAttachments == null ? "" : executionAttachments);
+        }
         userMessage.setSeq(sequence.next());
         created.add(messageRepository.save(userMessage));
         if (startsAgentTurn) {
@@ -119,6 +133,9 @@ public class MessageServiceImpl implements MessageService {
         // never leaves collaborators showing a message that was never persisted.
         List<MessageResponse> responses = created.stream().map(MessageResponse::from).toList();
         broadcastAfterCommit(projectId, responses);
+        if (consumedProposal != null && consumedProposal.getProposalConsumedBy() != null) {
+            broadcastAfterCommit(projectId, List.of(MessageResponse.from(consumedProposal)));
+        }
         return responses;
     }
 
@@ -178,14 +195,6 @@ public class MessageServiceImpl implements MessageService {
         MessageResponse response = MessageResponse.from(messageRepository.save(message));
         broadcastAfterCommit(projectId, List.of(response));
         return response;
-    }
-
-    private static boolean isConversationalPrompt(String message) {
-        if (message == null) return true;
-        String prompt = message.trim().toLowerCase();
-        if (com.code.pal.agent.intent.RequestScope.action(prompt)) return false;
-        if (prompt.isBlank() || prompt.matches("^(hi|hello|hey|yo|good morning|good evening|ok|okay)[.! ]*$")) return true;
-        return !prompt.matches(".*\\b(build|create|make|develop|design|implement|generate|clone|app|application|website|dashboard|todo|tool|platform|system|project|page|portal|crm|portfolio|store|shop|blog|mern)\\b.*");
     }
 
     /** Fire the room broadcast once the surrounding transaction commits (falls back to inline if none). */

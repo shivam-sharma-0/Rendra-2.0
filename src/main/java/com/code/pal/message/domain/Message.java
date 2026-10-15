@@ -11,6 +11,7 @@ import org.springframework.data.domain.Persistable;
 
 import java.time.Instant;
 import java.util.UUID;
+import java.util.List;
 
 /**
  * One turn in a project's conversation.
@@ -97,6 +98,32 @@ public class Message implements Persistable<String> {
     /** Project paths (uploads/...) attached to a user message, one per line; null when there are none. */
     @Column(columnDefinition = "text")
     String attachments;
+
+    /** Original accepted prompt offered as an explicit Build action; null for ordinary replies. */
+    @Column(name = "suggested_build_text", columnDefinition = "text")
+    String suggestedBuildText;
+
+    @Column(name = "source_proposal_id", length = 40, updatable = false)
+    String sourceProposalId;
+
+    @Column(name = "resolved_request_text", columnDefinition = "text", updatable = false)
+    String resolvedRequestText;
+
+    @Column(name = "resolved_attachments", columnDefinition = "text", updatable = false)
+    String resolvedAttachments;
+
+    @Column(name = "proposal_consumed_by", length = 40)
+    String proposalConsumedBy;
+
+    @Column(name = "proposal_plan_id")
+    UUID proposalPlanId;
+
+    public List<String> executionAttachmentPaths() {
+        if (resolvedAttachments == null) {
+            return attachmentPaths();
+        }
+        return resolvedAttachments.isBlank() ? List.of() : List.of(resolvedAttachments.split("\n"));
+    }
 
     public java.util.List<String> attachmentPaths() {
         return attachments == null || attachments.isBlank() ? java.util.List.of() : java.util.List.of(attachments.split("\n"));

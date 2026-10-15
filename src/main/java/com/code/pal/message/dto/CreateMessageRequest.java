@@ -4,6 +4,7 @@ import com.code.pal.project.domain.ProjectType;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import java.util.List;
 
 /**
  * A new user turn. Ids are client-generated (prefixed ULIDs) for idempotency and optimistic UI.
@@ -19,9 +20,15 @@ public record CreateMessageRequest(
         @NotBlank @Size(max = 32_000) String message,
         ProjectType mode,
         @Size(max = 40) @Pattern(regexp = "[A-Za-z0-9_-]+") String aiMessageId,
-        @Size(max = 6) java.util.List<@Size(max = 200) String> attachments
+        @Size(max = 6) List<@Size(max = 200) String> attachments,
+        @Size(max = 40) @Pattern(regexp = "[A-Za-z0-9_-]+") String proposalId
 ) {
     public CreateMessageRequest(String id, String message, ProjectType mode, String aiMessageId) {
-        this(id, message, mode, aiMessageId, null);
+        this(id, message, mode, aiMessageId, null, null);
+    }
+
+    public CreateMessageRequest(String id, String message, ProjectType mode, String aiMessageId,
+                                List<String> attachments) {
+        this(id, message, mode, aiMessageId, attachments, null);
     }
 }

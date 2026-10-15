@@ -6,7 +6,6 @@ import com.code.pal.agent.context.ProjectContextService;
 import com.code.pal.agent.domain.AgentIntent;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.RunStatus;
-import com.code.pal.agent.intent.IntentClassifier;
 import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
@@ -96,11 +95,9 @@ class AgentSelfRepairTest {
         when(messages.findById("assistant-repair")).thenReturn(Optional.empty());
         AgentHeartbeat heartbeat = mock(AgentHeartbeat.class); when(heartbeat.start(runId, projectId)).thenReturn(() -> {});
         AgentJobQueue queue = mock(AgentJobQueue.class);
-        IntentClassifier intentClassifier = mock(IntentClassifier.class);
-        when(intentClassifier.classify(any())).thenReturn(AgentIntent.TASK);
 
         AgentEvents events = mock(AgentEvents.class);
-        AgentRunner runner = new AgentRunner(new RepairingModel(initialVersion, badVersion), intentClassifier, registry, executor,
+        AgentRunner runner = new AgentRunner(new RepairingModel(initialVersion, badVersion), registry, executor,
                 events, props, new ProjectContextService(props, mapper), runs, projects, messages,
                 mock(RealtimeService.class), workspace.files, heartbeat, queue, mapper, changeSets, validation,
                 mock(NotificationService.class));

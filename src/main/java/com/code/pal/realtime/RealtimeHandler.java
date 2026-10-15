@@ -40,6 +40,9 @@ public class RealtimeHandler extends TextWebSocketHandler {
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        if (!realtimeService.allowInbound(session)) {
+            return;
+        }
         // Only heartbeat is understood inbound; everything else is ignored (thin stream channel).
         try {
             Map<?, ?> frame = objectMapper.readValue(message.getPayload(), Map.class);

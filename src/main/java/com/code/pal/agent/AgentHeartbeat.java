@@ -2,14 +2,13 @@ package com.code.pal.agent;
 
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.queue.AgentJobQueue;
-import com.code.pal.agent.repository.AgentRunRepository;
+import com.code.pal.agent.lease.ProjectLeaseService;
+import com.code.pal.agent.lease.RunFence;
+import com.code.pal.agent.runtime.RunCancellation;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
-import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -29,21 +28,15 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class AgentHeartbeat {
 
-    private com.code.pal.agent.lease.ProjectLeaseService leases;
-    @org.springframework.beans.factory.annotation.Autowired
-    void useLeases(com.code.pal.agent.lease.ProjectLeaseService leases) { this.leases=leases; }
-    private final AgentRunRepository runs;
+    private final ProjectLeaseService leases;
     private final AgentJobQueue queue;
     private final AgentProperties props;
-    private final TransactionTemplate tx;
     private final ScheduledExecutorService scheduler;
 
-    public AgentHeartbeat(AgentRunRepository runs, AgentJobQueue queue, AgentProperties props,
-                          PlatformTransactionManager txManager) {
-        this.runs = runs;
+    public AgentHeartbeat(AgentJobQueue queue, AgentProperties props, ProjectLeaseService leases) {
+        this.leases = leases;
         this.queue = queue;
         this.props = props;
-        this.tx = new TransactionTemplate(txManager);
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "agent-heartbeat");
             t.setDaemon(true);
@@ -54,24 +47,41 @@ public class AgentHeartbeat {
     /** Begin heartbeating a run; the returned handle stops it (idempotent) and is safe to call in a finally. */
     public AutoCloseable start(UUID runId, UUID projectId) {
         long interval = Math.max(2_000, props.getHeartbeatIntervalMs());
-        var fence=com.code.pal.agent.lease.RunFence.current();
-        var cancellation=com.code.pal.agent.runtime.RunCancellation.current();
+        RunFence fence = RunFence.current();
+        RunCancellation cancellation = RunCancellation.current();
         ScheduledFuture<?> future = scheduler.scheduleWithFixedDelay(
                 () -> beat(runId, projectId,fence,cancellation), interval, interval, TimeUnit.MILLISECONDS);
         return () -> future.cancel(false);
     }
 
-    void beat(UUID runId, UUID projectId,com.code.pal.agent.lease.RunFence fence,com.code.pal.agent.runtime.RunCancellation cancellation) {
+    void beat(UUID runId, UUID projectId, RunFence fence, RunCancellation cancellation) {
         try {
-            UUID owner=fence==null?runId:fence.ownerId();
-            if(!queue.renewLock(projectId,owner) || (leases!=null && (fence==null || !leases.renew(fence))))
-                throw new com.code.pal.agent.lease.LeaseLostException();
-            if(leases==null) tx.executeWithoutResult(status -> runs.touchHeartbeat(runId,Instant.now()));
-            // Durable renewal updates heartbeat atomically without waiting for long filesystem guards.
-        } catch (RuntimeException e) {
-            cancellation.cancel();
-            // Ownership uncertainty stops work; recovery handles durable state after expiry.
-            log.warn("Worker ownership renewal failed runId={} errorType={}",runId,e.getClass().getSimpleName());
+            if (fence == null || !runId.equals(fence.runId()) || !projectId.equals(fence.projectId())
+                    || !leases.renew(fence)) {
+                cancellation.loseOwnership();
+                return;
+            }
+        } catch (RuntimeException unavailable) {
+            cancellation.loseOwnership();
+            log.warn("Worker database ownership unavailable runId={} errorType={}",
+                    runId, unavailable.getClass().getSimpleName());
+            return;
+        }
+
+        boolean renewed = false;
+        try {
+            renewed = queue.renewLock(projectId, fence.ownerId());
+        } catch (RuntimeException unavailable) {
+            log.warn("Redis lock renewal deferred runId={} errorType={}",
+                    runId, unavailable.getClass().getSimpleName());
+        }
+        if (!renewed) {
+            try {
+                queue.tryLock(projectId, fence.ownerId());
+            } catch (RuntimeException unavailable) {
+                log.warn("Redis lock reacquisition deferred runId={} errorType={}",
+                        runId, unavailable.getClass().getSimpleName());
+            }
         }
     }
 

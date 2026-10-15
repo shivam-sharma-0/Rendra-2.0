@@ -79,7 +79,15 @@ public class AgentCancellations {
 
     private boolean cancelRequested(UUID id) {
         if(runs!=null && runs.findById(id).map(r->r.getCancelRequestedAt()!=null).orElse(false)) return true;
-        return queue.isCancelRequested(id);
+        try {
+            return queue.isCancelRequested(id);
+        } catch (RuntimeException unavailable) {
+            if (runs == null) {
+                throw unavailable;
+            }
+            log.debug("Redis cancel hint unavailable; durable Stop remains authoritative runId={}", id);
+            return false;
+        }
     }
 
     private void startPolling() {

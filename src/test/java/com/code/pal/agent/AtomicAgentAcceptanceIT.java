@@ -11,9 +11,12 @@ import com.code.pal.message.dto.CreateMessageRequest;
 import com.code.pal.message.exception.MessageConflictException;
 import com.code.pal.message.repository.MessageRepository;
 import com.code.pal.message.service.MessageService;
+import com.code.pal.message.service.ConversationProposals;
 import com.code.pal.message.service.impl.MessageServiceImpl;
 import com.code.pal.project.domain.Project;
 import com.code.pal.project.domain.ProjectType;
+import com.code.pal.project.domain.ProjectStage;
+import com.code.pal.project.exception.RequirementApprovalRequiredException;
 import com.code.pal.project.event.AssistantTurnRequested;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.realtime.RealtimeService;
@@ -29,6 +32,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.UUID;
+import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -237,6 +244,129 @@ class AtomicAgentAcceptanceIT {
                 new CreateMessageRequest(request.id(), request.message(), ProjectType.CHAT, "different", request.attachments())));
     }
 
+    private void pendingOffer(String suffix, String prompt) {
+        when(context.getBean(ProjectService.class).requireCanEdit(7L, projectId)).thenReturn(
+                Project.builder().id(projectId).ownerId(7L).type(ProjectType.BUILD)
+                        .lifecycleStage(ProjectStage.REVIEW).build());
+        messages.post(7L, projectId, new CreateMessageRequest("u_" + suffix, prompt, ProjectType.CHAT, "a_" + suffix));
+        jdbc.update("update messages set status='COMPLETE',content='Proposed change',suggested_build_text=? where id=?",
+                prompt, "a_" + suffix);
+        jdbc.update("update agent_runs set status='DONE' where project_id=? and message_id=?", projectId, "a_" + suffix);
+    }
+
+    @Test
+    void continuationConsumesTheLastProposalOnceAndRetriesTheAcceptedTurn() {
+        pendingOffer("proposal", "add dark mode");
+        var yes = new CreateMessageRequest("u_yes", "haan", ProjectType.BUILD, "a_yes");
+        var accepted = messages.post(7L, projectId, yes);
+        assertEquals(ProjectType.BUILD, accepted.getFirst().mode());
+        assertEquals("haan", accepted.getFirst().content());
+        assertEquals(accepted.getFirst().id(), messages.post(7L, projectId, yes).getFirst().id());
+        assertEquals(ProjectType.CHAT, messages.post(7L, projectId,
+                new CreateMessageRequest("u_again", "yes", ProjectType.BUILD, "a_again")).getFirst().mode());
+    }
+
+    @Test
+    void continuationNeverResurrectsAnOlderOfferAfterTheLatestIsConsumed() {
+        pendingOffer("old_offer", "add dark mode");
+        pendingOffer("latest_offer", "add a timer");
+        assertEquals(ProjectType.BUILD, messages.post(7L, projectId,
+                new CreateMessageRequest("u_latest", "go ahead", ProjectType.BUILD, "a_latest")).getFirst().mode());
+        assertEquals(ProjectType.CHAT, messages.post(7L, projectId,
+                new CreateMessageRequest("u_old", "haan", ProjectType.BUILD, "a_old")).getFirst().mode());
+    }
+
+    @Test
+    void explicitBuildActionRequiresTheLatestMatchingOwnedOfferAndCannotReplay() {
+        pendingOffer("first_click", "add dark mode");
+        pendingOffer("current_click", "add a timer");
+        assertThrows(MessageConflictException.class, () -> messages.post(7L, projectId,
+                new CreateMessageRequest("u_stale", "add dark mode", ProjectType.BUILD, "a_stale", List.of(), "a_first_click")));
+        assertThrows(MessageConflictException.class, () -> messages.post(7L, projectId,
+                new CreateMessageRequest("u_mismatch", "delete everything", ProjectType.BUILD, "a_mismatch", List.of(), "a_current_click")));
+        var click = new CreateMessageRequest("u_click", "add a timer", ProjectType.BUILD, "a_click", List.of(), "a_current_click");
+        assertEquals(ProjectType.BUILD, messages.post(7L, projectId, click).getFirst().mode());
+        assertEquals("a_current_click", jdbc.queryForObject("select source_proposal_id from messages where id='u_click'", String.class));
+        assertTrue(jdbc.queryForObject("select resolved_request_text from messages where id='u_click'", String.class).contains("add a timer"));
+        assertThrows(MessageConflictException.class, () -> messages.post(7L, projectId,
+                new CreateMessageRequest("u_replay", "add a timer", ProjectType.BUILD, "a_replay", List.of(), "a_current_click")));
+    }
+
+    @Test
+    void chatAcknowledgementPreservesModeAndDoesNotConsumeTheBuildOffer() {
+        pendingOffer("chat_offer", "add dark mode");
+        assertEquals(ProjectType.CHAT, messages.post(7L, projectId,
+                new CreateMessageRequest("u_chat_yes", "haan", ProjectType.CHAT, "a_chat_yes")).getFirst().mode());
+        assertNull(jdbc.queryForObject("select proposal_consumed_by from messages where id='a_chat_offer'", String.class));
+        assertEquals(ProjectType.BUILD, messages.post(7L, projectId,
+                new CreateMessageRequest("u_build_yes", "haan", ProjectType.BUILD, "a_build_yes")).getFirst().mode());
+    }
+
+    @Test
+    void rejectedAdmissionRollsBackProposalConsumption() {
+        pendingOffer("quota_offer", "add dark mode");
+        var admission = context.getBean(AgentTurnAdmission.class);
+        doThrow(new IllegalStateException("Fixture quota refusal")).when(admission).requireAdmitted(7L);
+        try {
+            assertThrows(IllegalStateException.class, () -> messages.post(7L, projectId,
+                    new CreateMessageRequest("u_refused", "yes", ProjectType.BUILD, "a_refused")));
+            assertNull(jdbc.queryForObject("select proposal_consumed_by from messages where id='a_quota_offer'", String.class));
+        } finally {
+            reset(admission);
+        }
+    }
+
+    @Test
+    void pendingRequirementsCannotBeBypassedByAcceptingAnOffer() {
+        pendingOffer("requirements_offer", "add dark mode");
+        when(context.getBean(ProjectService.class).requireCanEdit(7L, projectId)).thenReturn(
+                Project.builder().id(projectId).ownerId(7L).type(ProjectType.BUILD)
+                        .lifecycleStage(ProjectStage.REQUIREMENTS).build());
+        assertThrows(RequirementApprovalRequiredException.class,
+                () -> messages.post(7L, projectId, new CreateMessageRequest("u_need_req", "yes", ProjectType.BUILD, "a_need_req")));
+        assertNull(jdbc.queryForObject("select proposal_consumed_by from messages where id='a_requirements_offer'", String.class));
+    }
+
+    @Test
+    void concurrentAcknowledgementsCanConsumeAnOfferOnlyOnce() throws Exception {
+        pendingOffer("race_offer", "add dark mode");
+        var start = new CyclicBarrier(2);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var first = pool.submit(() -> {
+                start.await(10, TimeUnit.SECONDS);
+                return messages.post(7L, projectId, new CreateMessageRequest("u_race_1", "yes", ProjectType.BUILD, "a_race_1")).getFirst().mode();
+            });
+            var second = pool.submit(() -> {
+                start.await(10, TimeUnit.SECONDS);
+                return messages.post(7L, projectId, new CreateMessageRequest("u_race_2", "yes", ProjectType.BUILD, "a_race_2")).getFirst().mode();
+            });
+            var modes = List.of(first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS));
+            assertEquals(1, modes.stream().filter(mode -> mode == ProjectType.BUILD).count());
+            assertEquals(1, modes.stream().filter(mode -> mode == ProjectType.CHAT).count());
+        }
+    }
+
+    @Test
+    void anotherExplicitTaskSupersedesThePreviousOffer() {
+        pendingOffer("superseded", "add dark mode");
+        messages.post(7L, projectId, new CreateMessageRequest("u_independent", "add a timer", ProjectType.BUILD, "a_independent"));
+        assertEquals("u_independent", jdbc.queryForObject("select proposal_consumed_by from messages where id='a_superseded'", String.class));
+        assertEquals(ProjectType.CHAT, messages.post(7L, projectId,
+                new CreateMessageRequest("u_after_task", "yes", ProjectType.BUILD, "a_after_task")).getFirst().mode());
+    }
+
+    @Test
+    void anotherCollaboratorCannotAcceptOrContinueTheOwnersOffer() {
+        pendingOffer("owner_offer", "add dark mode");
+        when(context.getBean(ProjectService.class).requireCanEdit(8L, projectId)).thenReturn(
+                Project.builder().id(projectId).ownerId(7L).type(ProjectType.BUILD).lifecycleStage(ProjectStage.REVIEW).build());
+        assertThrows(MessageConflictException.class, () -> messages.post(8L, projectId,
+                new CreateMessageRequest("u_foreign_click", "add dark mode", ProjectType.BUILD, "a_foreign_click", List.of(), "a_owner_offer")));
+        assertEquals(ProjectType.CHAT, messages.post(8L, projectId,
+                new CreateMessageRequest("u_foreign_yes", "yes", ProjectType.BUILD, "a_foreign_yes")).getFirst().mode());
+        assertNull(jdbc.queryForObject("select proposal_consumed_by from messages where id='a_owner_offer'", String.class));
+    }
+
     @Configuration
     static class Services {
         @Bean ProjectService projects() { return mock(ProjectService.class); }
@@ -248,7 +378,7 @@ class AtomicAgentAcceptanceIT {
         @Bean MessageSequence sequence() { return new MessageSequence(); }
         @Bean MessageServiceImpl messageService(MessageRepository m, ProjectService p, RealtimeService r,
                                                ApplicationEventPublisher e, MessageSequence s, AgentTurnAdmission a, ProjectFiles f) {
-            return new MessageServiceImpl(m, p, r, e, s, a, f);
+            return new MessageServiceImpl(m, p, r, e, s, a, f, new ConversationProposals(m));
         }
         @Bean AgentRunCreator creator(AgentRunRepository r, MessageRepository m, AgentDispatchRepository o) {
             return new AgentRunCreator(r, m, o);

@@ -8,13 +8,13 @@ import com.code.pal.agent.context.ContextMessage;
 import com.code.pal.agent.context.ConversationCompactor;
 import com.code.pal.agent.context.ProjectContext;
 import com.code.pal.agent.context.ProjectContextService;
+import com.code.pal.agent.lease.LeaseLostException;
 import com.code.pal.agent.context.ProjectFileSummary;
-import com.code.pal.agent.domain.AgentIntent;
 import com.code.pal.agent.domain.AgentFailureReason;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.AgentStepType;
 import com.code.pal.agent.domain.RunStatus;
-import com.code.pal.agent.intent.IntentClassifier;
+import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.agent.prompt.PromptLoader;
 import com.code.pal.agent.prompt.PromptLoader.Prompt;
 import com.code.pal.agent.llm.LlmClient;
@@ -107,7 +107,6 @@ public class AgentRunner implements AgentRuntime {
         return leases==null?action.get():leases.guarded(run.getProjectId(),action);
     }
     private final LlmClient llm;
-    private final IntentClassifier intentClassifier;
     private final ToolRegistry tools;
     private final AgentToolExecutor toolExecutor;
     private final AgentEvents events;
@@ -148,7 +147,7 @@ public class AgentRunner implements AgentRuntime {
     }
 
     @Autowired
-    public AgentRunner(LlmClient llm, IntentClassifier intentClassifier, ToolRegistry tools,
+    public AgentRunner(LlmClient llm, ToolRegistry tools,
             AgentToolExecutor toolExecutor, AgentEvents events, AgentProperties props,
             ProjectContextService projectContexts, AgentRunRepository runRepository,
             ProjectService projects, MessageRepository messageRepository, RealtimeService realtime,
@@ -164,7 +163,6 @@ public class AgentRunner implements AgentRuntime {
         this.vision = vision;
         this.usage = usage;
         this.llm = llm;
-        this.intentClassifier = intentClassifier;
         this.tools = tools;
         this.toolExecutor = toolExecutor;
         this.events = events;
@@ -189,14 +187,14 @@ public class AgentRunner implements AgentRuntime {
      * Keeps focused runner tests and small embedders source-compatible as workflow
      * sinks evolve.
      */
-    public AgentRunner(LlmClient llm, IntentClassifier intentClassifier, ToolRegistry tools,
+    public AgentRunner(LlmClient llm, ToolRegistry tools,
             AgentToolExecutor toolExecutor, AgentEvents events, AgentProperties props,
             ProjectContextService projectContexts, AgentRunRepository runRepository,
             ProjectService projects, MessageRepository messageRepository, RealtimeService realtime,
             ProjectFiles files, AgentHeartbeat heartbeat, AgentJobQueue queue,
             ObjectMapper objectMapper, ChangeSetService changeSets,
             ProjectValidationService validation, NotificationService notifications) {
-        this(llm, intentClassifier, tools, toolExecutor, events, props, projectContexts, runRepository, projects,
+        this(llm, tools, toolExecutor, events, props, projectContexts, runRepository, projects,
                 messageRepository, realtime, files, heartbeat, queue, objectMapper, changeSets, validation,
                 notifications, null, null, null, null, null, null, null);
     }
@@ -238,16 +236,21 @@ public class AgentRunner implements AgentRuntime {
 
             RunRequestHistory accepted = RunRequestHistory.load(messageRepository, run, HISTORY_CANDIDATE_LIMIT);
             List<Message> history = accepted.messages();
-            String userRequest = accepted.request().getContent();
-            List<String> attachments = accepted.request().attachmentPaths();
-            // Accepted legacy turns also respect an explicit request to inspect or plan without writes.
-            var reducedMode=com.code.pal.agent.intent.RequestScope.mode(run.getMode(),userRequest);
-            if(reducedMode!=run.getMode()){run.setMode(reducedMode);owned(run,()->runRepository.save(run));}
-            boolean pendingTask=history.stream().filter(m->m.getRole()==com.code.pal.message.domain.MessageRole.USER && !m.getId().equals(accepted.request().getId()))
-                    .reduce((a,b)->b).map(m->com.code.pal.agent.intent.RequestScope.action(m.getContent())).orElse(false);
-            // A request with attachments needs them read, even when its text alone sounds like small talk.
-            if (attachments.isEmpty() && !com.code.pal.agent.intent.RequestScope.continuation(userRequest,run.getMode(),pendingTask)
-                    && intentClassifier.classify(userRequest) == AgentIntent.CONVERSATIONAL) {
+            String userRequest = accepted.request().getResolvedRequestText() == null
+                    ? accepted.request().getContent() : accepted.request().getResolvedRequestText();
+            List<String> attachments = accepted.request().executionAttachmentPaths();
+            RequestRouter.Route route = RequestRouter.route(userRequest, attachments, false);
+            ProjectType effectiveMode = RequestRouter.mode(run.getMode(), userRequest, attachments);
+            if (effectiveMode != run.getMode()) {
+                run.setMode(effectiveMode);
+                owned(run, () -> runRepository.save(run));
+            }
+            if (route == RequestRouter.Route.UNCLEAR
+                    || route == RequestRouter.Route.CHANGE && run.getMode() != ProjectType.BUILD) {
+                suggestBuild(run, userRequest, attachments);
+            }
+            if (route == RequestRouter.Route.SMALL_TALK
+                    || route == RequestRouter.Route.UNCLEAR && attachments.isEmpty()) {
                 return runConversational(run, stream, history, userRequest, deadlineNanos);
             }
 
@@ -288,6 +291,9 @@ public class AgentRunner implements AgentRuntime {
                 convo.add(LlmMessage.user(projectContext.projectContextMessage()));
             }
             projectContext.conversation().stream().map(AgentRunner::toLlmMessage).forEach(convo::add);
+            if (accepted.request().getResolvedRequestText() != null) {
+                convo.add(LlmMessage.user(userRequest));
+            }
             if (!attachments.isEmpty() && vision != null) {
                 events.emit(run, AgentStepType.STATUS, "Reading attachments", Map.of("files", attachments));
                 convo.add(LlmMessage.user(VisionService.asContext(vision.describe(run.getProjectId(), attachments, userRequest))));
@@ -580,11 +586,13 @@ public class AgentRunner implements AgentRuntime {
         } catch (com.code.pal.agent.lease.TrustedOperationPendingException pending) {
             cancellation.cancel();run.setError(pending.getMessage());
             return result(run,runtime,"Project operation cleanup is pending.",run.getError());
-        } catch (com.code.pal.agent.lease.LeaseLostException lost) {
+        } catch (LeaseLostException lost) {
             // Replacement/recovery owns durable state. A stale worker emits no terminal writes.
-            cancellation.cancel();run.setError(lost.getMessage());run.setStatus(RunStatus.FAILED);
-            return result(run,runtime,"Worker ownership was lost.",run.getError());
+            return ownershipLost(run, runtime, cancellation);
         } catch (AgentCancelledException | LlmCancelledException e) {
+            if (cancellation.isOwnershipLost()) {
+                return ownershipLost(run, runtime, cancellation);
+            }
             log.info("agent_cancelled runId={}", run.getId());
             if (runtime != null)
                 runtime.transitionTo(AgentRuntimeStatus.CANCELLED);
@@ -661,7 +669,12 @@ public class AgentRunner implements AgentRuntime {
             changeSets.finish(run);
             validation.clear(run.getId());
             stopQuietly(beat);
-            queue.clearCancel(run.getId());
+            try {
+                queue.clearCancel(run.getId());
+            } catch (RuntimeException unavailable) {
+                log.warn("Redis cancel cleanup deferred runId={} errorType={}",
+                        run.getId(), unavailable.getClass().getSimpleName());
+            }
         }
     }
 
@@ -714,8 +727,11 @@ public class AgentRunner implements AgentRuntime {
                 requireBeforeDeadline(deadlineNanos);
                 requireNotCancelled(run);
                 requireWithinDailyQuota(run);
-                AgentProperties.ModelSelection selection = props.untriedModel(ProjectType.CHAT,failedModels);
-                if(selection==null)throw lastFailure;
+                AgentProperties.ModelSelection selection = props.preferredModel(ProjectType.CHAT);
+                if (failedModels.contains(selection) || !props.available(selection)) {
+                    selection = props.untriedModel(ProjectType.CHAT, failedModels);
+                }
+                if (selection == null) throw lastFailure;
                 log.info("model_called runId={} conversational=true attempt={} provider={} model={}", run.getId(), attempt,
                         selection.provider(), selection.model());
                 try {
@@ -755,9 +771,26 @@ public class AgentRunner implements AgentRuntime {
 
     /** Stops the run at a checkpoint when Stop was requested (local signal first, the queue's flag as a fallback). */
     private void requireNotCancelled(AgentRun run) {
+        if (RunCancellation.current().isOwnershipLost()) {
+            throw new LeaseLostException();
+        }
         if(leases!=null) leases.checkCurrent(run.getProjectId());
-        if (RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted() || queue.isCancelRequested(run.getId()))
+        boolean requested;
+        try {
+            requested = queue.isCancelRequested(run.getId());
+        } catch (RuntimeException unavailable) {
+            requested = runRepository.findById(run.getId()).map(current -> current.getCancelRequestedAt() != null)
+                    .orElse(false);
+        }
+        if (RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted() || requested)
             throw new AgentCancelledException();
+    }
+
+    private AgentRunResult ownershipLost(AgentRun run, AgentRuntimeContext runtime, RunCancellation cancellation) {
+        cancellation.loseOwnership();
+        run.setError("Worker ownership expired or changed");
+        run.setStatus(RunStatus.FAILED);
+        return result(run, runtime, "Worker ownership was lost.", run.getError());
     }
 
     private static final class AgentCancelledException extends RuntimeException {
@@ -1223,6 +1256,18 @@ public class AgentRunner implements AgentRuntime {
         run.setPromptTokens(run.getPromptTokens() + result.usage().promptTokens());
         run.setCompletionTokens(run.getCompletionTokens() + result.usage().completionTokens());
         owned(run,()->runRepository.addReportedTokens(run.getId(),result.usage().promptTokens(),result.usage().completionTokens()));
+    }
+
+    private void suggestBuild(AgentRun run, String prompt, List<String> attachments) {
+        owned(run, () -> {
+            messageRepository.findByIdAndProjectId(run.getMessageId(), run.getProjectId()).ifPresent(message -> {
+                message.setSuggestedBuildText(prompt);
+                message.setProposalPlanId(run.getMode() == ProjectType.PLAN ? run.getId() : null);
+                message.setAttachments(attachments.isEmpty() ? null : String.join("\n", attachments));
+                messageRepository.save(message);
+            });
+            return null;
+        });
     }
 
     private void updateAssistant(AgentRun run, String content, MessageStatus status) {

@@ -19,6 +19,8 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.util.Set;
+import java.nio.charset.StandardCharsets;
+import org.springframework.web.util.UriUtils;
 
 /**
  * Distributed, atomic rate limiter for the sensitive auth mutations
@@ -94,5 +96,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
         if(ip.contains(":")){if(!ip.matches("[a-fA-F0-9:]{2,39}"))return false;try{java.net.InetAddress.getByName(ip);return true;}catch(java.net.UnknownHostException invalid){return false;}}
         if(!ip.matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}"))return false;for(String part:ip.split("\\."))if(Integer.parseInt(part)>255)return false;return true;
     }
-    private static String normalizedPath(HttpServletRequest request){try{return org.springframework.web.util.UriUtils.decode(request.getRequestURI(),java.nio.charset.StandardCharsets.UTF_8).replaceAll(";[^/]*","");}catch(IllegalArgumentException invalid){return "";}}
+    static String normalizedPath(HttpServletRequest request) {
+        try {
+            return UriUtils.decode(request.getRequestURI(), StandardCharsets.UTF_8).replaceAll(";[^/]*", "");
+        } catch (IllegalArgumentException invalid) {
+            return "";
+        }
+    }
 }

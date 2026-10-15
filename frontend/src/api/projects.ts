@@ -20,10 +20,14 @@ export type Project = {
   lastActivityAt: string; createdAt: string; updatedAt: string
 }
 export type MessageFeedback = 'UP' | 'DOWN'
+export type SuggestedAction = {
+  label: string; mode: 'BUILD'; message: string; attachments: string[]; proposalId: string
+}
 export type Message = {
   id: string; projectId: string; role: MessageRole; content: string; status: MessageStatus
   mode: ProjectType | null; replyToId: string | null; feedback: MessageFeedback | null
   seq: number; createdAt: string; updatedAt: string; attachments?: string[] | null
+  suggestedAction?: SuggestedAction | null
 }
 export type AgentRun = {
   id: string; projectId: string; messageId: string; mode: ProjectType; status: AgentRunStatus
@@ -144,14 +148,15 @@ export const databaseApi = {
   get: (projectId: string, opts?: ReadOpts) => apiGet<DatabaseSnapshot>(`/api/projects/${projectId}/database`, opts),
 }
 
-export type CreateMessageBody = { id: string; message: string; mode?: ProjectType; aiMessageId?: string; attachments?: string[] }
+export type CreateMessageBody = { id: string; message: string; mode?: ProjectType; aiMessageId?: string; attachments?: string[]; proposalId?: string }
 export const messageApi = {
   list: (projectId: string, page = 0, size = 50, opts?: ReadOpts) =>
     apiGet<Page<Message>>(`/api/projects/${projectId}/messages?page=${page}&size=${size}`, opts),
   // attachments: paths returned by uploadAttachments, so the agent reads them with this turn
-  post: (projectId: string, message: string, mode?: ProjectType, attachments?: string[]) => apiSend<Message[]>('POST', `/api/projects/${projectId}/messages`, {
+  post: (projectId: string, message: string, mode?: ProjectType, attachments?: string[], proposalId?: string) => apiSend<Message[]>('POST', `/api/projects/${projectId}/messages`, {
     id: newUserMessageId(), message, mode, aiMessageId: newAiMessageId(),
     ...(attachments?.length ? { attachments } : {}),
+    ...(proposalId ? { proposalId } : {}),
   } satisfies CreateMessageBody),
   feedback: (projectId: string, messageId: string, feedback: MessageFeedback | null) =>
     apiSend<Message>('PUT', `/api/projects/${projectId}/messages/${messageId}/feedback`, { feedback }),

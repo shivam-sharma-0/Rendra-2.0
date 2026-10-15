@@ -1,6 +1,7 @@
 package com.code.pal.agent.contract;
 
 import com.code.pal.agent.domain.AgentRun;
+import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.runtime.ReleaseSource;
 import com.code.pal.agent.workspace.ProjectFiles;
@@ -93,7 +94,9 @@ public final class ContractStore {
     }
     public Stored reusable(UUID project,String request,BuildContract.Limits allowed) {
         // A different feature request must not silently reuse an unrelated approved plan.
-        if(!com.code.pal.agent.intent.RequestScope.normalize(request).matches("(?:build (?:the )?(?:approved )?plan|implement (?:this|the) plan|go ahead|start|continue|shuru karo|aage badho|yes|haan)[.! ]*"))return null;
+        if (!RequestRouter.buildApprovedPlan(request)) {
+            return null;
+        }
         var rows=jdbc.query("select run_id from agent_build_contracts where project_id=? order by created_at desc,id desc limit 1",(r,n)->r.getObject(1,UUID.class),project);
         if(rows.isEmpty())return null;var stored=forRun(project,rows.getFirst());
         if(!compatible(stored,current(project)))throw conflict("Approved plan is stale; request and review an updated plan before building it");

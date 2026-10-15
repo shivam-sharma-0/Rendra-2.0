@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.Optional;
+import java.util.List;
 
 /**
  * Message persistence. Listing is keyed on {@code project_id} and rides the
@@ -39,6 +40,16 @@ public interface MessageRepository extends JpaRepository<Message, String> {
             UUID projectId, String replyToId, com.code.pal.message.domain.MessageRole role);
 
     long countByProjectId(UUID projectId);
+
+    /** Include consumed rows: falling back to an older unconsumed offer would replay stale work. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select a from Message a, Message u where a.projectId=:projectId and u.projectId=:projectId "
+            + "and a.replyToId=u.id and u.authorId=:userId and u.role='USER' and a.role='ASSISTANT' and a.status='COMPLETE' "
+            + "and a.suggestedBuildText is not null "
+            + "and exists (select r.id from AgentRun r where r.projectId=a.projectId and r.messageId=a.id and r.status='DONE') "
+            + "order by a.createdAt desc, a.seq desc")
+    List<Message> lockLatestProposal(@Param("projectId") UUID projectId, @Param("userId") Long userId,
+                                              Pageable pageable);
 
     /** The project's first message by the given role (its opening prompt, for USER). */
     Optional<Message> findFirstByProjectIdAndRoleOrderBySeqAsc(UUID projectId, com.code.pal.message.domain.MessageRole role);

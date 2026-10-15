@@ -27,6 +27,9 @@ public final class ProjectPaths {
         }
         String normalized = relativePath.replace('\\', '/');
         for (String part : normalized.split("/")) {
+            if (!part.equals(".") && (part.endsWith(".") || part.endsWith(" "))) {
+                throw new IllegalArgumentException("Path segments must not end in a dot or space");
+            }
             if (part.equals("..") || part.equalsIgnoreCase(".git") || part.equalsIgnoreCase(".secrets")
                     || part.equalsIgnoreCase(".ssh")) {
                 throw new IllegalArgumentException("Protected sandbox path");

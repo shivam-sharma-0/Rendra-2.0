@@ -2,6 +2,7 @@ package com.code.pal.agent.contract;
 import com.code.pal.agent.change.*;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.domain.AgentRun;
+import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.plan.AgentPlanState;
 import com.code.pal.agent.route.*;
@@ -35,6 +36,9 @@ public final class ContractCoordinator {
         this.changes=changes;this.validation=validation;this.criteria=criteria;this.checkpoints=checkpoints;this.props=props;this.mapper=mapper;
     }
     public boolean eligible(AgentRun run,RunSize size,String request) {
+        if (RequestRouter.route(request) != RequestRouter.Route.CHANGE) {
+            return false;
+        }
         var approved=memory.current(run.getProjectId());
         var choice=approved==null?null:decisions.state(run.getProjectId()).choice();
         boolean fullStack=props.isFullStackContracts() && choice!=null && choice.storage()==BuildDecisions.Storage.MERN;
@@ -42,7 +46,7 @@ public final class ContractCoordinator {
             throw new WorkflowStageException("This run needs structured execution; restore its reviewed configuration before resuming");
         return (props.isStructuredContracts() || fullStack) && approved!=null &&
                 (run.getMode()==ProjectType.PLAN || run.getMode()==ProjectType.BUILD && (fullStack || size.tier()!=SizeTier.S ||
-                com.code.pal.agent.intent.RequestScope.normalize(request).matches("(?:build (?:the )?(?:approved )?plan|implement (?:this|the) plan|go ahead|start|continue|shuru karo|aage badho|yes|haan)[.! ]*")));
+                RequestRouter.buildApprovedPlan(request)));
     }
     public record Outcome(BuildContract contract,String summary) {}
     public Outcome execute(AgentContext ctx,AgentRun run,RunSize size,String request,String projectMap,

@@ -1,6 +1,18 @@
 [CmdletBinding()]
-param([ValidateSet('static','vite','cancel','reject','mern','stop-retry')][string]$Scenario='static')
+param(
+    [ValidateSet('static','vite','cancel','reject','mern','stop-retry')][string]$Scenario='static',
+    [switch]$PhaseOneGate,
+    [switch]$PhaseTwoGate,
+    [string]$VerificationDirectory
+)
 $ErrorActionPreference='Stop'
+if ($PhaseOneGate -and $PhaseTwoGate) {
+    throw 'Select one phase gate per owned fixture'
+}
+$phaseGate = $PhaseOneGate -or $PhaseTwoGate
+if ($phaseGate -and ($Scenario -ne 'static' -or -not $VerificationDirectory)) {
+    throw 'A phase gate requires the static scenario and an explicit scratch verification directory'
+}
 $taskRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $sourceRoot=[IO.Path]::GetFullPath((Join-Path $taskRoot '../Code-Pal'))
 $taskId='codex_e2e_'+[Guid]::NewGuid().ToString('N').Substring(0,12)
@@ -27,7 +39,41 @@ try {
     for($i=0;$i -lt 30;$i++){& wsl.exe -e docker exec ($taskId+'-pg') pg_isready -p $pgPort -U codepal_codex_it | Out-Null;if($LASTEXITCODE -eq 0){break};Start-Sleep -Seconds 1}
     $env:PGPASSWORD='disposable-test-only';$env:POSTGRES_PASSWORD=$env:PGPASSWORD
     Wsl-Check @('pg_restore','-h','127.0.0.1','-p',"$pgPort",'-U','codepal_codex_it','-d',$taskId,'-w','--no-owner','--no-privileges','--exit-on-error',$linuxDump)
+    if ($phaseGate) {
+        $backupDirectory = [IO.Path]::GetFullPath((Join-Path $taskRoot '../codex-archive/dev-db-backups'))
+        [void](New-Item -ItemType Directory -Path $backupDirectory -Force)
+        $backup = Join-Path $backupDirectory "$taskId.dump"
+        Copy-Item -LiteralPath $dump -Destination $backup
+        $evidence.backup = $backup
+        $evidence.backupSha256 = (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash
+        $evidence.backupRestored = $true
+    }
     Remove-Item -LiteralPath $dump -Force
+    if ($PhaseTwoGate) {
+        # Keep the restored schema/history, but no copied application data may reach a model.
+        # This executes only against the uniquely named disposable database, before Boot starts.
+        $sanitizeCopy = @'
+DO $codex$
+DECLARE targets text; item record; row_count bigint;
+BEGIN
+ IF current_database() <> '__OWNED_DATABASE__' OR current_user <> 'codepal_codex_it' THEN
+  RAISE EXCEPTION 'Refusing to sanitize an unowned database';
+ END IF;
+ SELECT string_agg(format('%I.%I',schemaname,tablename),',') INTO targets
+ FROM pg_tables WHERE schemaname='public' AND tablename <> 'flyway_schema_history';
+ IF targets IS NOT NULL THEN EXECUTE 'TRUNCATE TABLE ' || targets || ' RESTART IDENTITY CASCADE'; END IF;
+ FOR item IN SELECT schemaname,tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'flyway_schema_history' LOOP
+  EXECUTE format('SELECT count(*) FROM %I.%I',item.schemaname,item.tablename) INTO row_count;
+  IF row_count <> 0 THEN RAISE EXCEPTION 'Copied application data remains'; END IF;
+ END LOOP;
+END $codex$;
+'@
+        $sanitizeCopy = $sanitizeCopy.Replace('__OWNED_DATABASE__', $taskId)
+        Wsl-Check @('psql','-h','127.0.0.1','-p',"$pgPort",'-U','codepal_codex_it','-d',$taskId,'-w','-v','ON_ERROR_STOP=1','-c',$sanitizeCopy)
+        $evidence.copiedApplicationRowsRemovedBeforeBoot = $true
+        $evidence.modelPayload = 'Synthetic test prompts/history, new static fixture source, one synthetic pixel and platform prompts/tool schemas only'
+        $evidence.modelDestinations = @('https://api.mistral.ai/v1', 'https://integrate.api.nvidia.com/v1')
+    }
     # Never execute copied active jobs or retain their live queue/outbox ownership.
     Wsl-Check @('psql','-h','127.0.0.1','-p',"$pgPort",'-U','codepal_codex_it','-d',$taskId,'-w','-c',"update agent_runs set status='FAILED' where status in ('RUNNING','QUEUED','COMMITTING');")
     # Copied journals refer to source-owned processes, not this fixture. Never reconcile them
@@ -51,14 +97,30 @@ END $codex$;
     Wsl-Check @('docker','run','-d','--name',$taskId,'--label',"com.codepal.real-e2e=$taskId",'--network','host','--tmpfs','/data','redis:7-bookworm@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85','redis-server','--bind','127.0.0.1','--port',"$redisPort",'--appendonly','no');$redisCreated=$true
     # Java classpath from the recent isolated suite; exclude test classes from production scanning.
     $report=Join-Path $taskRoot 'target/codex-verify/surefire-reports/TEST-com.code.pal.agent.usage.MeteredLlmClientTest.xml'
+    if ($VerificationDirectory) {
+        $report = Join-Path $VerificationDirectory 'surefire-reports/TEST-com.code.pal.agent.usage.MeteredLlmClientTest.xml'
+    }
     [xml]$xml=Get-Content -LiteralPath $report -Raw
     $classpath=($xml.testsuite.properties.property | Where-Object {$_.name -eq 'java.class.path'}).value
     $classpath=($classpath -split ';' | Where-Object {$_ -notlike '*test-classes'}) -join ';'
+    if ($phaseGate) {
+        $dependencies = $classpath -split ';' | Where-Object { $_ -like '*.jar' }
+        $classpath = (@((Join-Path $taskRoot 'target/classes')) + $dependencies) -join ';'
+    }
     if($classpath -notmatch 'spring-boot-flyway'){throw 'Classpath lacks Flyway auto-configuration'}
     $sourcePath=$sourceRoot.Replace('\','/')
     $appPort=0
     $appArgs=@('-Dspring.devtools.restart.enabled=false','-Xmx256m','-Xss512k','-XX:ActiveProcessorCount=2','-XX:TieredStopAtLevel=1','-XX:ReservedCodeCacheSize=64m','-XX:MaxMetaspaceSize=192m','-cp',$classpath,'com.code.pal.CodePalApplication',"--server.port=$appPort",'--server.address=127.0.0.1','--spring.profiles.active=dev',"--spring.datasource.url=jdbc:postgresql://127.0.0.1:$pgPort/$taskId",'--spring.datasource.username=codepal_codex_it',"--spring.config.import=optional:file:$sourcePath/.secrets/secrets.properties", "--jwt.rsa.private-key=file:$sourcePath/.secrets/jwt-private.pem", "--jwt.rsa.public-key=file:$sourcePath/.secrets/jwt-public.pem", "--spring.data.redis.port=$redisPort", "--app.agent.workspace-base-path=$uncBase", "--app.agent.sandbox.host-workspace-path=$linuxBase",'--app.agent.billing-mode=FREE','--app.agent.worker-concurrency=1',"--app.agent.sandbox.container-prefix=$taskId-",'--app.agent.llm.max-attempts=1','--management.health.mongo.enabled=false','--logging.level.org.springframework.web=INFO','--logging.level.org.hibernate.SQL=INFO','--logging.level.org.springframework.jdbc=INFO')
     $appArgs+='--app.agent.deleted-project-sweep-ms=86400000'
+    if ($PhaseTwoGate) {
+        # Fixed known destinations and FREE routes; no environment override may select a paid/other provider.
+        $appArgs += @('--app.agent.providers.mistral.base-url=https://api.mistral.ai/v1',
+            '--app.agent.providers.nvidia.base-url=https://integrate.api.nvidia.com/v1',
+            '--app.agent.models.free-chat=mistral:open-mistral-nemo,mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b',
+            '--app.agent.models.free-plan=mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b',
+            '--app.agent.models.free-build=mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b',
+            '--app.agent.models.vision=nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia:meta/llama-3.2-11b-vision-instruct')
+    }
     if($Scenario -eq 'reject'){$appArgs+=@('--app.agent.models.free-build=mistral:codestral-latest','--app.agent.models.free-chat=mistral:codestral-latest','--app.agent.providers.mistral.api-keys[0]=invalid-e2e-rejection-test','--app.agent.providers.mistral.api-key=invalid-e2e-rejection-test')}
     if($Scenario -eq 'mern'){$appArgs+=@("--app.agent.sandbox.apps-network=$taskId-apps","--app.agent.sandbox.apps-database-container=$taskId-mongo","--app.agent.sandbox.apps-database-volume=$taskId-mongo-data","--app.agent.sandbox.gateway-container=$taskId-gateway","--app.agent.sandbox.gateway-port=$gatewayPort","--app.agent.sandbox.apps-database-port=$mongoPort",'--app.agent.sandbox.apps-database-password=disposable-test-only')}
     # Start-Process string parsing needs quoted arguments; reject quotes before composing its command line.
@@ -70,9 +132,34 @@ END $codex$;
     $evidence.pid=$appProcess.Id;$evidence.port=$appPort
     $ready=$false;for($i=0;$i -lt 90;$i++){$appProcess.Refresh();if($appProcess.HasExited){throw 'Spring Boot exited before readiness'};if($appPort -eq 0){$bootText=Get-Content -LiteralPath (Join-Path $owned 'app.log') -Raw;if($bootText -match 'Tomcat started on port (\d+)'){$appPort=[int]$Matches[1];$evidence.port=$appPort}};try {$response=Invoke-WebRequest "http://127.0.0.1:$appPort/actuator/health" -UseBasicParsing -TimeoutSec 1;if($response.StatusCode -eq 200){$ready=$true;break}}catch{};Start-Sleep -Seconds 1}
     if(-not $ready){throw 'Spring Boot readiness timeout'}
-    $testScript=if($Scenario -eq 'mern'){'Test-FreshMernE2E.cjs'}else{'Test-RealDevE2E.cjs'}
-    & node (Join-Path $PSScriptRoot $testScript) "http://127.0.0.1:$appPort" $uncBase $owned $Scenario
+    if ($phaseGate) {
+        $startup = Get-Content -LiteralPath (Join-Path $owned 'app.log') -Raw
+        $expectedClasses = Join-Path $taskRoot 'target\classes'
+        if (-not $startup.Contains($expectedClasses)) {
+            throw 'Startup does not identify the approved single-repository target/classes'
+        }
+        $evidence.startupClassesVerified = $expectedClasses
+    }
+    $testScript=if($PhaseTwoGate){'Test-PhaseTwoGate.cjs'}elseif($Scenario -eq 'mern'){'Test-FreshMernE2E.cjs'}else{'Test-RealDevE2E.cjs'}
+    $nodeArguments = @((Join-Path $PSScriptRoot $testScript), "http://127.0.0.1:$appPort", $uncBase, $owned, $Scenario)
+    if ($PhaseOneGate) {
+        $nodeArguments += 'phase-one'
+    }
+    & node @nodeArguments
     $scenarioExit=$LASTEXITCODE
+    if ($PhaseTwoGate) {
+        $ownedProject = (Get-Content -LiteralPath (Join-Path $owned 'project.json') -Raw | ConvertFrom-Json).id
+        if ($ownedProject -notmatch '^[a-f0-9-]{36}$') { throw 'Unexpected Phase Two project identity' }
+        $phaseSql = "select coalesce(json_agg(x),'[]'::json) from (select r.id,r.message_id,r.mode,r.status,r.code_saved_at,r.preview_status,count(a.id) as attempts,count(a.id) filter(where a.purpose='INTENT') as routing_calls,coalesce(sum(a.prompt_tokens+a.completion_tokens),0) as reported_tokens,coalesce(sum(case when a.state='UNKNOWN' then a.unknown_charge_tokens else 0 end),0) as unknown_charge,count(a.id) filter(where a.state in ('SENT','RESERVED')) as held from agent_runs r left join ai_token_attempts a on a.run_id=r.id where r.project_id='$ownedProject' group by r.id order by r.created_at) x"
+        $phaseUsage = & wsl.exe -e psql -h 127.0.0.1 -p $pgPort -U codepal_codex_it -d $taskId -w -At -c $phaseSql
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot verify Phase Two call ledger' }
+        $phaseUsage | Set-Content -LiteralPath (Join-Path $owned 'phase-two-accounting.json') -Encoding UTF8
+        if ($scenarioExit -ne 0) { throw 'Phase Two real-model gate failed; scenario and call-ledger evidence retained' }
+        $phaseRows = $phaseUsage | ConvertFrom-Json
+        if ($phaseRows | Where-Object { $_.routing_calls -ne 0 -or $_.held -ne 0 }) {
+            throw 'Phase Two has a routing model call or unsettled reservation'
+        }
+    }
     $build=Get-Content -LiteralPath (Join-Path $owned 'build.json') -Raw | ConvertFrom-Json
     if($build.runId -notmatch '^[a-f0-9-]{36}$'){throw 'Unexpected owned run identity'}
     $sql="select json_build_object('attempts',count(*),'reservedInput',coalesce(sum(input_bound),0),'reservationTotal',coalesce(sum(reserved_tokens),0),'unknownCharge',coalesce(sum(case when state='UNKNOWN' then unknown_charge_tokens else 0 end),0),'reportedCharge',coalesce(sum(case when state='REPORTED' then prompt_tokens+completion_tokens else 0 end),0),'unknownCalls',count(*) filter(where state='UNKNOWN'),'held',coalesce(sum(case when state in ('SENT','RESERVED') then reserved_tokens else 0 end),0)) from ai_token_attempts where run_id='$($build.runId)'"

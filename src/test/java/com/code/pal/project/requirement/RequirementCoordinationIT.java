@@ -1,5 +1,7 @@
 package com.code.pal.project.requirement;
 
+import com.code.pal.message.service.ConversationProposals;
+
 import com.code.pal.agent.*;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.dispatch.*;
@@ -299,7 +301,7 @@ class RequirementCoordinationIT {
     @Configuration
     @Import({RequirementServiceImpl.class, BuildDecisions.class, RequirementCoordinator.class, RequirementProjection.class,
             ProjectLeaseService.class, ProjectMutationLocks.class, FencedProjectFiles.class, ProjectArtifactService.class,
-            MessageServiceImpl.class, AgentRunCreator.class, AgentDispatchService.class, AgentTriggerListener.class, AgentDispatchPoller.class})
+            MessageServiceImpl.class, ConversationProposals.class, AgentRunCreator.class, AgentDispatchService.class, AgentTriggerListener.class, AgentDispatchPoller.class})
     static class Services {
         @Bean AgentProperties props(org.springframework.core.env.Environment env) {
             var p = new AgentProperties(); p.setWorkspaceBasePath(env.getRequiredProperty("app.agent.workspace-base-path"));

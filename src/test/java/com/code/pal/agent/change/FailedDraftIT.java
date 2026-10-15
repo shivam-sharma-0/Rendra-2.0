@@ -1,5 +1,7 @@
 package com.code.pal.agent.change;
 
+import com.code.pal.message.service.ConversationProposals;
+
 import com.code.pal.agent.*;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.dispatch.*;
@@ -149,7 +151,7 @@ class FailedDraftIT {
     @Configuration
     @Import({ApprovedProjectMemory.class,FailedDraftService.class,FailedDraftRepository.class,FailedDraftRetryService.class,FailedDraftController.class,
             ChangeSetService.class,PromotionJournal.class,SequentialCheckpoints.class,ProjectLeaseService.class,ProjectMutationLocks.class,TrustedProjectIo.class,
-            FencedProjectFiles.class,FencedSandboxPort.class,LocalProjectEnvironment.class,MessageServiceImpl.class,AgentRunCreator.class,AgentTriggerListener.class})
+            FencedProjectFiles.class,FencedSandboxPort.class,LocalProjectEnvironment.class,MessageServiceImpl.class,ConversationProposals.class,AgentRunCreator.class,AgentTriggerListener.class})
     static class Services {
         @Bean AgentProperties props(org.springframework.core.env.Environment env){var p=new AgentProperties();p.setWorkspaceBasePath(env.getRequiredProperty("app.agent.workspace-base-path"));return p;}
         @Bean WorkspaceStorage storage(AgentProperties p){return new WorkspaceStorage(p);}

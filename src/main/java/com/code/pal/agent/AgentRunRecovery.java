@@ -2,6 +2,8 @@ package com.code.pal.agent;
 
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.change.ChangeSetService;
+import com.code.pal.agent.change.RestoreRecoveryService;
+import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.AgentStepType;
 import com.code.pal.agent.domain.RunStatus;
@@ -26,9 +28,8 @@ import java.time.Instant;
 @Component
 @RequiredArgsConstructor
 public class AgentRunRecovery {
-    private com.code.pal.agent.lease.ProjectLeaseService leases;
-    @org.springframework.beans.factory.annotation.Autowired
-    void useLeases(com.code.pal.agent.lease.ProjectLeaseService leases) { this.leases=leases; }
+    private final ProjectLeaseService leases;
+    private final RestoreRecoveryService restores;
     private final AgentProperties props;
     private final AgentRunRepository runs;
     private final AgentJobQueue queue;
@@ -43,6 +44,7 @@ public class AgentRunRecovery {
     public void sweep() {
         Instant now = Instant.now();
         long recoveryDeadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+        restores.recoverPending(recoveryDeadline);
         if(leases!=null) for(var project:leases.pendingIoProjects()) {
             if(System.nanoTime()>recoveryDeadline) break;
             try { leases.recovering(project,()->{if(!leases.hasLiveLease(project)) sandbox.reconcilePendingOperations(project);}); }

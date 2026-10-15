@@ -5,7 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * A run's Stop signal, shared by everything that works for the run: the agent loop, model calls and
@@ -25,7 +25,8 @@ public final class RunCancellation {
     private static final ThreadLocal<RunCancellation> CURRENT = new ThreadLocal<>();
 
     private final UUID runId;
-    private final AtomicBoolean cancelled = new AtomicBoolean();
+    private enum Reason { CANCELLED, OWNERSHIP_LOST }
+    private final AtomicReference<Reason> reason = new AtomicReference<>();
     private final List<Runnable> hooks = new CopyOnWriteArrayList<>();
 
     public RunCancellation(UUID runId) {
@@ -37,12 +38,24 @@ public final class RunCancellation {
     }
 
     public boolean isCancelled() {
-        return cancelled.get();
+        return reason.get() != null;
     }
 
     /** Cancels once; runs every registered hook on the calling thread. No effect on {@link #NONE}. */
     public void cancel() {
-        if (this == NONE || !cancelled.compareAndSet(false, true)) return;
+        cancel(Reason.CANCELLED);
+    }
+
+    public void loseOwnership() {
+        cancel(Reason.OWNERSHIP_LOST);
+    }
+
+    public boolean isOwnershipLost() {
+        return reason.get() == Reason.OWNERSHIP_LOST;
+    }
+
+    private void cancel(Reason cause) {
+        if (this == NONE || !reason.compareAndSet(null, cause)) return;
         for (Runnable hook : hooks) runQuietly(hook);
     }
 

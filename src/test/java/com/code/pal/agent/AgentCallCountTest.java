@@ -4,7 +4,6 @@ import com.code.pal.agent.change.*;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.context.ProjectContextService;
 import com.code.pal.agent.domain.*;
-import com.code.pal.agent.intent.IntentClassifier;
 import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
@@ -112,10 +111,9 @@ class AgentCallCountTest {
         var run=AgentRun.builder().id(UUID.randomUUID()).projectId(workspace.projectId).userId(7L).mode(ProjectType.BUILD).messageId("completion-fixture").status(RunStatus.QUEUED).build();
         var messages=mock(MessageRepository.class);com.code.pal.testsupport.QueuedRequestFixture.stubOriginal(messages,run,Message.user(workspace.projectId,"completion-user",react?"Build a React calculator":"Build an addition calculator",ProjectType.BUILD,7L));
         var heartbeat=mock(AgentHeartbeat.class);when(heartbeat.start(any(),any())).thenReturn(()->{});
-        var classifier=mock(IntentClassifier.class);when(classifier.classify(any())).thenReturn(AgentIntent.TASK);
         var sites=previewResult==null?null:mock(com.code.pal.agent.preview.SiteBuildService.class);
         if(sites!=null)when(sites.build(workspace.projectId)).thenReturn(previewResult);
-        var runner=new AgentRunner(model,classifier,registry,executor,mock(AgentEvents.class),props,new ProjectContextService(props,mapper),runs,rights,messages,
+        var runner=new AgentRunner(model,registry,executor,mock(AgentEvents.class),props,new ProjectContextService(props,mapper),runs,rights,messages,
                 mock(com.code.pal.realtime.RealtimeService.class),workspace.files,heartbeat,mock(AgentJobQueue.class),mapper,changes,validation,mock(com.code.pal.notification.service.NotificationService.class),null,null,sites,null,null,null,null);
         if(react) {
             var decisions=mock(com.code.pal.project.capability.BuildDecisions.class);

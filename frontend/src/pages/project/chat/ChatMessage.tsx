@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { type AgentRun, type AgentStep, type Message, type MessageFeedback } from '../../../api/projects'
+import { type AgentRun, type AgentStep, type Message, type MessageFeedback, type SuggestedAction } from '../../../api/projects'
 import { Ico } from '../../../rendra/parts'
 import { CHECK_ICON, COPY_ICON, EDIT_ICON } from '../icons'
 import { formatMessageTime, isActive } from '../runUtils'
@@ -8,16 +8,18 @@ import { MessageActions } from './MessageActions'
 import { PlanApproval } from './PlanApproval'
 import { ThinkingLine } from './RunProgress'
 import { BuildReplyCard } from './BuildReplyCard'
+import { BuildSuggestion } from './BuildSuggestion'
 import { buildReply, readableBuildText } from './buildReply'
 
 /** One turn of the conversation: an assistant reply (thinking / build progress while pending) or a user message. */
-export function ChatMessage({ message, run, currentPreview = true, onOpenDetails, onOpenPreview, onFeedback, onEdit }: {
+export function ChatMessage({ message, run, currentPreview = true, onOpenDetails, onOpenPreview, onFeedback, onEdit, onBuild }: {
   message: Message; run?: AgentRun; steps: AgentStep[]
   currentPreview?: boolean
   onOpenDetails: () => void; onOpenPreview: () => void
   onOpenThinking: (reasoning: string, seconds: number) => void
   onFeedback: (feedback: MessageFeedback | null) => void
   onEdit: (content: string) => void
+  onBuild?: (action: SuggestedAction) => Promise<void>
 }) {
   if (message.role === 'USER') return <UserMessage message={message} onEdit={onEdit} />
   const pending = message.status === 'PENDING' || (message.status === 'STREAMING' && !message.content)
@@ -34,6 +36,8 @@ export function ChatMessage({ message, run, currentPreview = true, onOpenDetails
           <>
             {(!build || (run?.status === 'DONE' && run.codeSavedAt && content)) && <Markdown content={content} />}
             {run?.mode === 'PLAN' && run.status === 'DONE' && run.planAvailable && <PlanApproval run={run} />}
+            {message.status === 'COMPLETE' && message.suggestedAction && !active
+              && <BuildSuggestion action={message.suggestedAction} onBuild={onBuild} />}
             <MessageActions message={{ ...message, content: build ? (run?.status === 'DONE' ? content : run ? buildReply(run).text : '') : message.content }} run={run} hasPreview={currentPreview && !!run && buildReply(run).preview}
               onOpenPreview={onOpenPreview} onFeedback={onFeedback} />
           </>

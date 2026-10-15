@@ -33,7 +33,13 @@ class BootHibernateDriftIT {
                 jdbc.update("insert into requirement_sessions(id,project_id,status,source_prompt,created_at,updated_at) values (?,?,'DRAFT','fixture',now(),now())",UUID.randomUUID(),UUID.randomUUID());
             }
             try(var app=new SpringApplicationBuilder(BootConfig.class).environment(env).web(WebApplicationType.NONE).run("--spring.flyway.enabled=true","--spring.flyway.baseline-on-migrate=true","--spring.flyway.baseline-version=16","--spring.flyway.schemas="+schema,"--spring.flyway.default-schema="+schema,"--spring.datasource.hikari.schema="+schema)){
-                var flyway=app.getBean(Flyway.class);assertEquals("36",flyway.info().current().getVersion().toString());
+                var flyway = app.getBean(Flyway.class);
+                assertEquals("42", flyway.info().current().getVersion().toString());
+                assertEquals(2, jdbc.queryForObject(
+                        "select count(*) from information_schema.columns where table_schema=? "
+                                + "and table_name='auth_refresh_tokens' "
+                                + "and column_name in ('replacement_hash','retry_used_at') and is_nullable='YES'",
+                        Integer.class, schema));
                 assertEquals(1,jdbc.queryForObject("select count(*) from information_schema.tables where table_schema=? and table_name='agent_behavior_criteria'",Integer.class,schema));
                 if(legacy){assertEquals(1,jdbc.queryForObject("select count(*) from flyway_schema_history where type='BASELINE' and version='16'",Integer.class));assertEquals(0,jdbc.queryForObject("select count(*) from agent_runs where save_recovery_required is null",Integer.class));assertEquals(0,jdbc.queryForObject("select count(*) from requirement_sessions where answer_revision is null",Integer.class));}
                 assertEquals(0,flyway.migrate().migrationsExecuted);

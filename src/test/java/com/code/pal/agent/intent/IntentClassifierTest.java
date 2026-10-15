@@ -16,7 +16,7 @@ class IntentClassifierTest {
     }
     @Test void concreteTasksPathsAndHinglishActionsStillRouteWithoutAClassificationCall() {
         var model=mock(LlmClient.class);var classifier=new IntentClassifier(model,new AgentProperties());
-        for(String text:List.of("a to do app","ek app banao","fix src/App.tsx","Build a calculator","continue"))assertEquals(AgentIntent.TASK,classifier.classify(text),text);
+        for(String text:List.of("a to do app","ek app banao","fix src/App.tsx","Build a calculator"))assertEquals(AgentIntent.TASK,classifier.classify(text),text);
         verifyNoInteractions(model);
     }
 }

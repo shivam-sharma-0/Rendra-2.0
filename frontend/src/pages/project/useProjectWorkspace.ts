@@ -196,11 +196,12 @@ export function useProjectWorkspace(id: string) {
   const requestEdit = useCallback((text: string) => setEditRequest({ text, nonce: Date.now() }), [])
   const [sendError, setSendError] = useState<string>()
 
-  const send = useCallback(async (prompt: string, mode: ProjectType, files: File[] = []) => {
+  const send = useCallback(async (prompt: string, mode: ProjectType, files: File[] = [], attachmentPaths: string[] = [], proposalId?: string) => {
     setSendError(undefined)
     try {
       const uploaded = files.length ? await projectApi.uploadAttachments(id, files) : []
-      const created = await messageApi.post(id, prompt, mode, uploaded.map((file) => file.path))
+      const paths = [...attachmentPaths, ...uploaded.map((file) => file.path)]
+      const created = await messageApi.post(id, prompt, mode, paths, proposalId)
       // The agent can finish (and its realtime updates can land) before this response does, since
       // ids are client-generated and shared between this response and the realtime stream. Skip any
       // id already in state instead of blindly appending, or a fresher realtime row gets a stale,

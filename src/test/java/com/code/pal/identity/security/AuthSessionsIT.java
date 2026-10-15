@@ -1,5 +1,6 @@
 package com.code.pal.identity.security;
 import com.code.pal.identity.domain.User;
+import com.code.pal.identity.exception.InvalidCredentialsException;
 import com.code.pal.testsupport.CodexJpaFixture;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -24,6 +25,8 @@ class AuthSessionsIT {
         var user=user();var initial=sessions.issue(user);assertTrue(sessions.accessAllowed(jwt.parse(initial.accessToken())));
         assertFalse(initial.refreshToken().equals(jdbc.queryForObject("select token_hash from auth_refresh_tokens where session_id=?",String.class,jwt.sessionId(jwt.parse(initial.refreshToken())))));
         var rotated=sessions.rotate(user,jwt.parse(initial.refreshToken()),initial.refreshToken());assertNotEquals(initial.refreshToken(),rotated.refreshToken());assertTrue(sessions.accessAllowed(jwt.parse(rotated.accessToken())));
+        jdbc.update("update auth_refresh_tokens set used_at=clock_timestamp()-interval '21 seconds' where token_hash in (select token_hash from auth_refresh_tokens where session_id=? and used_at is not null)",
+                jwt.sessionId(jwt.parse(initial.refreshToken())));
         assertThrows(com.code.pal.identity.exception.InvalidCredentialsException.class,()->sessions.rotate(user,jwt.parse(initial.refreshToken()),initial.refreshToken()));
         assertFalse(sessions.accessAllowed(jwt.parse(initial.accessToken())));assertFalse(sessions.accessAllowed(jwt.parse(rotated.accessToken())));
         assertThrows(com.code.pal.identity.exception.InvalidCredentialsException.class,()->sessions.rotate(user,jwt.parse(rotated.refreshToken()),rotated.refreshToken()));
@@ -35,14 +38,53 @@ class AuthSessionsIT {
         assertFalse(sessions.accessAllowed(jwt.parse(active.accessToken())));assertThrows(com.code.pal.identity.exception.InvalidCredentialsException.class,()->sessions.rotate(user,jwt.parse(active.refreshToken()),active.refreshToken()));
         assertFalse(sessions.accessAllowed(jwt.parse(jwt.generateAccessToken(user))));
     }
-    @Test void simultaneousUseCannotIssueTwoValidRefreshResponses() throws Exception {
+    @Test void simultaneousUseAllowsOneGraceRetryAndKeepsOneCurrentRefreshToken() throws Exception {
         var user=user();var issued=sessions.issue(user);var start=new CountDownLatch(1);var successes=new java.util.concurrent.atomic.AtomicInteger();var rejected=new java.util.concurrent.atomic.AtomicInteger();
         try(var pool=Executors.newFixedThreadPool(2)) {
             var jobs=new ArrayList<Future<?>>();for(int i=0;i<2;i++)jobs.add(pool.submit(()->{try{start.await();sessions.rotate(user,jwt.parse(issued.refreshToken()),issued.refreshToken());successes.incrementAndGet();}
                 catch(com.code.pal.identity.exception.InvalidCredentialsException replay){rejected.incrementAndGet();}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new IllegalStateException(interrupted);}}));
             start.countDown();for(var job:jobs)job.get(10,TimeUnit.SECONDS);
         }
-        assertEquals(1,successes.get());assertEquals(1,rejected.get());assertFalse(sessions.accessAllowed(jwt.parse(issued.accessToken())));
+        assertEquals(2,successes.get());assertEquals(0,rejected.get());
+        UUID family = jwt.sessionId(jwt.parse(issued.accessToken()));
+        assertEquals(1, jdbc.queryForObject("select count(*) from auth_refresh_tokens where session_id=? and used_at is null",
+                Integer.class, family));
+        assertTrue(sessions.accessAllowed(jwt.parse(issued.accessToken())));
+    }
+
+    @Test
+    void lostRefreshResponseCanBeRetriedOnceWithoutRevokingTheFamily() {
+        var user = user();
+        var original = sessions.issue(user);
+        var lost = sessions.rotate(user, jwt.parse(original.refreshToken()), original.refreshToken());
+        var retried = assertDoesNotThrow(() -> sessions.rotate(user,
+                jwt.parse(original.refreshToken()), original.refreshToken()));
+        assertNotEquals(lost.refreshToken(), retried.refreshToken());
+        assertTrue(sessions.accessAllowed(jwt.parse(retried.accessToken())));
+        assertThrows(InvalidCredentialsException.class,
+                () -> sessions.rotate(user, jwt.parse(original.refreshToken()), original.refreshToken()));
+        assertFalse(sessions.accessAllowed(jwt.parse(retried.accessToken())));
+    }
+
+    @Test
+    void olderTokenWithinTwentySecondsStillRevokesTheFamily() {
+        var user = user();
+        var first = sessions.issue(user);
+        var second = sessions.rotate(user, jwt.parse(first.refreshToken()), first.refreshToken());
+        var third = sessions.rotate(user, jwt.parse(second.refreshToken()), second.refreshToken());
+        assertThrows(InvalidCredentialsException.class,
+                () -> sessions.rotate(user, jwt.parse(first.refreshToken()), first.refreshToken()));
+        assertFalse(sessions.accessAllowed(jwt.parse(third.accessToken())));
+    }
+
+    @Test
+    void retryMustBelongToTheSameUserAndSession() {
+        var owner = user();
+        var issued = sessions.issue(owner);
+        sessions.rotate(owner, jwt.parse(issued.refreshToken()), issued.refreshToken());
+        assertThrows(InvalidCredentialsException.class,
+                () -> sessions.rotate(user(), jwt.parse(issued.refreshToken()), issued.refreshToken()));
+        assertTrue(sessions.accessAllowed(jwt.parse(issued.accessToken())));
     }
     @Configuration @Import(AuthSessions.class) static class Services {
         @Bean JwtService jwt() throws Exception {var generator=KeyPairGenerator.getInstance("RSA");generator.initialize(2048);var key=generator.generateKeyPair();return new JwtService((RSAPrivateKey)key.getPrivate(),(RSAPublicKey)key.getPublic(),900000,604800000,1800000);}

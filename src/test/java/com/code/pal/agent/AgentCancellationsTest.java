@@ -1,6 +1,7 @@
 package com.code.pal.agent;
 
 import com.code.pal.agent.queue.AgentJobQueue;
+import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.runtime.RunCancellation;
 import org.junit.jupiter.api.Test;
 
@@ -55,5 +56,19 @@ class AgentCancellationsTest {
         cancellations.unregister(local);
         assertFalse(cancellations.cancelLocal(local));
         cancellations.shutdown();
+    }
+
+    @Test
+    void registrationWithNoDurableStopSurvivesRedisFailure() {
+        var queue = mock(AgentJobQueue.class);
+        var runs = mock(AgentRunRepository.class);
+        UUID id = UUID.randomUUID();
+        when(queue.isCancelRequested(id)).thenThrow(new IllegalStateException("Redis unavailable"));
+        var registry = new AgentCancellations(queue, runs);
+        try {
+            assertFalse(registry.register(id).isCancelled());
+        } finally {
+            registry.shutdown();
+        }
     }
 }

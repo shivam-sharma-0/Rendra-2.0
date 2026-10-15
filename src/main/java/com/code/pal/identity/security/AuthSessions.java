@@ -1,16 +1,19 @@
 package com.code.pal.identity.security;
 
 import com.code.pal.identity.domain.User;
-import com.code.pal.identity.dto.*;
+import com.code.pal.identity.dto.AuthResponse;
+import com.code.pal.identity.dto.UserResponse;
 import com.code.pal.identity.exception.InvalidCredentialsException;
 import io.jsonwebtoken.Claims;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.*;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.*;
+import java.util.UUID;
+import java.util.HexFormat;
 
 /** Hash-only refresh families. Reuse revocation commits before reporting an invalid session. */
 @Service
@@ -29,19 +32,66 @@ public final class AuthSessions {
             saveRefresh(id,refresh,expiry);return response(user,id,refresh);
         });
     }
-    private record RefreshRow(UUID session,Instant expiry,boolean used,boolean revoked) {}
+    private record RefreshRow(UUID session, Instant expiry, boolean used, boolean revoked, String replacement) {}
     public AuthResponse rotate(User user,Claims claims,String previous) {
-        UUID session=jwt.sessionId(claims);if(session==null)throw invalid();
-        AuthResponse result=rotating.execute(status->{
-            var rows=jdbc.query("select s.id,s.expires_at,r.used_at is not null as used,s.revoked_at is not null as revoked from auth_refresh_tokens r join auth_sessions s on s.id=r.session_id where r.token_hash=? and s.id=? and s.user_id=? for update of s,r",
-                    (row,n)->new RefreshRow(row.getObject("id",UUID.class),row.getTimestamp("expires_at").toInstant(),row.getBoolean("used"),row.getBoolean("revoked")),hash(previous),session,user.getId());
-            if(rows.isEmpty())return null;var row=rows.getFirst();
-            if(row.used()){revoke(session);return null;}
-            if(row.revoked() || !row.expiry().isAfter(Instant.now()))return null;
-            jdbc.update("update auth_refresh_tokens set used_at=clock_timestamp() where token_hash=?",hash(previous));
-            String next=jwt.generateRefreshToken(user,session);saveRefresh(session,next,row.expiry());return response(user,session,next);
+        UUID session = jwt.sessionId(claims);
+        if (session == null) {
+            throw invalid();
+        }
+        String previousHash = hash(previous);
+        AuthResponse result = rotating.execute(status -> {
+            var rows = jdbc.query("select s.id,s.expires_at,r.used_at is not null as used,"
+                            + "s.revoked_at is not null as revoked,r.replacement_hash "
+                            + "from auth_refresh_tokens r join auth_sessions s on s.id=r.session_id "
+                            + "where r.token_hash=? and s.id=? and s.user_id=? for update of s,r",
+                    (row, index) -> new RefreshRow(row.getObject("id", UUID.class),
+                            row.getTimestamp("expires_at").toInstant(), row.getBoolean("used"),
+                            row.getBoolean("revoked"), row.getString("replacement_hash")),
+                    previousHash, session, user.getId());
+            if (rows.isEmpty()) {
+                return null;
+            }
+            RefreshRow row = rows.getFirst();
+            if (row.revoked() || !row.expiry().isAfter(Instant.now())) {
+                return null;
+            }
+            String currentHash = previousHash;
+            if (row.used()) {
+                if (row.replacement() == null || !consumeRetry(previousHash)
+                        || !consumeCurrentReplacement(session, row.replacement())) {
+                    revoke(session);
+                    return null;
+                }
+                currentHash = row.replacement();
+            }
+            return rotateCurrent(user, session, currentHash, row.expiry());
         });
-        if(result==null)throw invalid();return result;
+        if (result == null) {
+            throw invalid();
+        }
+        return result;
+    }
+
+    private boolean consumeRetry(String previousHash) {
+        return jdbc.update("update auth_refresh_tokens set retry_used_at=clock_timestamp() "
+                        + "where token_hash=? and retry_used_at is null "
+                        + "and used_at>=clock_timestamp()-interval '20 seconds'", previousHash) == 1;
+    }
+
+    private boolean consumeCurrentReplacement(UUID session, String replacement) {
+        return jdbc.update("update auth_refresh_tokens set used_at=clock_timestamp() "
+                        + "where token_hash=? and session_id=? and used_at is null and expires_at>clock_timestamp()",
+                replacement, session) == 1;
+    }
+
+    private AuthResponse rotateCurrent(User user, UUID session, String currentHash, Instant expiry) {
+        String next = jwt.generateRefreshToken(user, session);
+        saveRefresh(session, next, expiry);
+        if (jdbc.update("update auth_refresh_tokens set used_at=coalesce(used_at,clock_timestamp()),"
+                + "replacement_hash=? where token_hash=? and session_id=?", hash(next), currentHash, session) != 1) {
+            throw new IllegalStateException("Refresh token rotation lost its session binding");
+        }
+        return response(user, session, next);
     }
     private void saveRefresh(UUID session,String token,Instant expiry){jdbc.update("insert into auth_refresh_tokens(token_hash,session_id,expires_at) values (?,?,?)",hash(token),session,java.sql.Timestamp.from(expiry));}
     private AuthResponse response(User user,UUID id,String refresh){return new AuthResponse(jwt.generateAccessToken(user,id),refresh,UserResponse.from(user));}

@@ -6,6 +6,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import java.util.UUID;
+import java.util.List;
 
 @Service
 public class RestoreJournal {
@@ -27,5 +28,21 @@ public class RestoreJournal {
     }
     public String readState(UUID id) {
         return tx.execute(s -> jdbc.queryForObject("select state from agent_code_restores where id=?",String.class,id));
+    }
+
+    public record Entry(UUID id, UUID runId, UUID projectId, String backup, String state) {}
+
+    public List<Entry> pending() {
+        return jdbc.query("select id,run_id,project_id,backup_root,state from agent_code_restores "
+                        + "where state not in ('RESTORED','ROLLED_BACK') order by created_at limit 100",
+                (row, index) -> new Entry(row.getObject("id", UUID.class), row.getObject("run_id", UUID.class),
+                        row.getObject("project_id", UUID.class), row.getString("backup_root"), row.getString("state")));
+    }
+
+    public Entry read(UUID id) {
+        return jdbc.query("select id,run_id,project_id,backup_root,state from agent_code_restores where id=?",
+                (row, index) -> new Entry(row.getObject("id", UUID.class), row.getObject("run_id", UUID.class),
+                        row.getObject("project_id", UUID.class), row.getString("backup_root"), row.getString("state")),
+                id).stream().findFirst().orElse(null);
     }
 }

@@ -1,5 +1,5 @@
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
-import { type ProjectType } from '../../../api/projects'
+import { type Project, type ProjectType } from '../../../api/projects'
 import { NeuIconButton } from '../../../components/neu'
 import { ICON } from '../../../rendra/icons'
 import { Ico } from '../../../rendra/parts'
@@ -10,17 +10,42 @@ import type { Quote } from '../workspaceTypes'
 /** Import and skills are not built yet; their menu items just close the menu, as before. */
 const notYet = () => {}
 
-/** The workspace prompt box. Enter sends, Shift+Enter adds a line. */
-export function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest }: {
-  defaultMode: ProjectType; onSend: (prompt: string, mode: ProjectType, files: File[]) => void
+type ComposerProps = {
+  project: Pick<Project, 'id' | 'type'> | null
+  onSend: (prompt: string, mode: ProjectType, files: File[]) => void
   quote: Quote | null; onClearQuote: () => void
   editRequest: { text: string; nonce: number } | null
+}
+
+const modeKey = (projectId: string) => `rendra:project-mode:${projectId}`
+
+function rememberedMode(projectId: string, fallback: ProjectType): ProjectType {
+  try {
+    const saved = localStorage.getItem(modeKey(projectId))
+    if (saved === 'BUILD' || saved === 'PLAN' || saved === 'CHAT') return saved
+  } catch { /* Storage may be blocked; the loaded project's mode remains usable. */ }
+  return fallback
+}
+
+/** Mount only after loading the project; project changes reset drafts and restore that project's mode. */
+export function Composer({ project, ...props }: ComposerProps) {
+  return project ? <LoadedComposer key={project.id} project={project} {...props} /> : null
+}
+
+/** Enter sends, Shift+Enter adds a line. */
+function LoadedComposer({ project, onSend, quote, onClearQuote, editRequest }: Omit<ComposerProps, 'project'> & {
+  project: Pick<Project, 'id' | 'type'>
 }) {
   const [draft, setDraft] = useState('')
   const [files, setFiles] = useState<File[]>([])
-  const [mode, setMode] = useState<ProjectType>(defaultMode)
+  const [mode, setMode] = useState(() => rememberedMode(project.id, project.type))
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  const chooseMode = (next: ProjectType) => {
+    setMode(next)
+    try { localStorage.setItem(modeKey(project.id), next) } catch { /* Keep the in-memory selection. */ }
+  }
 
   useEffect(() => { if (quote) textareaRef.current?.focus() }, [quote])
 
@@ -76,7 +101,7 @@ export function Composer({ defaultMode, onSend, quote, onClearQuote, editRequest
       <div className="ws-composer__bar">
         <input type="file" multiple hidden ref={fileInputRef} onChange={addFiles} />
         <AttachMenu size="sm" side="above" onUpload={() => fileInputRef.current?.click()} onImport={notYet} onUseSkill={notYet} />
-        <ModeSwitch mode={mode} onChange={setMode} />
+        <ModeSwitch mode={mode} onChange={chooseMode} />
         <span className="ws-grow" />
         <NeuIconButton type="submit" variant="accent" className="ws-composer__send" aria-label="Send" disabled={!draft.trim()}>
           <Ico d={ICON.arrowUp} size={16} sw={2.4} />

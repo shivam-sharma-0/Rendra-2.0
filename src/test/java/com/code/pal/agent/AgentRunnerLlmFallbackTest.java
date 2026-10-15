@@ -6,7 +6,6 @@ import com.code.pal.agent.context.ProjectContextService;
 import com.code.pal.agent.domain.AgentIntent;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.RunStatus;
-import com.code.pal.agent.intent.IntentClassifier;
 import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.llm.LlmException;
 import com.code.pal.agent.queue.AgentJobQueue;
@@ -91,7 +90,9 @@ class AgentRunnerLlmFallbackTest {
     @Test void exhaustedRoutesStopWithoutRepeatingDuplicateConfiguredModels() throws Exception {
         for(var intent:List.of(AgentIntent.TASK,AgentIntent.CONVERSATIONAL)) {
             ScriptedModel model=new ScriptedModel(request->{throw new com.code.pal.agent.llm.LlmHttpException(401,"Every provider key was rejected");},request->{throw new com.code.pal.agent.llm.LlmHttpException(503,"Unavailable");},request->"must not repeat");
-            Fixture fixture=new Fixture(model,intent,"Explain the project structure.",List.of("chat-a","chat-a","chat-b"));
+            Fixture fixture = new Fixture(model, intent,
+                    intent == AgentIntent.CONVERSATIONAL ? "hello" : "Explain the project structure.",
+                    List.of("chat-a", "chat-a", "chat-b"));
             assertEquals(RunStatus.FAILED,fixture.runner.run(fixture.run).status());assertEquals(List.of("chat-a","chat-b"),model.models);fixture.cancellations.shutdown();
         }
     }
@@ -340,15 +341,13 @@ class AgentRunnerLlmFallbackTest {
             when(messages.findById("assistant-1")).thenReturn(Optional.empty());
             AgentHeartbeat heartbeat = mock(AgentHeartbeat.class);
             when(heartbeat.start(runId, projectId)).thenReturn(() -> { });
-            IntentClassifier classifier = mock(IntentClassifier.class);
-            when(classifier.classify(any())).thenReturn(intent);
 
             AgentJobQueue queue = mock(AgentJobQueue.class);
             cancellations = new AgentCancellations(queue);
             AgentToolExecutor tools = mock(AgentToolExecutor.class);
             when(tools.execute(eq("listFiles"), anyCollection(), anyMap(), any()))
                     .thenReturn(ToolExecutionResult.success(List.of()));
-            runner = new AgentRunner(model, classifier, new ToolRegistry(List.of(new ListFilesTool())),
+            runner = new AgentRunner(model, new ToolRegistry(List.of(new ListFilesTool())),
                     tools, mock(AgentEvents.class), properties,
                     new ProjectContextService(properties, new ObjectMapper()), runs, projects, messages,
                     mock(RealtimeService.class), workspace.files, heartbeat, queue, new ObjectMapper(),

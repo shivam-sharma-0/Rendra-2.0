@@ -4,7 +4,6 @@ import com.code.pal.agent.change.*;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.context.ProjectContextService;
 import com.code.pal.agent.domain.*;
-import com.code.pal.agent.intent.IntentClassifier;
 import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
@@ -73,8 +72,7 @@ class AgentRepairStopTest {
         var messages = mock(MessageRepository.class);
         com.code.pal.testsupport.QueuedRequestFixture.stubOriginal(messages,run,Message.user(workspace.projectId,"repair-user","Update the application",ProjectType.BUILD,7L));
         var heartbeat = mock(AgentHeartbeat.class); when(heartbeat.start(run.getId(),workspace.projectId)).thenReturn(()->{});
-        var intent = mock(IntentClassifier.class); when(intent.classify(any())).thenReturn(AgentIntent.TASK);
-        var runner = new AgentRunner(model,intent,registry,executor,mock(AgentEvents.class),props,new ProjectContextService(props,mapper),
+        var runner = new AgentRunner(model,registry,executor,mock(AgentEvents.class),props,new ProjectContextService(props,mapper),
                 runs,rights,messages,mock(com.code.pal.realtime.RealtimeService.class),workspace.files,heartbeat,mock(AgentJobQueue.class),mapper,changes,validation,mock(com.code.pal.notification.service.NotificationService.class));
         var result = runner.run(run);
         assertEquals(RunStatus.FAILED,result.status());
