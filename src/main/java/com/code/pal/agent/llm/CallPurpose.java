@@ -5,7 +5,6 @@ public enum CallPurpose {
     /** The agent loop of a build, plan or chat run. */
     AGENT,
     SMALL_TALK,
-    INTENT,
     VISION,
     REQUIREMENTS,
     PLANNER,

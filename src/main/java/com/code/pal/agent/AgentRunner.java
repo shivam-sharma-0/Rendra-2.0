@@ -33,6 +33,7 @@ import com.code.pal.agent.preview.DraftPreviewService;
 import com.code.pal.agent.preview.SiteBuildService;
 import com.code.pal.agent.prompt.PromptLoader.Prompt;
 import com.code.pal.agent.prompt.PromptLoader;
+import com.code.pal.agent.prompt.BuildPrompt;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.route.RunSize;
@@ -504,7 +505,7 @@ public class AgentRunner implements AgentRuntime {
             List<String> attachments, String resumed) {
         AgentRun run = state.run;
         List<LlmMessage> convo = new ArrayList<>();
-        convo.add(LlmMessage.system(systemPrompt(run.getMode())));
+        convo.add(LlmMessage.system(systemPrompt(run, state.ctx.root())));
         if (!state.projectContext.projectContextMessage().isBlank()) {
             convo.add(LlmMessage.user(state.projectContext.projectContextMessage()));
         }
@@ -1590,14 +1591,27 @@ public class AgentRunner implements AgentRuntime {
         return audit;
     }
 
-    private String systemPrompt(ProjectType mode) {
+    private String systemPrompt(AgentRun run, String root) {
         String base = PromptLoader.load(Prompt.SYSTEM_BASE);
-        String modePrompt = switch (mode) {
-        case BUILD -> PromptLoader.load(Prompt.MODE_BUILD);
+        String modePrompt = switch (run.getMode()) {
+        case BUILD -> BuildPrompt.compose(BuildPrompt.stack(projectShape(run.getProjectId(), root), approvedStorage(run)));
         case CHAT -> PromptLoader.load(Prompt.MODE_CHAT);
         case PLAN -> PromptLoader.load(Prompt.MODE_PLAN);
         };
         return base + "\n\n" + modePrompt;
+    }
+
+    private BuildPrompt.ProjectShape projectShape(UUID projectId, String root) {
+        return new BuildPrompt.ProjectShape(files.exists(projectId, root, "server/package.json"),
+                files.exists(projectId, root, "package.json"), files.exists(projectId, root, "index.html"));
+    }
+
+    private BuildDecisions.Storage approvedStorage(AgentRun run) {
+        if (buildDecisions == null) {
+            return null;
+        }
+        var choice = buildDecisions.state(run.getProjectId()).choice();
+        return choice == null ? null : choice.storage();
     }
 
     private void setStatus(AgentRun run, RunStatus status) {

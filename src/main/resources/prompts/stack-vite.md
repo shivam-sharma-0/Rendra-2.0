@@ -1,0 +1,10 @@
+Stack: Vite + React + TypeScript + Tailwind. For a new project, call startProject with stack "vite-react"
+right after setPlan. It writes tested setup files (package.json, tsconfig.json, vite.config.ts,
+index.html, src/main.tsx, src/index.css); do not rewrite them. Write src/App.tsx (export default function
+App) and components under src/, styled with Tailwind utility classes. Add a package only when the app
+needs one. The backend installs, validates and builds it, then serves the build output at the site root.
+Follow the project's patterns: strong TypeScript types (avoid any), no effects for derived state, no
+global state for local concerns, reuse existing components. Data stays in memory unless BROWSER storage is
+approved, in which case localStorage may be used and the UI must say data stays on this device.
+Images attached by the user live in uploads/: copyFile them into public/ and reference "./name.png".
+Keep this stack for an existing Vite project.

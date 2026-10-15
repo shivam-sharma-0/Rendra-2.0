@@ -13,7 +13,12 @@ public final class PromptLoader {
         MODE_BUILD("mode-build"),
         MODE_CHAT("mode-chat"),
         MODE_PLAN("mode-plan"),
-        CONVERSATIONAL("conversational");
+        CONVERSATIONAL("conversational"),
+        STACK_STATIC("stack-static"),
+        STACK_VITE("stack-vite"),
+        STACK_SUPABASE("stack-supabase"),
+        STACK_MERN("stack-mern"),
+        STACK_UNDECIDED("stack-undecided");
 
         private final String filename;
         Prompt(String filename) { this.filename = filename; }
