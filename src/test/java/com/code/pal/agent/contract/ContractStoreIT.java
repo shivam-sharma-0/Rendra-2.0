@@ -4,6 +4,11 @@ import com.code.pal.agent.domain.*;
 import com.code.pal.agent.lease.*;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.workspace.*;
+import com.code.pal.message.domain.Message;
+import com.code.pal.message.domain.MessageStatus;
+import com.code.pal.message.dto.CreateMessageRequest;
+import com.code.pal.message.repository.MessageRepository;
+import com.code.pal.message.service.ConversationProposals;
 import com.code.pal.project.brief.ApprovedProjectMemory;
 import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.domain.*;
@@ -13,8 +18,12 @@ import com.code.pal.project.service.ProjectService;
 import com.code.pal.testsupport.CodexJpaFixture;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.annotation.*;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -78,6 +87,52 @@ class ContractStoreIT {
         assertThrows(RuntimeException.class,()->store.create(f.plan,f.contract,f.basis,new BuildContract.Limits(1,1,1,1)));
         f.done();store.approve(7L,f.project,f.plan.getId(),f.contract.id(),store.forRun(f.project,f.plan.getId()).hash());
         var other=new Fixture();assertThrows(RuntimeException.class,()->store.attach(other.run(ProjectType.BUILD),store.forRun(f.project,f.plan.getId()),f.contract.limits()));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void buildThisOnAnApprovedPlanReusesItsExactContractWithoutAMagicPhrase(boolean explicitButton) {
+        var fixture = new Fixture();
+        var draft = fixture.draft();
+        fixture.done();
+        store.approve(7L, fixture.project, fixture.plan.getId(), fixture.contract.id(), draft.hash());
+        String key = UUID.randomUUID().toString().replace("-", "");
+        var messages = app.getBean(MessageRepository.class);
+        Message user = Message.user(fixture.project, "u_" + key, "Add a calculator", ProjectType.PLAN, 7L);
+        messages.saveAndFlush(user);
+        Message offer = Message.assistantPlaceholder(fixture.project, "a_" + key, user.getId(), ProjectType.PLAN);
+        offer.setStatus(MessageStatus.COMPLETE);
+        offer.setContent("Build the reviewed calculator plan.");
+        offer.setSuggestedBuildText(user.getContent());
+        offer.setProposalPlanId(fixture.plan.getId());
+        messages.saveAndFlush(offer);
+        jdbc.update("update agent_runs set message_id=? where id=?", offer.getId(), fixture.plan.getId());
+        var request = new CreateMessageRequest("b_" + key, explicitButton ? user.getContent() : "haan",
+                ProjectType.BUILD, "c_" + key, List.of(), explicitButton ? offer.getId() : null);
+        var tx = new TransactionTemplate(app.getBean(PlatformTransactionManager.class));
+
+        var resolved = tx.execute(status -> new ConversationProposals(messages).resolve(7L, fixture.project, request, ProjectType.BUILD));
+        assertNotNull(resolved);
+        var reused = store.reusable(fixture.project, resolved.prompt(), fixture.contract.limits());
+
+        assertNotNull(reused, "The accepted reviewed proposal must not require typing an exact magic phrase");
+        assertEquals(fixture.contract.id(), reused.contract().id());
+        Message acceptedUser = Message.user(fixture.project, request.id(), request.message(), ProjectType.BUILD, 7L);
+        acceptedUser.setSourceProposalId(offer.getId());
+        acceptedUser.setResolvedRequestText(resolved.prompt());
+        messages.saveAndFlush(acceptedUser);
+        Message acceptedReply = Message.assistantPlaceholder(fixture.project, request.aiMessageId(), request.id(), ProjectType.BUILD);
+        messages.saveAndFlush(acceptedReply);
+        var build = fixture.run(ProjectType.BUILD);
+        build.setMessageId(acceptedReply.getId());
+        app.getBean(AgentRunRepository.class).saveAndFlush(build);
+        assertEquals(fixture.plan.getId(), store.acceptedPlanRun(build), "S-tier eligibility must use this accepted binding");
+        var foreignActor = AgentRun.builder().id(build.getId()).projectId(fixture.project).userId(8L).build();
+        assertNull(store.acceptedPlanRun(foreignActor), "A different actor cannot acquire the approved plan binding");
+        assertEquals(fixture.contract.id(), store.attach(build, reused, fixture.contract.limits()).contract().id());
+        assertEquals(1, jdbc.queryForObject("select count(*) from agent_build_contracts where project_id=?", Integer.class, fixture.project));
+        jdbc.update("update messages set source_proposal_id=null where id=?", acceptedUser.getId());
+        assertNull(store.acceptedPlanRun(build), "A wrapper alone does not prove plan acceptance");
     }
     @Configuration @Import({ContractStore.class,ApprovedProjectMemory.class,ProjectLeaseService.class,ProjectMutationLocks.class})
     static class Services {

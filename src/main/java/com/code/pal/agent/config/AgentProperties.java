@@ -278,6 +278,7 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     @Getter
     @Setter
     public static class Llm {
+        private static final int CONVERSATIONAL_OUTPUT_CAP = 300;
         private String baseUrl;
         private String apiKey;
         private double temperature = 0.2;
@@ -312,11 +313,16 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
          */
         private int maxOutputTokens = 8_192;
         /** Output cap for a small-talk reply. */
-        private int smallTalkMaxOutputTokens = 1_024;
+        private int smallTalkMaxOutputTokens = CONVERSATIONAL_OUTPUT_CAP;
+
         /** Output cap for reading attached images (the vision models reason before they answer). */
         private int visionMaxOutputTokens = 4_096;
         /** Output cap for the one-word intent answer. */
         private int intentMaxOutputTokens = 32;
+
+        public void setSmallTalkMaxOutputTokens(int tokens) {
+            smallTalkMaxOutputTokens = Math.clamp(tokens, 1, CONVERSATIONAL_OUTPUT_CAP);
+        }
     }
 
     /** Per-user guards that stop one account from exhausting the shared (often free-tier) LLM quota. */
@@ -335,6 +341,8 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     @Setter
     public static class Provider {
         private String baseUrl;
+        /** Opt in only for providers that support stream_options.include_usage. */
+        private boolean includeStreamUsage;
         private String apiKey;
         private List<String> apiKeys = new ArrayList<>();
         /**

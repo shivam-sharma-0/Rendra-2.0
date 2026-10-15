@@ -260,7 +260,7 @@ class AgentRunnerLlmFallbackTest {
         ScriptedModel model = new ScriptedModel(request -> "Hi!");
         Fixture fixture = new Fixture(model, AgentIntent.CONVERSATIONAL, "hello");
         fixture.runner.run(fixture.run);
-        assertEquals(List.of(1_024), model.maxTokens);
+        assertEquals(List.of(300), model.maxTokens);
         fixture.cancellations.shutdown();
     }
 

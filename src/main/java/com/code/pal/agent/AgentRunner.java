@@ -1,76 +1,80 @@
 package com.code.pal.agent;
 
-import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.change.ChangeSetService;
-import com.code.pal.agent.plan.AgentPlanState;
+import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.context.ContextDiagnostics;
 import com.code.pal.agent.context.ContextMessage;
 import com.code.pal.agent.context.ConversationCompactor;
 import com.code.pal.agent.context.ProjectContext;
 import com.code.pal.agent.context.ProjectContextService;
-import com.code.pal.agent.lease.LeaseLostException;
 import com.code.pal.agent.context.ProjectFileSummary;
 import com.code.pal.agent.domain.AgentFailureReason;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.AgentStepType;
 import com.code.pal.agent.domain.RunStatus;
 import com.code.pal.agent.intent.RequestRouter;
-import com.code.pal.agent.prompt.PromptLoader;
-import com.code.pal.agent.prompt.PromptLoader.Prompt;
-import com.code.pal.agent.llm.LlmClient;
+import com.code.pal.agent.intent.UnclearReply;
+import com.code.pal.agent.lease.LeaseLostException;
+import com.code.pal.agent.llm.CallPurpose;
+import com.code.pal.agent.llm.LlmAccountingException;
+import com.code.pal.agent.llm.LlmCallContext;
+import com.code.pal.agent.llm.LlmCancelledException;
 import com.code.pal.agent.llm.LlmClient.LlmMessage;
 import com.code.pal.agent.llm.LlmClient.LlmRequest;
 import com.code.pal.agent.llm.LlmClient.LlmResult;
 import com.code.pal.agent.llm.LlmClient.ToolCall;
 import com.code.pal.agent.llm.LlmClient.ToolSpec;
-import com.code.pal.agent.llm.CallPurpose;
-import com.code.pal.agent.llm.LlmCallContext;
-import com.code.pal.agent.llm.LlmCancelledException;
-import com.code.pal.agent.llm.TokenEstimate;
+import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.llm.LlmException;
+import com.code.pal.agent.llm.LlmHttpException;
 import com.code.pal.agent.llm.LlmQuotaExceededException;
-import com.code.pal.agent.llm.LlmAccountingException;
+import com.code.pal.agent.llm.TokenEstimate;
+import com.code.pal.agent.plan.AgentPlanState;
+import com.code.pal.agent.preview.DraftPreviewService;
+import com.code.pal.agent.preview.SiteBuildService;
+import com.code.pal.agent.prompt.PromptLoader.Prompt;
+import com.code.pal.agent.prompt.PromptLoader;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.route.RunSize;
 import com.code.pal.agent.route.SizeTier;
 import com.code.pal.agent.route.SizeTierRules;
+import com.code.pal.agent.runtime.AgentPhase;
 import com.code.pal.agent.runtime.AgentRunResult;
 import com.code.pal.agent.runtime.AgentRuntime;
 import com.code.pal.agent.runtime.AgentRuntimeContext;
 import com.code.pal.agent.runtime.AgentRuntimeStatus;
-import com.code.pal.agent.runtime.AgentPhase;
 import com.code.pal.agent.runtime.RunCancellation;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.tool.AgentProjectMetadata;
 import com.code.pal.agent.tool.AgentTool;
 import com.code.pal.agent.tool.AgentToolExecutor;
-import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.tool.ToolExecutionResult;
+import com.code.pal.agent.tool.ToolRegistry;
 import com.code.pal.agent.usage.AgentUsagePolicy;
-import com.code.pal.agent.workspace.ProjectFiles;
-import com.code.pal.agent.preview.DraftPreviewService;
-import com.code.pal.agent.preview.SiteBuildService;
-import com.code.pal.agent.vision.VisionService;
 import com.code.pal.agent.validation.ProjectValidationService;
 import com.code.pal.agent.validation.ValidationReport;
+import com.code.pal.agent.vision.VisionService;
+import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.domain.MessageStatus;
 import com.code.pal.message.dto.MessageResponse;
 import com.code.pal.message.repository.MessageRepository;
 import com.code.pal.notification.domain.NotificationType;
 import com.code.pal.notification.service.NotificationService;
-import com.code.pal.project.domain.ProjectType;
-import com.code.pal.project.domain.Project;
-import com.code.pal.project.domain.ProjectStage;
 import com.code.pal.project.artifact.ProjectArtifactService;
 import com.code.pal.project.database.GeneratedDatabaseService;
+import com.code.pal.project.domain.Project;
+import com.code.pal.project.domain.ProjectStage;
+import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.realtime.RealtimeService;
 import com.code.pal.realtime.dto.RealtimeMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
@@ -239,19 +243,23 @@ public class AgentRunner implements AgentRuntime {
             String userRequest = accepted.request().getResolvedRequestText() == null
                     ? accepted.request().getContent() : accepted.request().getResolvedRequestText();
             List<String> attachments = accepted.request().executionAttachmentPaths();
-            RequestRouter.Route route = RequestRouter.route(userRequest, attachments, false);
+            RequestRouter.Route route = RequestRouter.route(run.getMode(), userRequest, attachments, false);
             ProjectType effectiveMode = RequestRouter.mode(run.getMode(), userRequest, attachments);
             if (effectiveMode != run.getMode()) {
                 run.setMode(effectiveMode);
                 owned(run, () -> runRepository.save(run));
             }
-            if (route == RequestRouter.Route.UNCLEAR
-                    || route == RequestRouter.Route.CHANGE && run.getMode() != ProjectType.BUILD) {
-                suggestBuild(run, userRequest, attachments);
+            String originalOffer = accepted.request().getSourceProposalId() == null ? accepted.request().getContent()
+                    : messageRepository.findByIdAndProjectId(accepted.request().getSourceProposalId(), run.getProjectId())
+                            .map(Message::getSuggestedBuildText).orElse(accepted.request().getContent());
+            if (route == RequestRouter.Route.CHANGE && run.getMode() != ProjectType.BUILD
+                    || route == RequestRouter.Route.QUESTION && RequestRouter.positiveChange(userRequest)) {
+                suggestBuild(run, originalOffer, attachments);
             }
             if (route == RequestRouter.Route.SMALL_TALK
-                    || route == RequestRouter.Route.UNCLEAR && attachments.isEmpty()) {
-                return runConversational(run, stream, history, userRequest, deadlineNanos);
+                    || route == RequestRouter.Route.UNCLEAR || RequestRouter.productQuestion(userRequest)) {
+                return runConversational(run, stream, history, userRequest, deadlineNanos,
+                        route == RequestRouter.Route.UNCLEAR, attachments);
             }
 
             if (run.getMode() == ProjectType.BUILD && buildDecisions != null) {
@@ -684,18 +692,22 @@ public class AgentRunner implements AgentRuntime {
     /** Chat models tried for one small-talk reply before it fails. */
     private static final int CONVERSATIONAL_MODEL_ATTEMPTS = 3;
 
-    /**
-     * Direct reply for a conversational turn (a greeting, thanks, etc.), skipping
-     * project-context
-     * assembly and the tool loop entirely so small talk answers instantly instead
-     * of paying for a
-     * full explore/plan/implement pass it never needed.
-     */
+    /** One no-tools reply. Only unclear turns need the compact project context and a structured decision. */
     private AgentRunResult runConversational(AgentRun run, DeltaBatcher stream, List<Message> history,
-            String userRequest, long deadlineNanos) {
+            String userRequest, long deadlineNanos, boolean unclear, List<String> attachments) {
         projects.requireAccessible(run.getUserId(), run.getProjectId());
         List<LlmMessage> convo = new ArrayList<>();
         convo.add(LlmMessage.system(PromptLoader.load(Prompt.CONVERSATIONAL)));
+        if (unclear) {
+            convo.add(LlmMessage.system(UnclearReply.POLICY));
+            convo.add(LlmMessage.user(projectContexts.compactSummary(files, run.getProjectId(), userRequest)));
+        }
+        if (!attachments.isEmpty() && vision != null) {
+            events.emit(run, AgentStepType.STATUS, "Reading attachments", Map.of("files", attachments));
+            convo.add(LlmMessage.user(VisionService.asContext(vision.describe(run.getProjectId(), attachments, userRequest))));
+        } else if (!attachments.isEmpty()) {
+            convo.add(LlmMessage.user("Uploaded context references (contents not inspected): " + attachments));
+        }
         List<Message> contextHistory = history.stream()
                 .filter(message -> message.getRole() != com.code.pal.message.domain.MessageRole.SYSTEM)
                 .toList();
@@ -718,6 +730,7 @@ public class AgentRunner implements AgentRuntime {
         convo.add(LlmMessage.user(userRequest));
 
         LlmResult res = null;
+        StringBuilder decisionText = new StringBuilder();
         LlmException lastFailure = null;
         var failedModels = new java.util.HashSet<AgentProperties.ModelSelection>();
         try (LlmCallContext.Scope smallTalk = LlmCallContext.purpose(CallPurpose.SMALL_TALK, true)) {
@@ -731,21 +744,33 @@ public class AgentRunner implements AgentRuntime {
                 if (failedModels.contains(selection) || !props.available(selection)) {
                     selection = props.untriedModel(ProjectType.CHAT, failedModels);
                 }
-                if (selection == null) throw lastFailure;
+                if (selection == null) {
+                    throw lastFailure;
+                }
                 log.info("model_called runId={} conversational=true attempt={} provider={} model={}", run.getId(), attempt,
                         selection.provider(), selection.model());
                 try {
                     res = llm.chatStreaming(new LlmRequest(selection.provider(), selection.model(), convo, List.of(),
                             props.getLlm().getTemperature(), callBudget(deadlineNanos))
-                            .withMaxTokens(props.getLlm().getSmallTalkMaxOutputTokens()), stream::append);
+                            .withMaxTokens(props.getLlm().getSmallTalkMaxOutputTokens()),
+                            unclear ? decisionText::append : stream::append);
                     props.markModelAvailable(selection);
                 } catch (LlmException providerFailure) {
-                    if (providerFailure instanceof LlmCancelledException) throw new AgentCancelledException();
-                    if (providerFailure instanceof LlmQuotaExceededException) throw providerFailure;
-                    if (providerFailure instanceof LlmAccountingException) throw providerFailure;
-                    if(providerFailure instanceof com.code.pal.agent.llm.LlmHttpException rejected && rejected.terminalRequest())throw providerFailure;
+                    if (providerFailure instanceof LlmCancelledException) {
+                        throw new AgentCancelledException();
+                    }
+                    if (providerFailure instanceof LlmQuotaExceededException
+                            || providerFailure instanceof LlmAccountingException) {
+                        throw providerFailure;
+                    }
+                    if (providerFailure instanceof LlmHttpException rejected
+                            && rejected.terminalRequest()) {
+                        throw providerFailure;
+                    }
                     requireNotCancelled(run);
-                    if (isPartialOutputFailure(providerFailure)) throw providerFailure;
+                    if (isPartialOutputFailure(providerFailure)) {
+                        throw providerFailure;
+                    }
                     markUnavailable(selection, providerFailure);
                     failedModels.add(selection);
                     lastFailure = providerFailure;
@@ -753,7 +778,17 @@ public class AgentRunner implements AgentRuntime {
                             run.getId(), selection.provider(), selection.model(), providerFailure.getMessage());
                 }
             }
-            if (res == null) throw lastFailure;
+            if (res == null) {
+                throw lastFailure;
+            }
+            if (unclear) {
+                var decision = UnclearReply.decode(objectMapper,
+                        res.content() == null ? decisionText.toString() : res.content(), userRequest);
+                if (decision.action().equals("build")) {
+                    suggestBuild(run, decision.offerText(), attachments);
+                }
+                stream.append(decision.reply());
+            }
             stream.flush();
             accountTokens(run, res);
         }
@@ -1271,13 +1306,26 @@ public class AgentRunner implements AgentRuntime {
     }
 
     private void updateAssistant(AgentRun run, String content, MessageStatus status) {
-        owned(run,()-> { messageRepository.findById(run.getMessageId()).ifPresent(message -> {
-            message.setContent(content);
-            message.setStatus(status);
-            Message saved = messageRepository.save(message);
-            realtime.sendToProject(run.getProjectId(),
-                    RealtimeMessage.of("MESSAGE_UPSERT", MessageResponse.from(saved)));
-        }); return null; });
+        owned(run, () -> {
+            messageRepository.findById(run.getMessageId()).ifPresent(message -> {
+                message.setContent(content);
+                message.setStatus(status);
+                Message saved = messageRepository.save(message);
+                var frame = RealtimeMessage.of("MESSAGE_UPSERT", MessageResponse.from(saved).withoutSuggestedAction());
+                Runnable broadcast = () -> realtime.sendToProject(run.getProjectId(), frame);
+                if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            broadcast.run();
+                        }
+                    });
+                } else {
+                    broadcast.run();
+                }
+            });
+            return null;
+        });
     }
 
     private String safeError(Exception e) {

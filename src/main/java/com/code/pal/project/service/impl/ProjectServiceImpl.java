@@ -194,16 +194,20 @@ public class ProjectServiceImpl implements ProjectService {
      * (not VIEWER).
      */
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = WorkspaceAccessDeniedException.class)
     public Project requireCanEdit(Long userId, UUID projectId) {
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(ProjectNotFoundException::new);
-        if (workspaceService.isMember(userId, project.getWorkspaceId()))
+        // This read-only permission probe is also used to hide write actions in readable conversations.
+        // A denial must not mark the caller's read transaction rollback-only when it is handled there.
+        if (workspaceService.isMember(userId, project.getWorkspaceId())) {
             return project;
+        }
         ProjectRole role = projectMemberRepository.findByProjectIdAndUserId(projectId, userId)
                 .map(ProjectMember::getRole).orElse(null);
-        if (role == ProjectRole.OWNER || role == ProjectRole.EDITOR)
+        if (role == ProjectRole.OWNER || role == ProjectRole.EDITOR) {
             return project;
+        }
         throw new WorkspaceAccessDeniedException();
     }
 

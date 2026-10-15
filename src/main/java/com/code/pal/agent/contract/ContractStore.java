@@ -5,6 +5,8 @@ import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.runtime.ReleaseSource;
 import com.code.pal.agent.workspace.ProjectFiles;
+import com.code.pal.message.domain.Message;
+import com.code.pal.message.service.ConversationProposals;
 import com.code.pal.project.brief.ApprovedProjectMemory;
 import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.domain.ProjectType;
@@ -92,17 +94,62 @@ public final class ContractStore {
             return review(forRun(project,run));
         });
     }
-    public Stored reusable(UUID project,String request,BuildContract.Limits allowed) {
-        // A different feature request must not silently reuse an unrelated approved plan.
-        if (!RequestRouter.buildApprovedPlan(request)) {
+    public Stored reusable(UUID project, String request, BuildContract.Limits allowed) {
+        var rows = jdbc.query("select run_id from agent_build_contracts where project_id=? "
+                + "order by created_at desc,id desc limit 1", (row, index) -> row.getObject(1, UUID.class), project);
+        if (rows.isEmpty()) {
             return null;
         }
-        var rows=jdbc.query("select run_id from agent_build_contracts where project_id=? order by created_at desc,id desc limit 1",(r,n)->r.getObject(1,UUID.class),project);
-        if(rows.isEmpty())return null;var stored=forRun(project,rows.getFirst());
-        if(!compatible(stored,current(project)))throw conflict("Approved plan is stale; request and review an updated plan before building it");
-        if(!"APPROVED".equals(stored.state()))throw conflict("The latest plan needs explicit approval before Build");
-        if(!stored.contract().limits().within(allowed))throw conflict("Approved plan exceeds this run's current limits; request a smaller plan");
+        UUID latestPlan = rows.getFirst();
+        if (!RequestRouter.buildApprovedPlan(request)) {
+            // Only the latest plan's one persisted reply can match; never scan the conversation history.
+            var candidates = jdbc.query("select p.proposal_plan_id,p.suggested_build_text,p.content "
+                    + "from messages p join agent_runs r on r.id=p.proposal_plan_id and r.project_id=p.project_id "
+                    + "where p.project_id=? and p.proposal_plan_id=? and p.role='ASSISTANT' and p.status='COMPLETE' "
+                    + "and p.proposal_consumed_by is not null and r.message_id=p.id "
+                    + "and r.mode='PLAN' and r.status='DONE'", (row, index) -> {
+                Message proposal = new Message();
+                proposal.setProposalPlanId(row.getObject(1, UUID.class));
+                proposal.setSuggestedBuildText(row.getString(2));
+                proposal.setContent(row.getString(3));
+                return proposal;
+            }, project, latestPlan);
+            boolean matches = candidates.stream().filter(proposal -> proposal.getSuggestedBuildText() != null)
+                    .anyMatch(proposal -> ConversationProposals.executionPrompt(proposal).equals(request));
+            if (!matches) {
+                if (RequestRouter.route(request, List.of(), true) == RequestRouter.Route.CONTINUE) {
+                    throw conflict("A continuation needs the current reviewed plan offer before Build");
+                }
+                return null;
+            }
+        }
+        var stored = forRun(project, latestPlan);
+        if (!compatible(stored, current(project))) {
+            throw conflict("Approved plan is stale; request and review an updated plan before building it");
+        }
+        if (!"APPROVED".equals(stored.state())) {
+            throw conflict("The latest plan needs explicit approval before Build");
+        }
+        if (!stored.contract().limits().within(allowed)) {
+            throw conflict("Approved plan exceeds this run's current limits; request a smaller plan");
+        }
         return stored;
+    }
+
+    /** Execution authority comes from the accepted request binding, never a model-authored wrapper. */
+    public UUID acceptedPlanRun(AgentRun run) {
+        var ids = jdbc.query("select p.proposal_plan_id from agent_runs r "
+                + "join messages a on a.id=r.message_id and a.project_id=r.project_id "
+                + "join messages u on u.id=a.reply_to_id and u.project_id=r.project_id "
+                + "join messages p on p.id=u.source_proposal_id and p.project_id=r.project_id "
+                + "join agent_runs original on original.id=p.proposal_plan_id and original.project_id=r.project_id "
+                + "where r.id=? and r.project_id=? and r.user_id=? and u.author_id=r.user_id "
+                + "and r.mode='BUILD' and r.status='RUNNING' and a.role='ASSISTANT' "
+                + "and p.proposal_consumed_by=u.id and original.user_id=r.user_id "
+                + "and original.message_id=p.id and u.role='USER' and p.role='ASSISTANT' "
+                + "and original.mode='PLAN' and original.status='DONE' and p.status='COMPLETE'",
+                (row, index) -> row.getObject(1, UUID.class), run.getId(), run.getProjectId(), run.getUserId());
+        return ids.stream().findFirst().orElse(null);
     }
     public Review view(UUID project,UUID run) {
         var row=forRun(project,run);if(row==null)return null;

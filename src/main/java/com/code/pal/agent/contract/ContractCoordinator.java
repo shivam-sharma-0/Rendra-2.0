@@ -35,18 +35,22 @@ public final class ContractCoordinator {
         this.store=store;this.planner=planner;this.scaffold=scaffold;this.generator=generator;this.memory=memory;this.decisions=decisions;this.files=files;
         this.changes=changes;this.validation=validation;this.criteria=criteria;this.checkpoints=checkpoints;this.props=props;this.mapper=mapper;
     }
-    public boolean eligible(AgentRun run,RunSize size,String request) {
+    public boolean eligible(AgentRun run, RunSize size, String request) {
         if (RequestRouter.route(request) != RequestRouter.Route.CHANGE) {
             return false;
         }
-        var approved=memory.current(run.getProjectId());
-        var choice=approved==null?null:decisions.state(run.getProjectId()).choice();
-        boolean fullStack=props.isFullStackContracts() && choice!=null && choice.storage()==BuildDecisions.Storage.MERN;
-        if(!props.isStructuredContracts() && !fullStack && unitCheckpoints!=null && store.forRun(run.getProjectId(),run.getId())!=null)
+        var approved = memory.current(run.getProjectId());
+        var choice = approved == null ? null : decisions.state(run.getProjectId()).choice();
+        boolean fullStack = props.isFullStackContracts() && choice != null && choice.storage() == BuildDecisions.Storage.MERN;
+        var attached = store.forRun(run.getProjectId(), run.getId());
+        if (!props.isStructuredContracts() && !fullStack && unitCheckpoints != null && attached != null) {
             throw new WorkflowStageException("This run needs structured execution; restore its reviewed configuration before resuming");
-        return (props.isStructuredContracts() || fullStack) && approved!=null &&
-                (run.getMode()==ProjectType.PLAN || run.getMode()==ProjectType.BUILD && (fullStack || size.tier()!=SizeTier.S ||
-                RequestRouter.buildApprovedPlan(request)));
+        }
+        boolean acceptedPlan = attached != null && "APPROVED".equals(attached.state())
+                || store.acceptedPlanRun(run) != null;
+        return (props.isStructuredContracts() || fullStack) && approved != null
+                && (run.getMode() == ProjectType.PLAN || run.getMode() == ProjectType.BUILD
+                && (fullStack || size.tier() != SizeTier.S || RequestRouter.buildApprovedPlan(request) || acceptedPlan));
     }
     public record Outcome(BuildContract contract,String summary) {}
     public Outcome execute(AgentContext ctx,AgentRun run,RunSize size,String request,String projectMap,
@@ -54,7 +58,17 @@ public final class ContractCoordinator {
         var allowed=new BuildContract.Limits(size.maxModelCalls(),size.maxToolCalls(),props.getLlm().getMaxOutputTokens(),size.timeoutMs());
         var basis=store.current(ctx.projectId());var approved=memory.current(ctx.projectId());
         var stored=store.forRun(ctx.projectId(),run.getId());
-        if(stored==null && run.getMode()==ProjectType.BUILD){var reuse=store.reusable(ctx.projectId(),request,allowed);if(reuse!=null)stored=store.attach(run,reuse,allowed);}
+        UUID acceptedPlan = run.getMode() == ProjectType.BUILD ? store.acceptedPlanRun(run) : null;
+        if (stored == null && run.getMode() == ProjectType.BUILD
+                && (RequestRouter.buildApprovedPlan(request) || acceptedPlan != null)) {
+            var reuse = store.reusable(ctx.projectId(), request, allowed);
+            if (acceptedPlan != null && (reuse == null || !acceptedPlan.equals(reuse.runId()))) {
+                throw new WorkflowStageException("The accepted plan is unavailable or superseded; review the current plan before Build");
+            }
+            if (reuse != null) {
+                stored = store.attach(run, reuse, allowed);
+            }
+        }
         if(stored==null){activity.accept("Planning implementation");var choice=decisions.state(ctx.projectId()).choice();String root=choice.storage()==BuildDecisions.Storage.MERN?"client/src/App.tsx":choice.storage()==BuildDecisions.Storage.NONE?null:"src/App.tsx";
             String requiredRoot=root!=null && !files.regularFile(ctx.projectId(),ctx.root(),root)?root:null;
             var contract=planner.plan(new ContractPlanner.Input(UUID.randomUUID(),request,approved.requirementsJson(),projectMap,choice,allowed,requiredRoot),props.preferredModel(run.getMode()),checkedCall,proposal->store.validateSources(ctx.projectId(),proposal));stored=store.create(run,contract,basis,allowed);}

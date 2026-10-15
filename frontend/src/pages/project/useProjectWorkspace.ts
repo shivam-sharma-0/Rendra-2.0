@@ -31,6 +31,7 @@ export function useProjectWorkspace(id: string) {
   const queryClient = useQueryClient()
   // Highest step seq already held per run, so the timeline only fetches what it is missing (afterSeq).
   const maxSeqRef = useRef<Record<string, number>>({})
+  const messageRefreshVersion = useRef(0)
 
   const selectedRun = useMemo(() => runs.find((run) => isActive(run)) ?? runs[0], [runs])
   const steps = selectedRun ? stepsByRun[selectedRun.id] ?? [] : []
@@ -91,7 +92,7 @@ export function useProjectWorkspace(id: string) {
         if (!cancelled) setLoading(false)
       }
     })()
-    return () => { cancelled = true }
+    return () => { cancelled = true; messageRefreshVersion.current += 1 }
   }, [id, loadLatestMessages])
 
   const upsert = useCallback((incoming: Message) => {
@@ -103,6 +104,14 @@ export function useProjectWorkspace(id: string) {
       return next
     })
   }, [])
+
+  const refreshMessages = useCallback(() => {
+    const version = ++messageRefreshVersion.current
+    void loadLatestMessages().then((incoming) => {
+      // A later message or request invalidates an older permission/offer snapshot.
+      if (version === messageRefreshVersion.current) incoming.forEach(upsert)
+    }).catch(() => undefined)
+  }, [loadLatestMessages, upsert])
 
   const addTimelineStep = useCallback((event: TimelineEvent, type: string) => {
     if (!event.runId || typeof event.seq !== 'number') return
@@ -119,7 +128,7 @@ export function useProjectWorkspace(id: string) {
 
   const onRealtime = useCallback((message: RealtimeMessage) => {
     if (message.type === 'CONNECTED') {
-      void loadLatestMessages().then(setMessages).catch(() => undefined)
+      refreshMessages()
       void refreshTimeline().catch(() => undefined)
       return
     }
@@ -141,6 +150,7 @@ export function useProjectWorkspace(id: string) {
     }
     const payload = message.payload as (Partial<Message> & { id?: string; delta?: string }) | undefined
     if (!payload?.id || payload.projectId !== id) return
+    messageRefreshVersion.current += 1
     if (message.type === 'MESSAGE_DELTA' && typeof payload.delta === 'string') {
       const delta = payload.delta
       const messageId = payload.id
@@ -161,6 +171,8 @@ export function useProjectWorkspace(id: string) {
     } else if (message.type === 'MESSAGE_UPSERT') {
       upsert(payload as Message)
       if (payload.status === 'COMPLETE' || payload.status === 'FAILED') {
+        // Room payloads cannot carry actor-specific build permission. Fetch the scoped offer after completion.
+        refreshMessages()
         void refreshTimeline().catch(() => undefined)
         // Covers both the file tree and every open file's content query (prefix match) — a build may
         // have changed either, so re-fetch on next access instead of trusting stale cached files.
@@ -169,7 +181,7 @@ export function useProjectWorkspace(id: string) {
         void queryClient.invalidateQueries({ queryKey: qk.dailyUsage })
       }
     }
-  }, [addTimelineStep, id, loadLatestMessages, refreshTimeline, upsert, queryClient])
+  }, [addTimelineStep, id, refreshMessages, refreshTimeline, upsert, queryClient])
 
   useRealtime({ enabled: !!project, projectId: id, onMessage: onRealtime })
 
@@ -197,6 +209,7 @@ export function useProjectWorkspace(id: string) {
   const [sendError, setSendError] = useState<string>()
 
   const send = useCallback(async (prompt: string, mode: ProjectType, files: File[] = [], attachmentPaths: string[] = [], proposalId?: string) => {
+    messageRefreshVersion.current += 1
     setSendError(undefined)
     try {
       const uploaded = files.length ? await projectApi.uploadAttachments(id, files) : []
@@ -212,6 +225,8 @@ export function useProjectWorkspace(id: string) {
       })
       window.setTimeout(() => { void refreshTimeline().catch(() => undefined) }, 350)
     } catch (error) {
+      // The suggestion owns this error. A failed click must not replace the user's draft.
+      if (proposalId) throw error
       // Nothing was saved (e.g. a usage limit): say why, and put the text back so it can be resent.
       setSendError(error instanceof Error ? error.message : 'Could not send your message. Please try again.')
       requestEdit(prompt)

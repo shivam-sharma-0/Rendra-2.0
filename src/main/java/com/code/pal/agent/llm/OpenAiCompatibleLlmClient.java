@@ -21,18 +21,21 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
-import java.util.function.Consumer;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * OpenAI-compatible streaming client. It understands the standard SSE delta format used by
@@ -49,6 +52,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private final Map<String, EndpointPool> endpointPools;
     /** Per provider: the reasoning_effort to send, when configured. */
     private final Map<String, String> reasoningEfforts = new HashMap<>();
+    private final Set<String> streamUsageProviders = new HashSet<>();
     private final double defaultTemperature;
     private final int maxAttempts;
     private final long initialBackoffMs;
@@ -80,9 +84,13 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                     List<Endpoint> eps = keys.stream()
                             .map(k -> new Endpoint(provider.getBaseUrl(), k))
                             .toList();
-                    configured.put(name.toLowerCase(java.util.Locale.ROOT), new EndpointPool(eps));
+                    String normalized = normalizeProvider(name);
+                    configured.put(normalized, new EndpointPool(eps));
+                    if (provider.isIncludeStreamUsage()) {
+                        streamUsageProviders.add(normalized);
+                    }
                     if (provider.getReasoningEffort() != null && !provider.getReasoningEffort().isBlank()) {
-                        reasoningEfforts.put(name.toLowerCase(java.util.Locale.ROOT), provider.getReasoningEffort().trim());
+                        reasoningEfforts.put(normalized, provider.getReasoningEffort().trim());
                     }
                 }
             });
@@ -99,8 +107,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 
     @Override
     public LlmResult chatStreaming(LlmRequest request, Consumer<String> onTextDelta) {
-        String provider = request.provider() == null || request.provider().isBlank()
-                ? "openrouter" : request.provider().toLowerCase(java.util.Locale.ROOT);
+        String provider = normalizeProvider(request.provider());
         EndpointPool pool = endpointPools.get(provider);
         if (pool == null || !pool.isConfigured()) {
             throw new LlmException("LLM provider is not configured: " + provider);
@@ -421,11 +428,15 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         return false;
     }
 
-    private Map<String, Object> buildBody(LlmRequest request) {
+    Map<String, Object> buildBody(LlmRequest request) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", request.model());
         body.put("temperature", request.temperature());
         body.put("stream", true);
+        String provider = normalizeProvider(request.provider());
+        if (streamUsageProviders.contains(provider)) {
+            body.put("stream_options", Map.of("include_usage", true));
+        }
         body.put("messages", request.messages().stream().map(this::messageToMap).toList());
         if(request.jsonSchema()!=null) {
             var schema=objectMapper.readTree(request.jsonSchema().schema());
@@ -437,9 +448,13 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
             body.put("tool_choice", request.toolChoice() == null ? "auto" : request.toolChoice());
         }
         if (request.maxTokens() != null && request.maxTokens() > 0) body.put("max_tokens", request.maxTokens());
-        String effort = request.provider() == null ? null : reasoningEfforts.get(request.provider().toLowerCase(java.util.Locale.ROOT));
+        String effort = reasoningEfforts.get(provider);
         if (effort != null) body.put("reasoning_effort", effort);
         return body;
+    }
+
+    private static String normalizeProvider(String provider) {
+        return provider == null || provider.isBlank() ? "openrouter" : provider.strip().toLowerCase(Locale.ROOT);
     }
 
     private Map<String, Object> messageToMap(LlmMessage m) {

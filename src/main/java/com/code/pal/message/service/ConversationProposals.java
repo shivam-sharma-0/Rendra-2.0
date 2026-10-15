@@ -45,12 +45,12 @@ public class ConversationProposals {
             throw new MessageConflictException();
         }
         if ((explicit || !attachments.isEmpty()) && !attachments.equals(proposal.attachmentPaths())) {
-            throw new MessageConflictException();
+            if (explicit) {
+                throw new MessageConflictException();
+            }
+            return new Resolution(request.message(), attachments, null);
         }
-        String prompt = "Build the proposed changes.\n\nOriginal request:\n" + quote(proposal.getSuggestedBuildText());
-        if (proposal.getProposalPlanId() != null) {
-            prompt += "\n\nImplementation proposal " + proposal.getProposalPlanId() + ":\n" + quote(proposal.getContent());
-        }
+        String prompt = executionPrompt(proposal);
         if (mode == ProjectType.BUILD && request.aiMessageId() != null && !request.aiMessageId().isBlank()) {
             proposal.setProposalConsumedBy(request.id());
             messages.save(proposal);
@@ -60,14 +60,21 @@ public class ConversationProposals {
 
     /** A newer explicit task supersedes a previous offer, even when it takes another route. */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Message retirePrevious(Long userId, UUID projectId, String requestId) {
-        var latest = messages.lockLatestProposal(projectId, userId, PageRequest.of(0, 1));
-        if (latest.isEmpty() || latest.getFirst().getProposalConsumedBy() != null) {
-            return null;
+    public List<Message> retirePrevious(UUID projectId, String requestId) {
+        var open = messages.lockOpenProposals(projectId);
+        for (Message proposal : open) {
+            proposal.setProposalConsumedBy(requestId);
         }
-        Message proposal = latest.getFirst();
-        proposal.setProposalConsumedBy(requestId);
-        return messages.save(proposal);
+        return messages.saveAll(open);
+    }
+
+    /** Only server-owned, persisted proposal fields are used to resolve an accepted request. */
+    public static String executionPrompt(Message proposal) {
+        String prompt = "Build the proposed changes.\n\nOriginal request:\n" + quote(proposal.getSuggestedBuildText());
+        if (proposal.getProposalPlanId() != null) {
+            prompt += "\n\nImplementation proposal " + proposal.getProposalPlanId() + ":\n" + quote(proposal.getContent());
+        }
+        return prompt;
     }
 
     private static String quote(String text) {

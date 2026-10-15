@@ -14,6 +14,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PromptPolicyTest {
     @Test
+    void productConversationExplicitlyLimitsLengthAndAvoidsImplementationLectures() {
+        String prompt = PromptLoader.load(CONVERSATIONAL);
+        assertTrue(prompt.contains("at most 80 words"));
+        assertTrue(prompt.contains("1-4 sentences"));
+        assertTrue(prompt.contains("user's language"));
+        assertTrue(prompt.contains("Do not give a technical tutorial"));
+    }
+
+    @Test
     void smallTalkHasProvenanceAndLanguagePolicyWithoutCopyableExchanges() {
         String prompt = PromptLoader.load(CONVERSATIONAL);
         assertTrue(prompt.contains("Shivam & Team"));

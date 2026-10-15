@@ -38,7 +38,7 @@ export function PlanApproval({ run }: { run: AgentRun }) {
       {plan && <>
         <p>Storage: {plan.storage}. Accounts: {plan.auth === 'ACCOUNTS' ? 'included' : 'not required'}.</p>
         {plan.state === 'INVALIDATED' && <NeuAlert>Code or requirements changed. Ask for an updated plan before building.</NeuAlert>}
-        {plan.state === 'APPROVED' && <p role="status">Plan approved. Send “build the approved plan” to start.</p>}
+        {plan.state === 'APPROVED' && <p role="status">Plan approved. Close this review and choose Build this on the reply to start.</p>}
         <ol>{plan.units.map((unit) => <li key={unit.id}><b>{unit.objective}</b>
           <p>Files: {unit.ownedPaths.join(', ')}</p></li>)}</ol>
       </>}

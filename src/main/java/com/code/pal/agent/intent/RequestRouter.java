@@ -15,39 +15,76 @@ public final class RequestRouter {
     private static final Pattern ACTION = Pattern.compile(
             "\\b(build|create|make|develop|implement|add|fix|update|change|modify|edit|remove|delete|"
                     + "design|refactor|rename|connect|integrate|generate|clone|deploy|migrate|optimi[sz]e|"
-                    + "banao|bnao|bana do|bna do|badlo|hatao|jodo|theek karo|sudhar)\\b");
+                    + "test|move|replace|write|banao|bnao|bana do|bna do|badlo|badal do|hatao|hata do|jodo|lagao|theek karo|sudhar|sudharo)\\b");
     private static final Pattern NEGATED = Pattern.compile(
-            "\\b(?:do not|don't|dont|never)\\s+(?:build|create|make|implement|change|modify|edit|write|code|add|delete|remove)\\b"
+            "\\b(?:do not|don't|dont|never)\\s+(?:build|create|make|implement|change|modify|edit|write|code|add|delete|remove|fix|test)\\b"
                     + "(?:(?!\\bbut\\b)[^,;.!?])*|\\b(?:mat\\s+(?:banao|badlo|karo|likho)|"
                     + "(?:build|change|code|modify|edit|changes?)\\s+(?:mat karo|nahi karna|nahi krna|nahi chahiye))\\b"
                     + "(?:(?!\\blekin\\b)[^,;.!?])*");
     private static final Pattern PLAN_ONLY = Pattern.compile(
             "\\b(?:only plan|plan only|sirf plan|bas plan|pehle plan|first plan|plan first|make a plan|plan an? )\\b");
     private static final Pattern EXPLANATION = Pattern.compile(
-            "\\b(?:explain|describe|samjhao|samjha do|batao|btao|kaise|how|why|who|when|where|"
-                    + "what|which|kya hai|kya h|kyun|kyu|kon ho|kaun ho|kisne|samjha sakte|bata sakte)\\b");
+            "^(?:(?:just|please|sirf|bas) )?(?:explain|describe|find|locate|show|review|inspect|"
+                    + "samjhao|samjha do|batao|btao|kaise|how|why|who|when|where|what|which|kya hai|kya h|"
+                    + "kyun|kyu|kon ho|kaun ho|kisne|samjha sakte|bata sakte)\\b|"
+                    + "^(?:ye|yeh|yah|tum|aap) (?:kaise|kyun|kya)\\b|"
+                    + "\\b(?:samjhao|samjha do|batao|btao)[.!? ]*$");
     private static final Pattern QUESTION_PREFIX = Pattern.compile(
             "^(?:(?:hey|hi|hello)[, !]+)?(?:can|could|would|will) (?:you|u) "
                     + "(?:tell|explain|describe|help me understand|show me how|say|answer)\\b|"
                     + "^kya\\b.*\\b(?:sakte|sakti|sakta)\\b|"
                     + "^(?:can|could) (?:you|u) (?:build|create|make) (?:apps|applications|websites)\\b");
+    private static final Pattern INFORMATION_REQUEST = Pattern.compile(
+            "^i (?:want|need|would like) (?:to (?:know|understand|learn)|(?:some )?(?:help|advice|information))\\b");
     private static final Pattern CONTRAST_ACTION = Pattern.compile(
-            "\\b(?:but|lekin|aur phir)\\b.*" + ACTION.pattern());
+            "\\b(?:but|lekin)\\s+(?:please\\s+)?" + ACTION.pattern());
+    private static final Pattern IMPERATIVE_CLAUSE = Pattern.compile(
+            "(?:\\b(?:and|then|aur|phir|but|lekin)\\s+(?:(?:then|phir)\\s+)?|[,;.!?]\\s*)"
+                    + "(?:(?:please|now)\\s+)*" + ACTION.pattern()
+                    + "(?!\\s+(?:is|are|looks|seems|was|works|failed|failure|great|slow)\\b)");
     private static final Pattern DIRECT_CHANGE = Pattern.compile(
             "^(?:(?:please|can you|can u|could you|could u|would you|will you|let's|lets|"
-                    + "i want to|i want you to|i would like to) )?" + ACTION.pattern());
+                    + "i want to|i want you to|i would like to) )?" + ACTION.pattern()
+                    + "(?!\\s+(?:is|are|looks|seems|was|works|failed|failure|great|slow)\\b)");
     private static final Pattern QUESTION_START = Pattern.compile("^(?:is|are|do|does|did|should|could|can|would|will|kya)\\b");
     private static final Pattern RESUME = Pattern.compile(
-            "^(?:ok(?:ay)?\\s+)?(?:yes|sure|go ahead|continue|start|start karo|shuru karo|aage badho|"
-                    + "agla step|next step|next|haan|han|h[a]+n)[.!? ]*$");
+            "^(?:(?:ok(?:ay)?|yes|sure|haan|han|h[a]+n)[, ]+)?"
+                    + "(?:yes|sure|go ahead(?: and build it)?|do it|build it|build karo|bana do|karo|kar do|continue|"
+                    + "start|start karo|shuru karo|aage badho|agla step|next step|next|haan|han|h[a]+n)"
+                    + "(?:[, ]+(?:please|now))*[,.!? ]*$");
     private static final Pattern SMALL_TALK = Pattern.compile(
             "^(?:hi+|hey+|hello+|yo|sup|namaste|namaskar|good (?:morning|evening|afternoon|night)|"
                     + "how are (?:you|u)|kaise ho|kya haal hai|sab badhiya|thanks?(?: you)?|thank you|"
                     + "shukriya|dhanyavaad|ok(?:ay)?|cool|nice|great|awesome|perfect|got it|sounds good|"
-                    + "bye|goodbye|see ya|test|testing|ping|no|alright)(?:[,.!? ]|$).*");
+                    + "bye|goodbye|see ya|test|testing|ping|no|alright|what's up|good job|bahut badhiya|"
+                    + "my name is \\p{L}+(?: \\p{L}+){0,2})[,.!? ]*$");
+    private static final Pattern APPRECIATION = Pattern.compile(
+            "^(?:thanks?|thank you)(?:[,! ]+(?:very|much|a|lot|so|for|your|help|today|i|really|"
+                    + "appreciate|all|the|time|you|spent|helping|me|it|that|was|helpful))*[.!? ]*$");
+    private static final String APP_NOUN = "(?:to[- ]?do(?: app)?|calculator|counter|timer|quiz|portfolio|dashboard|crm|blog|"
+            + "landing page|website|app|application|store|shop)";
+    private static final Pattern APP_NEED = Pattern.compile(
+            "\\b(?:i|we) (?:need|want) (.+)$|\\bmujhe (.+) chahiye[.!? ]*$");
+    private static final Pattern FEATURE_NEED = Pattern.compile(
+            "\\b(?:it|this|that) needs? (?:a |an |the )?(?:footer|header|button|navbar|login|dark mode)\\b|"
+                    + "\\b(?:header|footer|button|page|navbar) should\\b");
+    private static final Pattern OBJECT_IMPERATIVE = Pattern.compile(
+            "\\b(?:karo|kar do|banao|bana do|bnao|bna do|daal do|hata do|badal do|badlo|lagao|jodo|sudharo)"
+                    + "(?: please| now)*[.!? ]*$|^(?:dark mode|login page|footer|header) chahiye[.!? ]*$");
+    private static final Pattern BUG = Pattern.compile(
+            "\\b(?:broken|blank|error|doesn't work|does not work|not working|not loading|kaam nahi kar raha|"
+                    + "kaam nahi karta|khul nahi raha|kuch dikh nahi raha)\\b");
+    private static final Pattern PRODUCT_QUESTION = Pattern.compile(
+            "^(?:(?:can|could) (?:you|u) (?:tell(?: me)? |explain )?)?how (?:do )?(?:you|u) work[.!? ]*$|"
+                    + "^(?:who are (?:you|u)|what can (?:you|u) do|who (?:made|created|built) (?:you|u)|"
+                    + "how does (?:rendra|redra) work|what is (?:rendra|redra)|tum kaise kaam karte ho|"
+                    + "tum kya kya bana sakte ho)[.!? ]*$");
     private static final Pattern APP_REQUEST = Pattern.compile(
-            "^(?:(?:a|an|ek|simple|small|basic|responsive|modern) )*(?:to[- ]?do|calculator|counter|"
-                    + "timer|quiz|portfolio|dashboard|crm|blog|website|app|application|store|shop)\\b.*");
+            "^(?:(?:a|an|ek) (?:(?:simple|small|basic|responsive|modern|ecommerce|e-commerce) )*" + APP_NOUN
+                    + "(?: app|application|website)?|(?:(?:a|an|ek|simple|small|basic|responsive|modern|ecommerce|e-commerce) )*"
+                    + APP_NOUN + " (?:for|with|that|jo|chahiye|banao|bana do)\\b.*)[.!? ]*$");
+    private static final Pattern APP_EVALUATION = Pattern.compile(
+            "\\b(?:is|are|looks|seems|was|works|kaisa|accha|slow|great)\\b");
     private static final Pattern APPROVED_PLAN = Pattern.compile(
             "^(?:build (?:the )?(?:approved )?plan|implement (?:this|the) plan)[.! ]*$");
 
@@ -58,17 +95,27 @@ public final class RequestRouter {
     }
 
     public static Route route(String request, List<String> attachments, boolean pendingProposal) {
+        return route(ProjectType.BUILD, request, attachments, pendingProposal);
+    }
+
+    public static Route route(ProjectType mode, String request, List<String> attachments, boolean pendingProposal) {
         String text = normalize(instructions(request));
         boolean hasAttachments = attachments != null && !attachments.isEmpty();
         if (RESUME.matcher(text).matches()) {
-            return pendingProposal ? Route.CONTINUE : hasAttachments ? Route.UNCLEAR : Route.SMALL_TALK;
+            if (pendingProposal) {
+                return Route.CONTINUE;
+            }
+            return hasAttachments ? Route.UNCLEAR : Route.SMALL_TALK;
+        }
+        if (!hasAttachments && (SMALL_TALK.matcher(text).matches() || APPRECIATION.matcher(text).matches())) {
+            return Route.SMALL_TALK;
         }
         String positive = NEGATED.matcher(text).replaceAll(" ");
-        boolean change = ACTION.matcher(positive).find();
+        boolean change = imperative(positive);
         if (PLAN_ONLY.matcher(text).find()) {
             return Route.CHANGE;
         }
-        if (QUESTION_PREFIX.matcher(text).find()) {
+        if (productQuestion(text) || QUESTION_PREFIX.matcher(text).find() || INFORMATION_REQUEST.matcher(text).find()) {
             return Route.QUESTION;
         }
         if ((EXPLANATION.matcher(text).find() || QUESTION_START.matcher(text).find())
@@ -79,11 +126,11 @@ public final class RequestRouter {
         if (NEGATED.matcher(text).find() && !change) {
             return Route.QUESTION;
         }
-        if (change || APP_REQUEST.matcher(text).matches()) {
+        if (change || appNeed(positive) || FEATURE_NEED.matcher(positive).find() || appRequest(text)) {
             return Route.CHANGE;
         }
-        if (!hasAttachments && SMALL_TALK.matcher(text).matches()) {
-            return Route.SMALL_TALK;
+        if (BUG.matcher(positive).find()) {
+            return mode == ProjectType.BUILD ? Route.CHANGE : Route.QUESTION;
         }
         return Route.UNCLEAR;
     }
@@ -95,7 +142,7 @@ public final class RequestRouter {
         if (PLAN_ONLY.matcher(normalize(instructions(request))).find()) {
             return ProjectType.PLAN;
         }
-        Route route = route(request, attachments, false);
+        Route route = route(requested, request, attachments, false);
         return route == Route.QUESTION || route == Route.UNCLEAR || route == Route.SMALL_TALK
                 ? ProjectType.CHAT : requested;
     }
@@ -117,6 +164,33 @@ public final class RequestRouter {
 
     public static boolean buildApprovedPlan(String request) {
         return APPROVED_PLAN.matcher(normalize(instructions(request))).matches();
+    }
+
+    public static boolean positiveChange(String request) {
+        String positive = NEGATED.matcher(normalize(instructions(request))).replaceAll(" ");
+        return imperative(positive);
+    }
+
+    private static boolean imperative(String text) {
+        return DIRECT_CHANGE.matcher(text.strip()).find() || IMPERATIVE_CLAUSE.matcher(text).find()
+                || OBJECT_IMPERATIVE.matcher(text).find();
+    }
+
+    private static boolean appRequest(String text) {
+        return APP_REQUEST.matcher(text).matches() && !APP_EVALUATION.matcher(text).find();
+    }
+
+    private static boolean appNeed(String text) {
+        var matcher = APP_NEED.matcher(text);
+        if (!matcher.find()) {
+            return false;
+        }
+        String subject = matcher.group(1) == null ? matcher.group(2) : matcher.group(1);
+        return appRequest(subject) || appRequest("a " + subject);
+    }
+
+    public static boolean productQuestion(String request) {
+        return PRODUCT_QUESTION.matcher(normalize(instructions(request))).matches();
     }
 
     /** Capability sizing excludes explicitly unwanted services without changing request authority. */

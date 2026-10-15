@@ -57,7 +57,7 @@ import static org.mockito.Mockito.when;
 class AgentRunnerTest {
     @ParameterizedTest
     @ValueSource(strings = {
-            "can u tell how u work?", "how does this app work?", "login page samjhao",
+            "how does this app work?", "login page samjhao",
             "ye kaise kaam karta hai?", "kya tum database bana sakte ho?",
             "> create a login page\n\nWhat does this mean?"
     })

@@ -10,29 +10,34 @@ import com.code.pal.message.domain.Message;
 import com.code.pal.message.dto.CreateMessageRequest;
 import com.code.pal.message.exception.MessageConflictException;
 import com.code.pal.message.repository.MessageRepository;
-import com.code.pal.message.service.MessageService;
 import com.code.pal.message.service.ConversationProposals;
+import com.code.pal.message.service.MessageService;
 import com.code.pal.message.service.impl.MessageServiceImpl;
 import com.code.pal.project.domain.Project;
-import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.domain.ProjectStage;
-import com.code.pal.project.exception.RequirementApprovalRequiredException;
+import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.event.AssistantTurnRequested;
+import com.code.pal.project.exception.RequirementApprovalRequiredException;
 import com.code.pal.project.service.ProjectService;
 import com.code.pal.realtime.RealtimeService;
 import com.code.pal.shared.usage.AgentTurnAdmission;
 import com.code.pal.testsupport.CodexJpaFixture;
+import com.code.pal.workspace.exception.WorkspaceAccessDeniedException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.*;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
-import java.util.UUID;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -255,6 +260,28 @@ class AtomicAgentAcceptanceIT {
     }
 
     @Test
+    void visibleOfferRequiresTheSameDoneRunAsAcceptanceAndCannotFallBackToAnOlderOffer() {
+        String key = UUID.randomUUID().toString().substring(0, 12);
+        pendingOffer("old_done_" + key, "add dark mode");
+        pendingOffer("not_done_" + key, "add a contact form");
+        String replyId = "a_not_done_" + key;
+        jdbc.update("update agent_runs set status='RUNNING' where project_id=? and message_id=?", projectId, replyId);
+
+        assertTrue(messages.list(7L, projectId, PageRequest.of(0, 100)).stream()
+                .allMatch(message -> message.suggestedAction() == null));
+
+        jdbc.update("update agent_runs set status='DONE' where project_id=? and message_id=?", projectId, replyId);
+        var visible = messages.list(7L, projectId, PageRequest.of(0, 100)).stream()
+                .filter(message -> message.suggestedAction() != null).toList();
+        assertEquals(1, visible.size());
+        assertEquals(replyId, visible.getFirst().id());
+        var action = visible.getFirst().suggestedAction();
+        assertDoesNotThrow(() -> messages.post(7L, projectId,
+                new CreateMessageRequest("u_accept_" + key, action.message(), ProjectType.BUILD,
+                        "a_accept_" + key, action.attachments(), action.proposalId())));
+    }
+
+    @Test
     void continuationConsumesTheLastProposalOnceAndRetriesTheAcceptedTurn() {
         pendingOffer("proposal", "add dark mode");
         var yes = new CreateMessageRequest("u_yes", "haan", ProjectType.BUILD, "a_yes");
@@ -365,6 +392,110 @@ class AtomicAgentAcceptanceIT {
         assertEquals(ProjectType.CHAT, messages.post(8L, projectId,
                 new CreateMessageRequest("u_foreign_yes", "yes", ProjectType.BUILD, "a_foreign_yes")).getFirst().mode());
         assertNull(jdbc.queryForObject("select proposal_consumed_by from messages where id='a_owner_offer'", String.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"why is the preview blank?", "hmm", "good job", "Hi"})
+    void aLaterNonContinuationReplyRetiresTheOfferAndHaanDoesNotReplayIt(String laterText) {
+        String key = UUID.randomUUID().toString().substring(0, 12);
+        pendingOffer("old_" + key, "add dark mode");
+        messages.post(7L, projectId, new CreateMessageRequest("u_later_" + key, laterText, ProjectType.CHAT, "a_later_" + key));
+        completeReply("a_later_" + key, "Here is an answer, without a new build proposal.");
+        String retiredBeforeAck = jdbc.queryForObject("select proposal_consumed_by from messages where id=?",
+                String.class, "a_old_" + key);
+        var staleAction = messages.list(7L, projectId, PageRequest.of(0, 100)).stream()
+                .filter(message -> message.id().equals("a_old_" + key)).findFirst().orElseThrow().suggestedAction();
+
+        var accepted = messages.post(7L, projectId,
+                new CreateMessageRequest("u_yes_" + key, "haan", ProjectType.BUILD, "a_yes_" + key));
+
+        assertAll(
+                () -> assertNotNull(retiredBeforeAck, "Every accepted non-CONTINUE turn retires the old offer"),
+                () -> assertNull(staleAction, "An unused superseded offer must lose its button"),
+                () -> assertEquals(ProjectType.CHAT, accepted.getFirst().mode()),
+                () -> assertNull(jdbc.queryForObject("select source_proposal_id from messages where id=?",
+                        String.class, "u_yes_" + key)));
+    }
+
+    @Test
+    void anInterveningCollaboratorsReplyAlsoBlocksTheOlderOwnersOffer() {
+        String key = UUID.randomUUID().toString().substring(0, 12);
+        pendingOffer("cross_" + key, "add dark mode");
+        when(context.getBean(ProjectService.class).requireCanEdit(8L, projectId)).thenReturn(
+                Project.builder().id(projectId).ownerId(7L).type(ProjectType.BUILD).lifecycleStage(ProjectStage.REVIEW).build());
+        messages.post(8L, projectId, new CreateMessageRequest("u_other_" + key, "why is the preview blank?", ProjectType.CHAT, "a_other_" + key));
+        completeReply("a_other_" + key, "The preview needs checking.");
+
+        assertEquals(ProjectType.CHAT, messages.post(7L, projectId,
+                new CreateMessageRequest("u_owner_yes_" + key, "haan", ProjectType.BUILD, "a_owner_yes_" + key)).getFirst().mode());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"haan bana do", "ok build karo", "yes please", "haan go ahead", "sure, do it", "do it"})
+    void planModeResumesBindThePlanAndKeepPlanMode(String acknowledgement) {
+        String key = UUID.randomUUID().toString().substring(0, 12);
+        pendingOffer("plan_" + key, "add dark mode");
+        UUID planRun = runs.findByProjectIdAndRequestMessageId(projectId, "u_plan_" + key).orElseThrow().getId();
+        jdbc.update("update messages set mode='PLAN',proposal_plan_id=? where id=?", planRun, "a_plan_" + key);
+        jdbc.update("update agent_runs set mode='PLAN' where id=?", planRun);
+
+        var accepted = messages.post(7L, projectId,
+                new CreateMessageRequest("u_plan_yes_" + key, acknowledgement, ProjectType.PLAN, "a_plan_yes_" + key));
+
+        assertAll(
+                () -> assertEquals(ProjectType.PLAN, accepted.getFirst().mode()),
+                () -> assertEquals("a_plan_" + key, jdbc.queryForObject("select source_proposal_id from messages where id=?",
+                        String.class, "u_plan_yes_" + key)),
+                () -> assertNull(jdbc.queryForObject("select proposal_consumed_by from messages where id=?", String.class, "a_plan_" + key)));
+    }
+
+    @Test
+    void implicitHaanWithDifferentImagesIsANewRequestInsteadOfAConflict() {
+        String key = UUID.randomUUID().toString().substring(0, 12);
+        pendingOffer("image_" + key, "add dark mode");
+        when(context.getBean(ProjectFiles.class).regularFile(projectId, ".", "uploads/new.png")).thenReturn(true);
+        var accepted = assertDoesNotThrow(() -> messages.post(7L, projectId,
+                new CreateMessageRequest("u_image_yes_" + key, "haan", ProjectType.BUILD, "a_image_yes_" + key, List.of("uploads/new.png"))));
+        var stored = context.getBean(MessageRepository.class).findByIdAndProjectId("u_image_yes_" + key, projectId).orElseThrow();
+        assertAll(
+                () -> assertEquals(ProjectType.CHAT, accepted.getFirst().mode()),
+                () -> assertNull(stored.getSourceProposalId()),
+                () -> assertEquals(List.of("uploads/new.png"), stored.executionAttachmentPaths()));
+    }
+
+    @Test
+    void buildOffersAreAbsentFromViewerAndAnotherEditorsResponses() {
+        String key = UUID.randomUUID().toString().substring(0, 12);
+        pendingOffer("visibility_" + key, "add dark mode");
+        Project readable = Project.builder().id(projectId).ownerId(7L).type(ProjectType.BUILD).lifecycleStage(ProjectStage.REVIEW).build();
+        when(context.getBean(ProjectService.class).requireAccessible(8L, projectId)).thenReturn(readable);
+        when(context.getBean(ProjectService.class).requireAccessible(9L, projectId)).thenReturn(readable);
+        when(context.getBean(ProjectService.class).requireCanEdit(8L, projectId)).thenReturn(readable);
+        doThrow(new AccessDeniedException("Viewer is read only")).when(context.getBean(ProjectService.class)).requireCanEdit(9L, projectId);
+
+        for (long actor : List.of(8L, 9L)) {
+            var response = messages.list(actor, projectId, PageRequest.of(0, 100)).stream()
+                    .filter(message -> message.id().equals("a_visibility_" + key)).findFirst().orElseThrow();
+            assertNull(response.suggestedAction(), "Actor " + actor + " cannot accept this offer");
+        }
+    }
+
+    @Test
+    void aFormerEditorCanReadTheirOfferWithoutReceivingABuildAction() {
+        String key = UUID.randomUUID().toString().substring(0, 12);
+        pendingOffer("revoked_" + key, "add dark mode");
+        doThrow(new WorkspaceAccessDeniedException())
+                .when(context.getBean(ProjectService.class)).requireCanEdit(7L, projectId);
+
+        var response = assertDoesNotThrow(() -> messages.list(7L, projectId, PageRequest.of(0, 100))).stream()
+                .filter(message -> message.id().equals("a_revoked_" + key)).findFirst().orElseThrow();
+
+        assertNull(response.suggestedAction());
+    }
+
+    private void completeReply(String assistantId, String text) {
+        jdbc.update("update messages set status='COMPLETE',content=?,suggested_build_text=null where id=?", text, assistantId);
+        jdbc.update("update agent_runs set status='DONE' where project_id=? and message_id=?", projectId, assistantId);
     }
 
     @Configuration

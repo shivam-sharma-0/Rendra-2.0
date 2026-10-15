@@ -7,7 +7,7 @@ import com.code.pal.project.domain.ProjectType;
 
 import java.util.List;
 
-/** The server's explicit offer; derived from the accepted request, never parsed from model prose. */
+/** Explicit server-persisted offer; clients cannot invent build authority from reply text. */
 public record SuggestedAction(String label, ProjectType mode, String message, List<String> attachments,
                               String proposalId) {
     static SuggestedAction from(Message message) {

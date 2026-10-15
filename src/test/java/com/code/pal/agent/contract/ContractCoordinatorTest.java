@@ -11,6 +11,7 @@ import com.code.pal.agent.workspace.*;
 import com.code.pal.project.brief.ApprovedProjectMemory;
 import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.domain.ProjectType;
+import com.code.pal.project.exception.WorkflowStageException;
 import com.code.pal.project.service.ProjectService;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
@@ -55,6 +56,37 @@ class ContractCoordinatorTest {
         var calls=new AtomicInteger();var outcome=coordinator.execute(ctx,run,RunSize.of(SizeTier.M,List.of(),props),"build the approved plan","map",r->{calls.incrementAndGet();assertEquals(CallPurpose.UNIT,LlmCallContext.current().purpose());return generate(r);},()->{},title->{});
         assertEquals(1,calls.get());assertEquals(c,outcome.contract());assertFalse(project.exists("index.html"));assertEquals("Preserve me",project.read("notes.txt"));assertFalse(changes.hasUnvalidatedChanges(ctx));
         assertEquals(com.code.pal.agent.plan.AgentPlanState.StepStatus.COMPLETED,ctx.plan().snapshot().steps().getFirst().status());verify(store,never()).create(any(),any(),any(),any());
+    }
+
+    @Test
+    void attachedApprovedSmallPlanRemainsEligibleAfterBuildThisAcceptance() {
+        props.setStructuredContracts(true);
+        var run = run(ProjectType.BUILD);
+        var approved = saved(run, "APPROVED");
+        when(store.forRun(project.projectId, run.getId())).thenReturn(approved);
+
+        assertTrue(coordinator.eligible(run, RunSize.of(SizeTier.S, List.of(), props),
+                "Build the proposed changes.\n\nOriginal request:\n> Add a calculator"),
+                "An attached approved S plan must not fall back to an unrelated tool-loop build");
+    }
+
+    @Test
+    void acceptedPlanCannotSilentlyReplanWhenItsExactContractIsUnavailable() {
+        props.setStructuredContracts(true);
+        var run = run(ProjectType.BUILD);
+        var ctx = context(run);
+        when(store.acceptedPlanRun(run)).thenReturn(UUID.randomUUID());
+        String request = "Build the proposed changes.\n\nOriginal request:\n> Add a calculator";
+        assertTrue(coordinator.eligible(run, RunSize.of(SizeTier.S, List.of(), props), request));
+
+        assertThrows(WorkflowStageException.class, () -> coordinator.execute(
+                ctx, run, RunSize.of(SizeTier.S, List.of(), props), request, "map",
+                call -> {
+                    fail("An accepted plan must not fall through to a new planner call");
+                    return null;
+                },
+                () -> fail("No generated output may be staged"), title -> {}));
+        verify(store, never()).create(any(), any(), any(), any());
     }
     @Test void planRunReturnsReviewableContractWithoutMutationOrUnitGeneration() {
         project.write("index.html","old");var run=run(ProjectType.PLAN);var ctx=context(run);when(store.forRun(project.projectId,run.getId())).thenReturn(saved(run,"DRAFT"));

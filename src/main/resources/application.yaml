@@ -199,12 +199,14 @@ app:
         api-key: "${OPENROUTER_API_KEY:ENC(O5X4QRwiqNCEA3KpSdmVjL0xKGHL28fxI8U/BASW6GlRQnFFeWPQMDalu8csoKmkopOQgway24aSRjjODEXpE7reoOSuu7YEIBkkcUiN1Iw4AtIG4db2uLXNDI+hhm9ncTVoSZ1lyDGtWAewKXs4oBylX7j/)}"
       nvidia:
         base-url: https://integrate.api.nvidia.com/v1
+        include-stream-usage: ${NVIDIA_INCLUDE_STREAM_USAGE:true}
         api-key: "${NVIDIA_API_KEY:ENC(xsdbJGbPGXzSTg7fv17EJzY8yOz8Ms6urxw0XZzbPv2aFgs0b+KO1ou5UBuQyDIZPkul52bxAB1FR0LqDgTtwfnOXeg8Y2YeER/hTHuGuPNakEJsonO76jORGr2SnHh+MyleF3ahc0SolANGsNFugWQq)}"
       groq:
         base-url: https://api.groq.com/openai/v1
         api-key: "${GROQ_API_KEY:ENC(Rdhf5TfZ1zyfjV7xGnj/iqVlnug/d03AznfXzDOtSvDfEcZUF7tvUEKznnvHM85CowVxrGBUtTJmrayL8mh/kBmzD+3ZiAiVJJY1hFDYxBzWnlS9b5fYs8621qqpKS36Lq+D0A==)}"
       mistral:
         base-url: https://api.mistral.ai/v1
+        include-stream-usage: ${MISTRAL_INCLUDE_STREAM_USAGE:false}
         api-keys:
           - "ENC(grCLb5idl3gyvvzg/cjUzFGXRBwqTWO+EglOF4fqkrzxYm6R1IGB/z4MKWXCMDn2HAHgOwCofgQ4/7hfkdI5Da5+7mscd3KB7vqNILrniFXi0XvpU85tuaI=)"
           - "ENC(0nQX2ieZsmFCEh7qukIeuN6age0Ng4+FfdwINL6KclsGpkoDmrkTQzLe0VNdrXCB8EubKiVyiiwuAA2idNCfCIGPb0eTLLdLdcPcsQDQNZJpvD2QUX8As0Y=)"

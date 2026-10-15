@@ -46,7 +46,8 @@ class AgentBuildOfferTest {
             PLAN | add dark mode
             BUILD | a modern look
             """)
-    void readonlyReplyOffersTheOriginalRequestWithoutAnExtraCall(ProjectType requested, String prompt) throws Exception {
+    void readonlyRepliesOfferExplicitRequestsOrConcreteUnclearProposalsWithoutExtraCalls(
+            ProjectType requested, String prompt) throws Exception {
         var workspace = LocalProject.create();
         var props = new AgentProperties();
         props.getModels().setChat(List.of("test-model"));
@@ -72,11 +73,15 @@ class AgentBuildOfferTest {
         var changes = mock(ChangeSetService.class);
         var validation = mock(ProjectValidationService.class);
         var calls = new AtomicInteger();
+        String proposedChange = requested == ProjectType.BUILD ? "Apply a modern layout to the existing page." : prompt;
         LlmClient model = (request, delta) -> {
             calls.incrementAndGet();
             assertFalse(request.tools().stream().anyMatch(tool -> tool.name().equals("createFile")));
-            delta.accept("I can help with that. Use Build this when you are ready.");
-            return new LlmClient.LlmResult("I can help with that. Use Build this when you are ready.", null,
+            String answer = requested == ProjectType.BUILD
+                    ? "{\"reply\":\"" + proposedChange + "\",\"action\":\"build\"}"
+                    : "I can help with that. Use Build this when you are ready.";
+            delta.accept(answer);
+            return new LlmClient.LlmResult(answer, null,
                     List.of(), new LlmClient.Usage(10, 10), "stop");
         };
         var runner = new AgentRunner(model, new ToolRegistry(List.of()), mock(AgentToolExecutor.class),
@@ -94,6 +99,6 @@ class AgentBuildOfferTest {
         assertTrue(json.isObject(), "Completed reply must include its backend-generated build action");
         assertEquals("Build this", json.path("label").asString());
         assertEquals("BUILD", json.path("mode").asString());
-        assertEquals(prompt, json.path("message").asString());
+        assertEquals(proposedChange, json.path("message").asString());
     }
 }

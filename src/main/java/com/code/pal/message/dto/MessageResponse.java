@@ -32,4 +32,10 @@ public record MessageResponse(
                 m.getMode(), m.getReplyToId(), m.getFeedback(), m.getSeq(), m.getCreatedAt(), m.getUpdatedAt(),
                 m.attachmentPaths(), SuggestedAction.from(m));
     }
+
+    /** Project-room payloads are shared; actionable offers are fetched through the actor-scoped API. */
+    public MessageResponse withoutSuggestedAction() {
+        return new MessageResponse(id, projectId, role, content, status, mode, replyToId, feedback, seq,
+                createdAt, updatedAt, attachments, null);
+    }
 }

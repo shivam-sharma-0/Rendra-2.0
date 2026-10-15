@@ -4,26 +4,30 @@ import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.message.MessageSequence;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.domain.MessageFeedback;
+import com.code.pal.message.domain.MessageRole;
 import com.code.pal.message.dto.CreateMessageRequest;
 import com.code.pal.message.dto.MessageResponse;
 import com.code.pal.message.exception.MessageNotFoundException;
 import com.code.pal.message.repository.MessageRepository;
-import com.code.pal.message.service.MessageService;
 import com.code.pal.message.service.ConversationProposals;
+import com.code.pal.message.service.MessageService;
 import com.code.pal.project.domain.Project;
 import com.code.pal.project.domain.ProjectStage;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.event.AssistantTurnRequested;
-import com.code.pal.project.service.ProjectService;
 import com.code.pal.project.exception.RequirementApprovalRequiredException;
+import com.code.pal.project.service.ProjectService;
 import com.code.pal.realtime.RealtimeService;
 import com.code.pal.realtime.dto.RealtimeMessage;
 import com.code.pal.shared.usage.AgentTurnAdmission;
+import com.code.pal.workspace.exception.WorkspaceAccessDeniedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -32,6 +36,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 @Slf4j
@@ -60,21 +65,21 @@ public class MessageServiceImpl implements MessageService {
         if (existing.isPresent()) {
             Message accepted = existing.get();
             List<String> retryAttachments = retryAttachmentPaths(request.attachments());
-            if (accepted.getRole() != com.code.pal.message.domain.MessageRole.USER
-                    || !java.util.Objects.equals(accepted.getAuthorId(), userId)
-                    || !java.util.Objects.equals(accepted.getContent(), request.message())
+            if (accepted.getRole() != MessageRole.USER
+                    || !Objects.equals(accepted.getAuthorId(), userId)
+                    || !Objects.equals(accepted.getContent(), request.message())
                     || !accepted.attachmentPaths().equals(retryAttachments)
                     || (request.proposalId() != null && !request.proposalId().equals(accepted.getSourceProposalId()))
                     || (request.mode() != null && accepted.getRequestedMode() != null
                         && request.mode() != accepted.getRequestedMode()))
                 throw new com.code.pal.message.exception.MessageConflictException();
             var assistant = messageRepository.findFirstByProjectIdAndReplyToIdAndRoleOrderBySeqAsc(
-                    projectId, request.id(), com.code.pal.message.domain.MessageRole.ASSISTANT);
+                    projectId, request.id(), MessageRole.ASSISTANT);
             if (assistant.isPresent() && !assistant.get().getId().equals(request.aiMessageId()))
                 throw new com.code.pal.message.exception.MessageConflictException();
             List<MessageResponse> result = new ArrayList<>();
             result.add(MessageResponse.from(accepted));
-            assistant.ifPresent(message -> result.add(MessageResponse.from(message)));
+            assistant.ifPresent(message -> result.add(responseFor(userId, projectId, message)));
             return List.copyOf(result);
         }
 
@@ -97,10 +102,11 @@ public class MessageServiceImpl implements MessageService {
         // Check limits before anything is saved, so a rejected turn leaves no orphan message behind.
         if (startsAgentTurn) admission.requireAdmitted(userId);
 
-        Message consumedProposal = resolution.proposal();
-        if (startsAgentTurn && consumedProposal == null
-                && RequestRouter.route(request.message(), request.attachments(), false) == RequestRouter.Route.CHANGE) {
-            consumedProposal = proposals.retirePrevious(userId, projectId, request.id());
+        List<Message> retired = List.of();
+        if (resolution.proposal() == null
+                && (RequestRouter.route(request.message(), request.attachments(), true) != RequestRouter.Route.CONTINUE
+                    || request.attachments() != null && !request.attachments().isEmpty())) {
+            retired = proposals.retirePrevious(projectId, request.id());
         }
 
         List<Message> created = new ArrayList<>(2);
@@ -133,9 +139,10 @@ public class MessageServiceImpl implements MessageService {
         // never leaves collaborators showing a message that was never persisted.
         List<MessageResponse> responses = created.stream().map(MessageResponse::from).toList();
         broadcastAfterCommit(projectId, responses);
-        if (consumedProposal != null && consumedProposal.getProposalConsumedBy() != null) {
-            broadcastAfterCommit(projectId, List.of(MessageResponse.from(consumedProposal)));
+        if (resolution.proposal() != null && resolution.proposal().getProposalConsumedBy() != null) {
+            broadcastAfterCommit(projectId, List.of(MessageResponse.from(resolution.proposal())));
         }
+        broadcastAfterCommit(projectId, retired.stream().map(MessageResponse::from).toList());
         return responses;
     }
 
@@ -174,7 +181,7 @@ public class MessageServiceImpl implements MessageService {
     @Override
     @Transactional(readOnly = true)
     public List<String> openingAttachments(UUID projectId) {
-        return messageRepository.findFirstByProjectIdAndRoleOrderBySeqAsc(projectId, com.code.pal.message.domain.MessageRole.USER)
+        return messageRepository.findFirstByProjectIdAndRoleOrderBySeqAsc(projectId, MessageRole.USER)
                 .map(Message::attachmentPaths).orElse(List.of());
     }
 
@@ -182,7 +189,33 @@ public class MessageServiceImpl implements MessageService {
     @Transactional(readOnly = true)
     public Page<MessageResponse> list(Long userId, UUID projectId, Pageable pageable) {
         projectService.requireAccessible(userId, projectId);   // authorize
-        return messageRepository.findByProjectId(projectId, pageable).map(MessageResponse::from);
+        String eligible = eligibleProposal(userId, projectId);
+        return messageRepository.findByProjectId(projectId, pageable).map(message -> {
+            var response = MessageResponse.from(message);
+            return message.getId().equals(eligible) ? response : response.withoutSuggestedAction();
+        });
+    }
+
+    private MessageResponse responseFor(Long userId, UUID projectId, Message message) {
+        var response = MessageResponse.from(message);
+        return message.getId().equals(eligibleProposal(userId, projectId)) ? response : response.withoutSuggestedAction();
+    }
+
+    private String eligibleProposal(Long userId, UUID projectId) {
+        try {
+            projectService.requireCanEdit(userId, projectId);
+        } catch (WorkspaceAccessDeniedException | AccessDeniedException denied) {
+            return null;
+        }
+        var latest = messageRepository.findLatestProposal(projectId, userId, PageRequest.of(0, 1));
+        if (latest.isEmpty()) {
+            return null;
+        }
+        Message reply = latest.getFirst();
+        if (MessageResponse.from(reply).suggestedAction() == null) {
+            return null;
+        }
+        return reply.getId();
     }
 
     @Override
@@ -192,7 +225,7 @@ public class MessageServiceImpl implements MessageService {
         Message message = messageRepository.findByIdAndProjectId(messageId, projectId)
                 .orElseThrow(() -> new MessageNotFoundException("Message not found"));
         message.setFeedback(feedback);
-        MessageResponse response = MessageResponse.from(messageRepository.save(message));
+        MessageResponse response = responseFor(userId, projectId, messageRepository.save(message));
         broadcastAfterCommit(projectId, List.of(response));
         return response;
     }
@@ -200,13 +233,15 @@ public class MessageServiceImpl implements MessageService {
     /** Fire the room broadcast once the surrounding transaction commits (falls back to inline if none). */
     private void broadcastAfterCommit(UUID projectId, List<MessageResponse> messages) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            messages.forEach(m -> realtimeService.sendToProject(projectId, RealtimeMessage.of("MESSAGE_UPSERT", m)));
+            messages.forEach(m -> realtimeService.sendToProject(projectId,
+                    RealtimeMessage.of("MESSAGE_UPSERT", m.withoutSuggestedAction())));
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                messages.forEach(m -> realtimeService.sendToProject(projectId, RealtimeMessage.of("MESSAGE_UPSERT", m)));
+                messages.forEach(m -> realtimeService.sendToProject(projectId,
+                        RealtimeMessage.of("MESSAGE_UPSERT", m.withoutSuggestedAction())));
             }
         });
     }
