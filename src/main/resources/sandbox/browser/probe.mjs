@@ -190,17 +190,23 @@ if (!loaded) add("load", "The page did not finish loading", null);
 const blank = (page.textLength ?? 0) === 0 && (page.media ?? 0) === 0;
 if (blank) add("blank", "The page rendered nothing visible", null);
 
-// Production baseline: a phone-width (375 px) layout must not scroll sideways.
-if (loaded && !blank) {
+// Production baseline: a phone-width (375 px) layout must not scroll sideways. A measurement that cannot be
+// read is reported as such, never taken as "no overflow". Run on load and again on the state acceptance reached.
+const measureMobile = async (where) => {
   await send("Emulation.setDeviceMetricsOverride", { width: 375, height: 812, deviceScaleFactor: 1, mobile: true }, sessionId);
   await new Promise((r) => setTimeout(r, 300));
   const measured = await send("Runtime.evaluate", { returnByValue: true, expression:
     "Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0) - window.innerWidth" }, sessionId);
-  const overflow = measured.result?.result?.value ?? 0;
-  if (overflow > 1) add("layout", `The page scrolls sideways at 375 px wide (${overflow} px too wide)`, null);
+  const overflow = measured.result?.result?.value;
+  if (measured.result?.exceptionDetails || typeof overflow !== "number" || !Number.isFinite(overflow)) {
+    add("layout", `The phone-width (375 px) layout could not be measured ${where}`, null);
+  } else if (overflow > 1) {
+    add("layout", `The page scrolls sideways at 375 px wide ${where} (${overflow} px too wide)`, null);
+  }
   await send("Emulation.clearDeviceMetricsOverride", {}, sessionId);
   await new Promise((r) => setTimeout(r, 150));
-}
+};
+if (loaded && !blank) await measureMobile("on load");
 
 // Exercise each visible control once. Links are not followed (that would leave the page); a control
 // is found again by its position each time, since the page may re-render after every action.
@@ -301,6 +307,7 @@ for (const expected of acceptanceActions) {
   }
   await new Promise(r => setTimeout(r, 150));
 }
+if (loaded && !blank && acceptance.length > 0 && acceptance.every((a) => a.passed)) await measureMobile("after the required steps");
 clearTimeout(timer);
 chrome.kill("SIGKILL");
 server.close();

@@ -28,6 +28,11 @@ public class RetireAcceptanceCheckTool implements AgentTool {
         return false;
     }
 
+    /** It changes what later validation requires, so it needs current edit rights like a file change. */
+    public boolean mutating() {
+        return true;
+    }
+
     public Map<String, Object> parametersSchema() {
         return Map.of("type", "object", "properties", Map.of(
                 "ids", Map.of("type", "array", "minItems", 1, "maxItems", 24, "items", Map.of("type", "string")),

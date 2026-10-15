@@ -92,6 +92,27 @@ public class SequentialCheckpoints {
         return reserve(run, 0);
     }
 
+    /**
+     * Returns one reserved model/iteration slot for an attempt that provably produced no completion. The
+     * refund row makes it idempotent across retries and restarts; tokens, cost, tools and time are never refunded.
+     */
+    public boolean refundModelIteration(AgentRun run, UUID logicalId, int ordinal) {
+        return leases.guarded(run.getProjectId(), () -> {
+            RunFence fence = RunFence.current();
+            if (fence == null || !fence.runId().equals(run.getId()))
+                throw new IllegalStateException("Execution progress requires run ownership");
+            return Boolean.TRUE.equals(tx.execute(status -> {
+                int inserted = jdbc.update("insert into agent_model_call_refunds(run_id,logical_id,ordinal) values (?,?,?) "
+                        + "on conflict do nothing", run.getId(), logicalId, ordinal);
+                if (inserted != 1)
+                    return false;
+                jdbc.update("update agent_execution_progress set iterations=greatest(iterations-1,0),"
+                        + "model_calls=greatest(model_calls-1,0) where run_id=?", run.getId());
+                return true;
+            }));
+        });
+    }
+
     public void restrict(AgentRun run, BuildContract.Limits limits, RunSize original) {
         leases.guarded(run.getProjectId(), () -> {
             tx.executeWithoutResult(s -> jdbc.update(

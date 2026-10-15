@@ -82,6 +82,12 @@ public class ProjectValidationService {
                 changeSets.validationProgress(context));
     }
 
+    /** The trusted command an operation would run on the staged change, or null when none is available. */
+    public List<String> plannedCommand(AgentContext context, ValidationOperation operation) {
+        CommandPlan plan = plan(context, operation, null);
+        return plan.available() ? List.copyOf(plan.command()) : null;
+    }
+
     public ValidationReport run(AgentContext context, ValidationOperation operation, String scope) {
         validateScope(scope);
         CommandPlan plan = plan(context, operation, scope);
@@ -178,7 +184,10 @@ public class ProjectValidationService {
         }
         // Only a change that type-checks and builds is worth loading in a browser.
         if (passed) {
-            RuntimeCheckService.Result runtimeResult = revisionResults(context).runtime;
+            // A retired inherited check changes what the browser must prove without changing the source revision.
+            String criteriaKey = criteriaKey(context);
+            RuntimeCheckService.Result runtimeResult = criteriaKey.equals(revisionResults(context).runtimeCriteria)
+                    ? revisionResults(context).runtime : null;
             if (runtimeResult == null) {
                 runtimeResult = runtime == null
                         ? new RuntimeCheckService.Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED,
@@ -187,6 +196,7 @@ public class ProjectValidationService {
                 if (runtimeResult == null)
                     throw new IllegalStateException("Runtime check did not report an outcome");
                 revisionResults(context).runtime = runtimeResult;
+                revisionResults(context).runtimeCriteria = criteriaKey;
             }
             checks.add(runtimeResult.check());
             if (runtimeResult.check().outcome() == ValidationCheck.Outcome.PASS)
@@ -313,6 +323,14 @@ public class ProjectValidationService {
         return comparison;
     }
 
+    /** The acceptance the browser check runs: the run's own criteria, else the inherited regression checks. */
+    private String criteriaKey(AgentContext context) {
+        if (behaviorCriteria == null)
+            return "";
+        var own = behaviorCriteria.current(context);
+        return "own:" + (own != null ? own : "") + "|inherited:" + (own != null ? "" : behaviorCriteria.regression(context));
+    }
+
     private RevisionResults revisionResults(AgentContext context) {
         int revision = changeSets.view(context).revision();
         return results.compute(context.runId(),
@@ -324,6 +342,7 @@ public class ProjectValidationService {
         final int revision;
         final Map<ValidationOperation, Comparison> comparisons = new ConcurrentHashMap<>();
         volatile RuntimeCheckService.Result runtime;
+        volatile String runtimeCriteria;
 
         RevisionResults(int revision) {
             this.revision = revision;

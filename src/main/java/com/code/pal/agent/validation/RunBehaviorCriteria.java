@@ -90,9 +90,14 @@ public final class RunBehaviorCriteria {
         String why = reason == null ? "" : reason.strip();
         if (why.isEmpty() || why.length() > 300)
             throw new IllegalArgumentException("Give a short reason (at most 300 characters)");
-        for (String id : ids)
-            jdbc.update("insert into agent_acceptance_retirements(run_id,project_id,action_id,reason) values (?,?,?,?) "
-                    + "on conflict do nothing", ctx.runId(), ctx.projectId(), id, why);
+        // One statement: every id or none, and only for this project's running, unstopped BUILD run of this user.
+        int inserted = jdbc.update("insert into agent_acceptance_retirements(run_id,project_id,action_id,reason) "
+                + "select r.id,r.project_id,unnest(?::varchar[]),? from agent_runs r where r.id=? and r.project_id=? "
+                + "and r.user_id=? and r.mode='BUILD' and r.status='RUNNING' and r.cancel_requested_at is null "
+                + "on conflict do nothing", ids.toArray(String[]::new), why, ctx.runId(), ctx.projectId(), ctx.userId());
+        if (inserted == 0 && jdbc.queryForObject("select count(*) from agent_acceptance_retirements where run_id=? and "
+                + "action_id = any(?::varchar[])", Integer.class, ctx.runId(), ids.toArray(String[]::new)) < ids.size())
+            throw new IllegalStateException("Only the running build of this change can retire its inherited checks");
         return known.stream().filter(id -> !ids.contains(id)).toList();
     }
 

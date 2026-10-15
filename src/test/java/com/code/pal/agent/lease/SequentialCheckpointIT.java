@@ -118,6 +118,18 @@ class SequentialCheckpointIT {
         }
         assertFalse(f.requeue());assertEquals(1,checkpoints.progress(f.id).resumeCount());
     }
+    @Test void aFailedAttemptWithoutCompletionIsRefundedExactlyOnce(){
+        var f=new Fixture();UUID logical=UUID.randomUUID();
+        try(var scope=RunFence.bind(f.fence)){
+            checkpoints.configure(f.run,f.caps(2));assertTrue(checkpoints.reserveModelIteration(f.run));assertTrue(checkpoints.reserveModelIteration(f.run));
+            assertFalse(checkpoints.reserveModelIteration(f.run),"the cap is reached");
+            assertTrue(checkpoints.refundModelIteration(f.run,logical,1));
+            assertFalse(checkpoints.refundModelIteration(f.run,logical,1),"a retried refund returns nothing more");
+            var progress=checkpoints.progress(f.id);assertEquals(1,progress.iterations());assertEquals(1,progress.modelCalls());
+            assertTrue(checkpoints.reserveModelIteration(f.run),"the refunded slot is usable again");assertFalse(checkpoints.reserveModelIteration(f.run));
+        }
+        assertThrows(IllegalStateException.class,()->checkpoints.refundModelIteration(f.run,logical,2),"only the run owner can refund");
+    }
     @Test void anExpiredDeadlineCannotBeResetOrResumed(){
         var f=new Fixture();try(var scope=RunFence.bind(f.fence)){
             checkpoints.configure(f.run,f.caps(3));f.stage();jdbc.update("update agent_execution_progress set deadline_at=clock_timestamp()-interval '1 second' where run_id=?",f.id);

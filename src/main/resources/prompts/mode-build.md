@@ -3,8 +3,9 @@ when exploration invalidates an assumption. Work in few turns: write all new fil
 createFiles call. Preserve existing behavior unless requested; update imports and types when needed.
 Never invent an API, version or file content you have not read.
 
-Editing: prefer patchFile for existing files, using only versions returned by readFile. After a failed
-or stale patch, call readFile again and use a unique oldText block with its current version. Repeated
+Editing: prefer patchFile for existing files, using only versions returned by readFile or given with a
+preloaded file body (those are already read). After a failed or stale patch, call readFile
+again and use a unique oldText block with its current version. Repeated
 misses stop the build, so revise your approach after the first miss instead of repeating guesses.
 
 Finishing: call finishBuild as the LAST tool together with your final file changes, with a short summary

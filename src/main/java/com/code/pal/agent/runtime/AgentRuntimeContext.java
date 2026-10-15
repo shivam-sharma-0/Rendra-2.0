@@ -68,6 +68,8 @@ public final class AgentRuntimeContext {
     }
     public void beginIteration() { iteration++; }
     public void recordModelCall() { modelCallCount++; }
+    /** Undoes one iteration and model call whose attempt provably produced no completion (durably refunded). */
+    public void refundModelCall() { iteration = Math.max(0, iteration - 1); modelCallCount = Math.max(0, modelCallCount - 1); }
     public void recordToolCalls(int count) { toolCallCount += count; }
     public void transitionTo(AgentRuntimeStatus next) { status = next; }
     public void transitionPhase(AgentPhase next) { phase = next; }

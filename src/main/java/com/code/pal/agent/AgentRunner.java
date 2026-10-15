@@ -4,6 +4,7 @@ import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.context.ContextDiagnostics;
 import com.code.pal.agent.context.ContextMessage;
+import com.code.pal.agent.context.ContextSelectionReason;
 import com.code.pal.agent.context.ConversationCompactor;
 import com.code.pal.agent.context.ProjectContext;
 import com.code.pal.agent.context.ProjectContextService;
@@ -89,6 +90,7 @@ import com.code.pal.agent.change.SequentialCheckpoints;
 import com.code.pal.agent.context.ToolResultMemory;
 import com.code.pal.agent.contract.BatchBudget;
 import com.code.pal.agent.contract.ContractCoordinator;
+import com.code.pal.agent.contract.ContractModelCalls;
 import com.code.pal.agent.contract.StaticAssets;
 import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.lease.TrustedOperationPendingException;
@@ -125,6 +127,8 @@ public class AgentRunner implements AgentRuntime {
     private static final int SPEC_INPUT_BYTES = 32_000;
     private static final int SPEC_CONTEXT_TOKENS = 32_000;
     private static final int SPEC_PROVIDER_OVERHEAD_TOKENS = 512;
+    /** Room kept for tool schemas, the reply and later tool results when preloading edit files. */
+    private static final int PRELOAD_HEADROOM_CHARS = 24_000;
     private static final Set<String> READ_ONLY_FOUNDATION_TOOLS = Set.of(
             "listFiles", "readFile", "searchCode", "getProjectMetadata", "getFileSummary", "getApprovedRequirement",
             "findProjectFiles");
@@ -537,8 +541,39 @@ public class AgentRunner implements AgentRuntime {
         }
         if (resumed != null) {
             convo.add(LlmMessage.user(resumed));
+        } else if (run.getMode() == ProjectType.BUILD && attachments.isEmpty()) {
+            preloadEditFiles(state, userRequest, convo);
         }
         return convo;
+    }
+
+    /**
+     * S8: a follow-up edit gets the complete current bodies of the files it clearly targets, so the model can
+     * patch them without a separate readFile call. Bodies count against the context budget and are recorded as
+     * reads only after they are in the conversation; anything missing is still read with the normal tools.
+     */
+    private void preloadEditFiles(RunState state, String userRequest, List<LlmMessage> convo) {
+        var trace = state.ctx.contextTrace();
+        if (trace == null || projectShape(state.run.getProjectId(), state.ctx.root()).equals(BuildPrompt.ProjectShape.EMPTY)) {
+            return;
+        }
+        int used = convo.stream().mapToInt(message -> message.content() == null ? 0 : message.content().length()).sum();
+        int remaining = props.getContextBudgetChars() - used - PRELOAD_HEADROOM_CHARS;
+        if (remaining <= 0) {
+            return;
+        }
+        var targets = trace.diagnostics(0).selectedFiles().stream()
+                .filter(selected -> selected.reason() == ContextSelectionReason.USER_MENTIONED
+                        || selected.reason() == ContextSelectionReason.SEARCH_MATCH)
+                .map(ContextDiagnostics.SelectedPath::path).toList();
+        var preloaded = projectContexts.preloadedFiles(state.ctx, userRequest, targets, remaining);
+        if (preloaded.text().isBlank()) {
+            return;
+        }
+        convo.add(LlmMessage.user(preloaded.text()));
+        preloaded.versions().forEach((path, version) -> trace.recordRead(path,
+                files.size(state.run.getProjectId(), state.ctx.root(), path), version,
+                (int) Math.min(Integer.MAX_VALUE, files.size(state.run.getProjectId(), state.ctx.root(), path))));
     }
 
     /**
@@ -557,6 +592,44 @@ public class AgentRunner implements AgentRuntime {
                 .map(spec -> new ContractCoordinator.SpecPlanning(spec, budget)).orElse(null);
     }
 
+    /**
+     * One logical structured request: the preferred FREE route, then up to two other configured FREE routes when
+     * an attempt provably produced no completion. Each failed attempt's model/iteration slot is refunded durably
+     * once; tokens, tools and elapsed time are not.
+     */
+    private LlmResult structuredCall(AgentRun run, AgentRuntimeContext runtime, long deadline, LlmRequest request,
+            Function<LlmRequest, LlmResult> attempt) {
+        var routes = props.freeStructuredRoutes();
+        var preferred = new AgentProperties.ModelSelection(request.provider(), request.model());
+        if (routes.size() < 2 || !routes.contains(preferred)) {
+            return attempt.apply(request);
+        }
+        var budgeted = request.budget() != null ? request : new LlmRequest(request.provider(), request.model(),
+                request.messages(), request.tools(), request.temperature(), callBudget(deadline), request.toolChoice(),
+                request.maxTokens(), request.jsonSchema());
+        return new ContractModelCalls(routes, System::nanoTime).execute(budgeted, new ContractModelCalls.Attempts() {
+            @Override
+            public LlmResult call(UUID logicalId, int ordinal, LlmRequest routed) {
+                return attempt.apply(routed);
+            }
+
+            @Override
+            public boolean noCompletion(UUID logicalId, int ordinal, RuntimeException failure) {
+                return failure instanceof RetryableLlmException
+                        || failure instanceof LlmHttpException http && http.modelUnavailable();
+            }
+
+            @Override
+            public void refund(UUID logicalId, int ordinal) {
+                if (checkpoints.refundModelIteration(run, logicalId, ordinal)) {
+                    synchronized (runtime) {
+                        runtime.refundModelCall();
+                    }
+                }
+            }
+        });
+    }
+
     private AgentRunResult runStructured(RunState state, RunSize size, String userRequest,
             ContractCoordinator.SpecPlanning planning) {
         AgentRun run = state.run;
@@ -565,7 +638,7 @@ public class AgentRunner implements AgentRuntime {
         }
         final AgentRuntimeContext structuredRuntime = state.runtime;
         final long structuredDeadline = state.deadlineNanos;
-        Function<LlmRequest, LlmResult> checkedCall = request -> {
+        Function<LlmRequest, LlmResult> attempt = request -> {
             long currentDeadline = Math.min(structuredDeadline, System.nanoTime()
                     + TimeUnit.MILLISECONDS.toNanos(checkpoints.progress(run.getId()).remainingMs()));
             requireBeforeDeadline(currentDeadline);
@@ -596,6 +669,8 @@ public class AgentRunner implements AgentRuntime {
             }
             return response;
         };
+        Function<LlmRequest, LlmResult> checkedCall = request -> structuredCall(run, structuredRuntime, structuredDeadline,
+                request, attempt);
         Runnable beforeIo = () -> {
             requireNotCancelled(run);
             requireBeforeDeadline(structuredDeadline);

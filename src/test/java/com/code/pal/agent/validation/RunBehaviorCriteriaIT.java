@@ -70,6 +70,9 @@ class RunBehaviorCriteriaIT {
         assertThrows(IllegalArgumentException.class,()->store.retire(context(f,edit),List.of("missing"),"renamed"));
         assertThrows(IllegalArgumentException.class,()->store.retire(context(f,edit),List.of("heading")," "));
         assertThrows(IllegalArgumentException.class,()->store.retire(f.context(),List.of("heading"),"own acceptance"));
+        var stopped=followUp(f,"RUNNING");jdbc.update("update agent_runs set cancel_requested_at=now() where id=?",stopped);
+        assertThrows(IllegalStateException.class,()->store.retire(context(f,stopped),List.of("heading","menu"),"stopped run"));
+        assertEquals(0,jdbc.queryForObject("select count(*) from agent_acceptance_retirements where run_id=?",Integer.class,stopped),"nothing partial");
         assertEquals(List.of("menu"),store.retire(context(f,edit),List.of("heading"),"The user renamed the bakery"));
         assertEquals(List.of("menu"),store.regression(context(f,edit)).browser().stream().map(BehaviorCriteria.BrowserAction::id).toList());
         var later=followUp(f,"RUNNING");

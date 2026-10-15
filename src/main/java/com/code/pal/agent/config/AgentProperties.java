@@ -578,6 +578,18 @@ public class AgentProperties implements EnvironmentAware {
         return all.stream().filter(this::available).findFirst().orElse(all.getFirst());
     }
 
+    /** Configured FREE routes for structured planning and generation; empty in PAID mode (no automatic failover). */
+    public List<ModelSelection> freeStructuredRoutes() {
+        if (billingMode != BillingMode.FREE)
+            return List.of();
+        var routes = new ArrayList<ModelSelection>();
+        for (List<String> list : List.of(models.getFreeBuild(), models.getFreePlan())) {
+            if (list != null)
+                list.stream().filter(entry -> entry != null && !entry.isBlank()).map(this::selection).forEach(routes::add);
+        }
+        return routes.stream().distinct().toList();
+    }
+
     /** A run never reselects a route whose bounded provider attempt already failed. */
     public ModelSelection untriedModel(ProjectType mode, Set<ModelSelection> failed) {
         List<String> configured = switch (mode) {
