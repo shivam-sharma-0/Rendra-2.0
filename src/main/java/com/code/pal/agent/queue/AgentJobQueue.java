@@ -113,7 +113,7 @@ public class AgentJobQueue {
 
     /** Flag a run for cancellation; the executing worker sees it and stops at the next checkpoint. */
     public void requestCancel(UUID runId) {
-        redis.opsForValue().set(CANCEL_PREFIX + runId, "1", Duration.ofMillis(props.getRunTimeoutMs() + 60_000));
+        redis.opsForValue().set(CANCEL_PREFIX + runId, "1", Duration.ofMillis(props.longestRunTimeoutMs() + 60_000));
     }
 
     public boolean isCancelRequested(UUID runId) {

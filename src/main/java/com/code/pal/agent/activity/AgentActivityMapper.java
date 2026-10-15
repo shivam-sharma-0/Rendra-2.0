@@ -83,6 +83,7 @@ public class AgentActivityMapper {
             case "searchCode" -> activity(Kind.READ, "Searched the code", List.of(), true, null);
             case "getProjectMetadata" -> activity(Kind.READ, "Read the project settings", List.of(), true, null);
             case "createFile", "createFiles" -> activity(Kind.CREATE, "Created", paths, true, null);
+            case "startProject" -> activity(Kind.CREATE, "Set up the project", paths, true, null);
             case "patchFile" -> activity(Kind.EDIT, "Edited", paths, true, null);
             case "deleteFile" -> activity(Kind.DELETE, "Deleted", paths, true, null);
             case "renameFile" -> activity(Kind.MOVE, "Renamed", paths, true, null);

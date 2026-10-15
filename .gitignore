@@ -44,3 +44,6 @@ src/main/resources/jwt/
 *.pem
 
 logs/
+
+hs_err_pid*.log
+/java

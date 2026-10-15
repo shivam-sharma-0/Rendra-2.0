@@ -79,6 +79,12 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
     private int projectScanMaxDepth = 12;
     private int projectInstructionMaxChars = 4_000;
     private long runTimeoutMs = 300_000;
+    /** Decide each build's size tier (S / M / L) by rules; M and L runs get the limits below. */
+    private boolean sizeTiers = true;
+    private long largeRunTimeoutMs = 900_000;
+    private int largeRunMaxIterations = 60;
+    private int largeRunMaxModelCalls = 60;
+    private int largeRunMaxToolCalls = 150;
     private int workerConcurrency = 2;
     /** Maximum readonly calls from one model response to run at once. */
     private int toolConcurrency = 4;
@@ -111,6 +117,11 @@ public class AgentProperties implements org.springframework.context.EnvironmentA
      * every {@link #heartbeatIntervalMs}, so a run is only reclaimed once several heartbeats are
      * missed (i.e. the worker actually died) â€” never while it is merely busy in a long LLM stream.
      */
+    /** The longest a run may take, whatever its size tier. */
+    public long longestRunTimeoutMs() {
+        return sizeTiers ? Math.max(runTimeoutMs, largeRunTimeoutMs) : runTimeoutMs;
+    }
+
     public long leaseMs() {
         return Math.max(30_000, heartbeatIntervalMs * 3);
     }

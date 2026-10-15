@@ -8,6 +8,7 @@ import com.code.pal.agent.context.ContextMessage;
 import com.code.pal.agent.context.ConversationCompactor;
 import com.code.pal.agent.context.ProjectContext;
 import com.code.pal.agent.context.ProjectContextService;
+import com.code.pal.agent.context.ProjectFileSummary;
 import com.code.pal.agent.domain.AgentIntent;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.AgentStepType;
@@ -28,6 +29,9 @@ import com.code.pal.agent.llm.TokenEstimate;
 import com.code.pal.agent.llm.LlmException;
 import com.code.pal.agent.queue.AgentJobQueue;
 import com.code.pal.agent.repository.AgentRunRepository;
+import com.code.pal.agent.route.RunSize;
+import com.code.pal.agent.route.SizeTier;
+import com.code.pal.agent.route.SizeTierRules;
 import com.code.pal.agent.runtime.AgentRunResult;
 import com.code.pal.agent.runtime.AgentRuntime;
 import com.code.pal.agent.runtime.AgentRuntimeContext;
@@ -90,8 +94,9 @@ public class AgentRunner implements AgentRuntime {
             "listFiles", "readFile", "searchCode", "getProjectMetadata", "getFileSummary");
     private static final Set<String> PLANNING_TOOLS = Set.of("setPlan", "updatePlanStep");
     /** Tools that change staged files (a draft preview follows them). */
-    private static final Set<String> FILE_CHANGING_TOOLS = Set.of("createFile", "createFiles", "patchFile", "deleteFile", "renameFile", "copyFile");
-    private static final Set<String> WRITE_TOOLS = Set.of("createFile", "createFiles", "patchFile", "deleteFile",
+    private static final Set<String> FILE_CHANGING_TOOLS = Set.of("createFile", "createFiles", "patchFile", "deleteFile", "renameFile", "copyFile",
+            "startProject");
+    private static final Set<String> WRITE_TOOLS = Set.of("startProject", "createFile", "createFiles", "patchFile", "deleteFile",
             "renameFile", "copyFile",
             "getDiagnostics", "runTypeCheck", "runBuild", "runTests", "validateChanges");
 
@@ -198,7 +203,9 @@ public class AgentRunner implements AgentRuntime {
         // Who the run's model calls are for, for the call ledger; the loop's own calls are counted in the run's totals.
         LlmCallContext.Scope callContext = LlmCallContext.bind(new LlmCallContext(run.getUserId(), run.getProjectId(), run.getId(), CallPurpose.AGENT, true));
         try {
-            long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(props.getRunTimeoutMs());
+            long startedNanos = System.nanoTime();
+            // Today's limit until the run's size is known; M and L builds get the longer one below.
+            long deadlineNanos = startedNanos + TimeUnit.MILLISECONDS.toNanos(props.getRunTimeoutMs());
             run.setHeartbeatAt(Instant.now());
             setStatus(run, RunStatus.RUNNING);
             log.info("agent_started runId={} projectId={} userId={}", run.getId(), run.getProjectId(), run.getUserId());
@@ -227,6 +234,10 @@ public class AgentRunner implements AgentRuntime {
             // BUILD runs work on a staged copy committed at the end; other runs read the project itself.
             String root = run.getMode() == ProjectType.BUILD ? changeSets.start(run.getId(), run.getProjectId()) : ".";
             projectContext = projectContexts.build(files, run.getProjectId(), root, userRequest, history, List.of());
+            RunSize size = runSize(run, project, userRequest, projectContext);
+            deadlineNanos = startedNanos + TimeUnit.MILLISECONDS.toNanos(size.timeoutMs());
+            events.emit(run, AgentStepType.STATUS, "Run size", Map.of("tier", size.tier().name(), "reasons", size.reasons(),
+                    "timeoutMs", size.timeoutMs(), "maxIterations", size.maxIterations()));
             AgentPlanState plan = new AgentPlanState();
             ctx = new AgentContext(run.getProjectId(), run.getUserId(), run.getMode(), root,
                     AgentProjectMetadata.from(project), projectContext.trace(), run.getId(), plan, files);
@@ -270,11 +281,11 @@ public class AgentRunner implements AgentRuntime {
             // One model for the whole run (the first available in priority order); another one only for
             // the calls made while it is failing, and back to it once its cooldown is over.
             AgentProperties.ModelSelection preferred = props.preferredModel(run.getMode());
-            for (int i = 0; i < props.getMaxIterations(); i++) {
+            for (int i = 0; i < size.maxIterations(); i++) {
                 requireBeforeDeadline(deadlineNanos);
                 requireNotCancelled(run);
                 runtime.beginIteration();
-                requireModelCallAvailable(runtime);
+                requireModelCallAvailable(runtime, size);
                 requireWithinDailyQuota(run, tokensBeforeRun);
                 runtime.transitionTo(AgentRuntimeStatus.WAITING_FOR_MODEL);
                 runtime.recordModelCall();
@@ -448,7 +459,7 @@ public class AgentRunner implements AgentRuntime {
                     return result(run, runtime, stream.content(), null);
                 }
 
-                requireToolCallsAvailable(runtime, res.toolCalls().size());
+                requireToolCallsAvailable(runtime, res.toolCalls().size(), size);
                 runtime.recordToolCalls(res.toolCalls().size());
                 String assistantContext = budgetAssistantContext(runtime, res.content());
                 runtime.messages().add(new LlmMessage("assistant", assistantContext, res.toolCalls(), null));
@@ -893,7 +904,7 @@ public class AgentRunner implements AgentRuntime {
         return trimmed.length() <= AUDIT_MAX_TEXT ? trimmed : trimmed.substring(0, AUDIT_MAX_TEXT) + "...";
     }
 
-    private static Map<String, Object> auditToolResult(ToolExecutionResult result, Map<String, Object> args) {
+    static Map<String, Object> auditToolResult(ToolExecutionResult result, Map<String, Object> args) {
         if (result.success() && result.output() instanceof ValidationReport report) {
             Map<String, Object> audit = new java.util.LinkedHashMap<>();
             audit.put("success", true);
@@ -911,6 +922,11 @@ public class AgentRunner implements AgentRuntime {
         audit.put("success", result.success());
         if (!result.success()) audit.put("errorCode", result.error().code());
         audit.putAll(auditPaths(args));
+        // A tool that decides its own paths (startProject) names them in its result.
+        if (result.success() && result.output() instanceof Map<?, ?> output && output.get("createdFiles") instanceof List<?> created) {
+            audit.put("paths", created.stream().filter(String.class::isInstance).map(path -> clipAudit((String) path))
+                    .limit(AUDIT_MAX_PATHS).toList());
+        }
         return audit;
     }
 
@@ -959,16 +975,32 @@ public class AgentRunner implements AgentRuntime {
         return runtime.reserveContext(content.length()) ? content : null;
     }
 
-    private void requireModelCallAvailable(AgentRuntimeContext runtime) {
-        if (runtime.modelCallCount() >= Math.max(1, props.getMaxModelCalls())) {
+    private static void requireModelCallAvailable(AgentRuntimeContext runtime, RunSize size) {
+        if (runtime.modelCallCount() >= Math.max(1, size.maxModelCalls())) {
             throw new AgentLimitExceededException("Agent model-call limit reached");
         }
     }
 
-    private void requireToolCallsAvailable(AgentRuntimeContext runtime, int requested) {
-        if (requested < 0 || runtime.toolCallCount() + requested > Math.max(1, props.getMaxToolCalls())) {
+    private static void requireToolCallsAvailable(AgentRuntimeContext runtime, int requested, RunSize size) {
+        if (requested < 0 || runtime.toolCallCount() + requested > Math.max(1, size.maxToolCalls())) {
             throw new AgentLimitExceededException("Agent tool-call limit reached");
         }
+    }
+
+    /**
+     * The run's size tier and the limits that come with it. A project "already has code" when its files are
+     * more than its instruction files (such as the brief) and uploads.
+     */
+    private RunSize runSize(AgentRun run, Project project, String userRequest, ProjectContext context) {
+        if (!props.isSizeTiers()) return RunSize.of(SizeTier.S, List.of("size tiers off"), props);
+        Set<String> instructions = Set.copyOf(context.projectMap().instructionFiles());
+        boolean existing = context.projectMap().importantFiles().stream().map(ProjectFileSummary::path)
+                .anyMatch(path -> !instructions.contains(path) && !path.startsWith("uploads/"));
+        SizeTierRules.Decision decision = SizeTierRules.decide(run.getMode(), userRequest, project.getInitialPrompt(), existing);
+        RunSize size = RunSize.of(decision.tier(), decision.reasons(), props);
+        // A new project's first build also installs its dependencies, which takes minutes on a slow registry.
+        return run.getMode() == ProjectType.BUILD && !existing
+                ? size.withLongerTimeout(props.getLargeRunTimeoutMs(), "first build installs dependencies") : size;
     }
 
     /** Files attached to the latest user message (the request this run answers). */

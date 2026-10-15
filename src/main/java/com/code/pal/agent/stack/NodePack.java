@@ -212,7 +212,9 @@ public class NodePack implements StackPack {
                     ? List.of("sh", "-c", "test -f yarn.lock || : > yarn.lock; exec corepack \"$0\" install --mode=skip-build",
                             declared == null ? "yarn@stable" : corepackTool("yarn", declared))
                     : List.of("corepack", corepackTool("yarn", declared), "install", "--ignore-scripts", "--non-interactive", "--no-progress");
-            default -> List.of("npm", files.regularFile(projectId, root, LOCKFILE) ? "ci" : "install",
+            // --prefer-offline: packages already in the shared cache are not re-checked with the registry, which can
+            // take seconds per package; anything missing is still fetched.
+            default -> List.of("npm", files.regularFile(projectId, root, LOCKFILE) ? "ci" : "install", "--prefer-offline",
                     "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error");
         };
     }

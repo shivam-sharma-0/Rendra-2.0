@@ -41,6 +41,7 @@ class ProjectContextServiceTest {
         int brief = message.indexOf("--- RENDRA.md ---");
         assertTrue(brief >= 0 && brief < message.indexOf("--- AGENTS.md ---"), message);
         assertTrue(message.contains("Purple accent"));
+        assertFalse(message.contains("- RENDRA.md ["), "a file shown in full gets no summary line as well");
     }
 
     @Test

@@ -40,6 +40,14 @@ class AgentRunnerAuditTest {
     }
 
     @Test
+    void aToolThatChoosesItsOwnFilesNamesThemInItsResult() {
+        Map<String, Object> audit = AgentRunner.auditToolResult(com.code.pal.agent.tool.ToolExecutionResult.success(
+                Map.of("stack", "vite-react", "createdFiles", List.of("package.json", "src/main.tsx"))), Map.of("stack", "vite-react"));
+        assertEquals(List.of("package.json", "src/main.tsx"), audit.get("paths"));
+        assertEquals(true, audit.get("success"));
+    }
+
+    @Test
     void ignoresNonStringPaths() {
         assertTrue(AgentRunner.auditPaths(Map.of("path", 42, "files", "nope")).isEmpty());
     }

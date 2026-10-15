@@ -35,25 +35,20 @@ Stacks: a new project uses one of these.
 - Static site: index.html plus CSS/JS files in the project root, no package.json. Served as is. Style
   it with Tailwind: <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script> in the
   head and utility classes in the markup; a small styles.css only for what utilities cannot express.
-- Vite + React + TypeScript: package.json with react, react-dom, vite, @vitejs/plugin-react,
-  typescript, @types/react and @types/react-dom, plus tailwindcss and @tailwindcss/vite; scripts
-  "build": "tsc -b && vite build" and "typecheck": "tsc -b"; tsconfig.json; vite.config.ts with
-  plugins [react(), tailwindcss()] (import tailwindcss from "@tailwindcss/vite"); src/index.css whose
-  first line is @import "tailwindcss"; imported in src/main.tsx; index.html in the root loading
-  /src/main.tsx. Style components with Tailwind utility classes. The backend installs, validates and
-  builds it, then serves the build output.
-- MERN (React + Express + MongoDB): two packages, no shared node_modules.
-  client/: the Vite + React + TypeScript app above (its own package.json, tsconfig.json, vite.config.ts,
-  index.html, src/). It calls the API with relative URLs under /api (fetch("/api/todos")); in
-  vite.config.ts set server.proxy {"/api": "http://localhost:3000"} for local development.
-  server/: Express in TypeScript. package.json with express and mongoose, devDependencies typescript,
-  @types/express and @types/node, "main": "dist/index.js", scripts "build": "tsc" and "start":
-  "node dist/index.js", no "type" field; tsconfig.json with target ES2022, module commonjs, rootDir src,
-  outDir dist, strict, esModuleInterop, skipLibCheck; entry src/index.ts. Every route is under /api
-  (add GET /api/health returning {"ok":true}); use express.json(); listen on process.env.PORT (default
-  3000) and connect with mongoose to process.env.MONGODB_URI, which the backend provides (never
-  hard-code a connection string or credentials). The backend builds and runs the server, gives it its
-  own MongoDB database, and sends the preview's /api requests to it.
+- Vite + React + TypeScript + Tailwind: call startProject with stack "vite-react" right after setPlan.
+  It writes tested setup files: package.json (versions that work together), tsconfig.json,
+  vite.config.ts, index.html, src/main.tsx and src/index.css (Tailwind). Then write src/App.tsx (export
+  default function App) and the components under src/, styled with Tailwind utility classes. Do not
+  rewrite the setup files; add a package to package.json only when the app needs one. The backend
+  installs, validates and builds it, then serves the build output.
+- MERN (React + Express + MongoDB): call startProject with stack "mern". It writes the client (the Vite
+  app above, in client/, with /api proxied to the server during development) and the server: server/
+  with Express in TypeScript and server/src/index.ts, which uses express.json(), answers GET /api/health,
+  listens on process.env.PORT and connects mongoose to process.env.MONGODB_URI. Write client/src/App.tsx
+  and the client, calling the API with relative URLs under /api (fetch("/api/todos")). Put the routes
+  under /api in server/src (register them in server/src/index.ts) with their mongoose models. The backend
+  builds and runs the server, gives it its own MongoDB database (never hard-code a connection string or
+  credentials), and sends the preview's /api requests to it.
 Prefer the static site for simple pages; use Vite + React for interactive apps or when React is asked
 for; use MERN when the user asks for MERN, Express, MongoDB, or a backend/API with a database (and
 Supabase is not connected). Each site is served at the root of its own origin, so BrowserRouter (react-router-dom) works for

@@ -60,7 +60,7 @@ class StackPacksTest {
         assertEquals(List.of(), install(), "nothing to install without declared dependencies");
 
         project.write("package.json", "{\"dependencies\":{\"react\":\"19.0.0\"}}");
-        assertEquals(List.of("npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"), install());
+        assertEquals(List.of("npm", "install", "--prefer-offline", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"), install());
 
         project.write("package-lock.json", "{\"lockfileVersion\":3}");
         assertEquals("ci", install().get(1), "a lockfile pins exact versions");

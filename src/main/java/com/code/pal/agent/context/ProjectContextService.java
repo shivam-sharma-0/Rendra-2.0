@@ -230,6 +230,7 @@ public class ProjectContextService {
                 .thenComparing(ProjectFileSummary::path));
         append(out, budget, "File summaries:\n");
         for (ProjectFileSummary file : prioritized) {
+            if (rendered.contains(file.path())) continue;   // an instruction file already shown in full
             String line = "- " + file.path() + " [" + file.category() + ", " + file.language() + ", "
                     + file.approximateLines() + " lines] imports=" + compact(file.imports(), 8)
                     + " exports=" + compact(file.exports(), 8) + "\n";

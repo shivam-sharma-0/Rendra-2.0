@@ -43,6 +43,11 @@ class AgentActivityMapperTest {
         AgentActivity many = visible(AgentStepType.TOOL_RESULT, "createFiles", "{\"success\":true,\"paths\":[\"a.ts\",\"b.ts\"]}");
         assertEquals(List.of("a.ts", "b.ts"), many.paths());
 
+        AgentActivity started = visible(AgentStepType.TOOL_RESULT, "startProject", "{\"success\":true,\"paths\":[\"package.json\"]}");
+        assertEquals(Kind.CREATE, started.kind());
+        assertEquals("Set up the project", started.title());
+        assertEquals(List.of("package.json"), started.paths());
+
         AgentActivity moved = visible(AgentStepType.TOOL_RESULT, "renameFile", "{\"success\":true,\"sourcePath\":\"a.ts\",\"targetPath\":\"b.ts\"}");
         assertEquals(Kind.MOVE, moved.kind());
         assertEquals(List.of("a.ts", "b.ts"), moved.paths());

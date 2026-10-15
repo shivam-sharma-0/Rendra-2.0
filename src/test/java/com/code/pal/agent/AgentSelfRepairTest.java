@@ -94,8 +94,9 @@ class AgentSelfRepairTest {
         IntentClassifier intentClassifier = mock(IntentClassifier.class);
         when(intentClassifier.classify(any())).thenReturn(AgentIntent.TASK);
 
+        AgentEvents events = mock(AgentEvents.class);
         AgentRunner runner = new AgentRunner(new RepairingModel(initialVersion, badVersion), intentClassifier, registry, executor,
-                mock(AgentEvents.class), props, new ProjectContextService(props, mapper), runs, projects, messages,
+                events, props, new ProjectContextService(props, mapper), runs, projects, messages,
                 mock(RealtimeService.class), workspace.files, heartbeat, queue, mapper, changeSets, validation,
                 mock(NotificationService.class));
 
@@ -105,6 +106,10 @@ class AgentSelfRepairTest {
         assertEquals("export const theme = 'DARK';\n", Files.readString(live.resolve("src/App.tsx")));
         assertTrue(result.response().contains("src/App.tsx"));
         verify(fileChanges, times(2)).save(any(FileChange.class));
+        verify(events).emit(eq(run), eq(com.code.pal.agent.domain.AgentStepType.STATUS), eq("Run size"),
+                argThat(data -> data instanceof java.util.Map<?, ?> size && "S".equals(size.get("tier"))
+                        && Long.valueOf(90_000L).equals(size.get("timeoutMs"))
+                        && size.get("reasons").toString().contains("change to an existing project")));
     }
 
     private static final class RepairingModel implements LlmClient {
