@@ -4,7 +4,7 @@ import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.brief.ProjectBriefFile;
 import java.util.*;
-import com.code.pal.agent.intent.RequestScope;
+import com.code.pal.agent.intent.RequestRouter;
 
 /** Conservative setup selection only; ambiguous/existing projects keep the ordinary inspection route. */
 public final class AutomaticStarter {
@@ -14,7 +14,7 @@ public final class AutomaticStarter {
         var entries=ctx.files().list(ctx.projectId(),ctx.root(),32,Set.of(".codepal",".git","node_modules","uploads"));
         if(entries.stream().anyMatch(e->!e.directory() && !ProjectBriefFile.privatePath(e.path()) && !e.path().equals("notes.md")))return null;
         if(choice.storage()==BuildDecisions.Storage.MERN)return Starter.MERN;
-        String text=RequestScope.normalize(request);
+        String text=RequestRouter.normalize(request);
         if(text.matches(".*\\b(?:plain html|vanilla|no react|without react|static site)\\b.*"))return null;
         if(text.matches(".*\\b(?:react|vite|typescript|tsx)\\b.*"))return Starter.VITE_REACT;
         return null;

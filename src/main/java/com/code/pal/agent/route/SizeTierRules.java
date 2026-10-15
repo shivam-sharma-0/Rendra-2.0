@@ -10,7 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import com.code.pal.agent.intent.RequestScope;
+import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.project.capability.BuildDecisions;
 
 /**
@@ -54,7 +54,7 @@ public final class SizeTierRules {
      */
     public static Decision decide(ProjectType mode, String request, String initialPrompt, boolean existingProject) {
         if (mode != ProjectType.BUILD) return new Decision(SizeTier.S, List.of("not a build"));
-        String text = RequestScope.positiveSignals(signalText(request, initialPrompt));
+        String text = RequestRouter.positiveSignals(signalText(request, initialPrompt));
         Set<String> pages = matches(PAGE_WORDS, text);
         int pageCount = Math.max(pages.size(), namedPageCount(text));
         Set<String> data = matches(DATA_WORDS, text);

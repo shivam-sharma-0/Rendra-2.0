@@ -56,12 +56,8 @@ public class AgentHeartbeat {
         return () -> future.cancel(false);
     }
 
-    /** One renewal probe; scheduled runs retain their renewal state in start(). */
-    void beat(UUID runId, UUID projectId, RunFence fence, RunCancellation cancellation) {
-        beat(runId, projectId, fence, cancellation, new AtomicLong(nanoTime()));
-    }
-
-    private void beat(UUID runId, UUID projectId, RunFence fence, RunCancellation cancellation, AtomicLong lastRenewed) {
+    /** One renewal probe; lastRenewed is the time of the last successful database renewal. */
+    void beat(UUID runId, UUID projectId, RunFence fence, RunCancellation cancellation, AtomicLong lastRenewed) {
         long renewalStarted = nanoTime();
         try {
             if (fence == null || !runId.equals(fence.runId()) || !projectId.equals(fence.projectId())

@@ -28,7 +28,6 @@ import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.llm.LlmException;
 import com.code.pal.agent.llm.LlmHttpException;
 import com.code.pal.agent.llm.LlmQuotaExceededException;
-import com.code.pal.agent.llm.TokenEstimate;
 import com.code.pal.agent.plan.AgentPlanState;
 import com.code.pal.agent.preview.DraftPreviewService;
 import com.code.pal.agent.preview.SiteBuildService;
@@ -1145,10 +1144,6 @@ public class AgentRunner implements AgentRuntime {
         private AgentQuotaExceededException(String message) {
             super(message);
         }
-    }
-
-    static long estimateInputTokens(List<LlmMessage> messages, int specChars) {
-        return TokenEstimate.input(messages, specChars);
     }
 
     private void requireWithinDailyQuota(AgentRun run) {

@@ -1,10 +1,9 @@
 package com.code.pal.agent.intent;
 
-import com.code.pal.agent.domain.AgentIntent;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 class IntentRoutingRegressionTest {
     @ParameterizedTest
@@ -19,6 +18,6 @@ class IntentRoutingRegressionTest {
             "haan"
     })
     void explanationAndUnboundRepliesCannotAuthorizeABuild(String request) {
-        assertEquals(AgentIntent.CONVERSATIONAL, new IntentClassifier().classify(request));
+        assertNotEquals(RequestRouter.Route.CHANGE, RequestRouter.route(request));
     }
 }

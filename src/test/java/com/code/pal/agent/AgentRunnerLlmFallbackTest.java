@@ -3,7 +3,6 @@ package com.code.pal.agent;
 import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.context.ProjectContextService;
-import com.code.pal.agent.domain.AgentIntent;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.RunStatus;
 import com.code.pal.agent.llm.LlmClient;
@@ -61,7 +60,7 @@ class AgentRunnerLlmFallbackTest {
                 request -> { throw new LlmException("LLM time budget exhausted for 'groq'"); },
                 request -> { throw new LlmException("LLM call failed: HTTP 401"); },
                 request -> "Hi! How can I help with your project?");
-        Fixture fixture = new Fixture(model, AgentIntent.CONVERSATIONAL, "hello");
+        Fixture fixture = new Fixture(model, "hello");
 
         AgentRunResult result = fixture.runner.run(fixture.run);
 
@@ -79,7 +78,7 @@ class AgentRunnerLlmFallbackTest {
         ScriptedModel model = new ScriptedModel(
                 request -> { throw new LlmException("LLM stream interrupted after partial output (stream stalled)"); },
                 request -> "should never be asked");
-        Fixture fixture = new Fixture(model, AgentIntent.CONVERSATIONAL, "hello");
+        Fixture fixture = new Fixture(model, "hello");
 
         AgentRunResult result = fixture.runner.run(fixture.run);
 
@@ -88,10 +87,9 @@ class AgentRunnerLlmFallbackTest {
     }
 
     @Test void exhaustedRoutesStopWithoutRepeatingDuplicateConfiguredModels() throws Exception {
-        for(var intent:List.of(AgentIntent.TASK,AgentIntent.CONVERSATIONAL)) {
+        for (String prompt : List.of("Explain the project structure.", "hello")) {
             ScriptedModel model=new ScriptedModel(request->{throw new com.code.pal.agent.llm.LlmHttpException(401,"Every provider key was rejected");},request->{throw new com.code.pal.agent.llm.LlmHttpException(503,"Unavailable");},request->"must not repeat");
-            Fixture fixture = new Fixture(model, intent,
-                    intent == AgentIntent.CONVERSATIONAL ? "hello" : "Explain the project structure.",
+            Fixture fixture = new Fixture(model, prompt,
                     List.of("chat-a", "chat-a", "chat-b"));
             assertEquals(RunStatus.FAILED,fixture.runner.run(fixture.run).status());assertEquals(List.of("chat-a","chat-b"),model.models);fixture.cancellations.shutdown();
         }
@@ -104,7 +102,7 @@ class AgentRunnerLlmFallbackTest {
                 request -> { throw new LlmException("down"); },
                 request -> { throw new LlmException("down"); },
                 request -> "never reached");
-        Fixture fixture = new Fixture(model, AgentIntent.CONVERSATIONAL, "hello");
+        Fixture fixture = new Fixture(model, "hello");
 
         AgentRunResult result = fixture.runner.run(fixture.run);
 
@@ -117,7 +115,7 @@ class AgentRunnerLlmFallbackTest {
         ScriptedModel model = new ScriptedModel(
                 request -> { throw new LlmException("LLM time budget exhausted for 'nvidia'"); },
                 request -> "The project has no files yet.");
-        Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.");
+        Fixture fixture = new Fixture(model, "Explain the project structure.");
 
         AgentRunResult result = fixture.runner.run(fixture.run);
 
@@ -135,7 +133,7 @@ class AgentRunnerLlmFallbackTest {
                 request -> { throw new LlmException("LLM time budget exhausted for 'groq'"); },
                 request -> ScriptedModel.LIST_FILES,
                 request -> "The project has no files yet.");
-        Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.", List.of("chat-a", "chat-b"));
+        Fixture fixture = new Fixture(model, "Explain the project structure.", List.of("chat-a", "chat-b"));
 
         AgentRunResult result = fixture.runner.run(fixture.run);
 
@@ -154,7 +152,7 @@ class AgentRunnerLlmFallbackTest {
         AgentUsagePolicy usage = mock(AgentUsagePolicy.class);
         when(usage.dailyTokenQuota()).thenReturn(1_000L);
         when(usage.tokensUsedToday(7L)).thenReturn(997L, 997L, 999L, 1001L);   // each scripted call costs 2 tokens
-        Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.",
+        Fixture fixture = new Fixture(model, "Explain the project structure.",
                 List.of("chat-a"), usage);
 
         AgentRunResult result = fixture.runner.run(fixture.run);
@@ -170,7 +168,7 @@ class AgentRunnerLlmFallbackTest {
         AgentUsagePolicy usage = mock(AgentUsagePolicy.class);
         when(usage.dailyTokenQuota()).thenReturn(1_000L);
         when(usage.tokensUsedToday(7L)).thenReturn(1_000L);
-        Fixture fixture = new Fixture(model, AgentIntent.CONVERSATIONAL, "hello", List.of("chat-a"), usage);
+        Fixture fixture = new Fixture(model, "hello", List.of("chat-a"), usage);
 
         AgentRunResult result = fixture.runner.run(fixture.run);
 
@@ -198,7 +196,7 @@ class AgentRunnerLlmFallbackTest {
     @Test
     void aStopDuringATaskModelCallCancelsAtOnceWithoutFallback() throws Exception {
         ScriptedModel model = new ScriptedModel(AgentRunnerLlmFallbackTest::waitForStop, request -> "never reached");
-        Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.");
+        Fixture fixture = new Fixture(model, "Explain the project structure.");
 
         long start = stopAfter(fixture, 200);
         AgentRunResult result = fixture.runner.run(fixture.run);
@@ -213,7 +211,7 @@ class AgentRunnerLlmFallbackTest {
     @Test
     void aStopDuringASmallTalkReplyCancelsWithoutFallback() throws Exception {
         ScriptedModel model = new ScriptedModel(AgentRunnerLlmFallbackTest::waitForStop, request -> "never reached");
-        Fixture fixture = new Fixture(model, AgentIntent.CONVERSATIONAL, "hello");
+        Fixture fixture = new Fixture(model, "hello");
 
         stopAfter(fixture, 200);
         AgentRunResult result = fixture.runner.run(fixture.run);
@@ -230,7 +228,7 @@ class AgentRunnerLlmFallbackTest {
         when(usage.dailyTokenQuota()).thenReturn(1_000_000L);
 
         LlmClient refused = (request, delta) -> { throw new com.code.pal.agent.llm.LlmQuotaExceededException(AgentUsagePolicy.QUOTA_LOW_MESSAGE); };
-        Fixture fixture = new Fixture(refused, AgentIntent.TASK, "Explain the project structure.", List.of("chat-a"), usage);
+        Fixture fixture = new Fixture(refused, "Explain the project structure.", List.of("chat-a"), usage);
 
         AgentRunResult result = fixture.runner.run(fixture.run);
 
@@ -245,7 +243,7 @@ class AgentRunnerLlmFallbackTest {
         ScriptedModel model = new ScriptedModel(request -> ScriptedModel.LIST_FILES, request -> "The project has no files yet.");
         AgentUsagePolicy usage = mock(AgentUsagePolicy.class);
         when(usage.dailyTokenQuota()).thenReturn(1_000_000L);
-        Fixture fixture = new Fixture(model, AgentIntent.TASK, "Explain the project structure.", List.of("chat-a"), usage);
+        Fixture fixture = new Fixture(model, "Explain the project structure.", List.of("chat-a"), usage);
 
         AgentRunResult result = fixture.runner.run(fixture.run);
 
@@ -258,7 +256,7 @@ class AgentRunnerLlmFallbackTest {
     @Test
     void smallTalkUsesTheSmallOutputCap() throws Exception {
         ScriptedModel model = new ScriptedModel(request -> "Hi!");
-        Fixture fixture = new Fixture(model, AgentIntent.CONVERSATIONAL, "hello");
+        Fixture fixture = new Fixture(model, "hello");
         fixture.runner.run(fixture.run);
         assertEquals(List.of(300), model.maxTokens);
         fixture.cancellations.shutdown();
@@ -269,7 +267,7 @@ class AgentRunnerLlmFallbackTest {
         List<LlmClient.LlmMessage> messages = List.of(
                 LlmClient.LlmMessage.system("x".repeat(400)),
                 new LlmClient.LlmMessage("assistant", null, List.of(new LlmClient.ToolCall("c", "readFile", "{\"path\":\"a\"}")), null));
-        long estimate = AgentRunner.estimateInputTokens(messages, 400);
+        long estimate = com.code.pal.agent.llm.TokenEstimate.input(messages, 400);
         assertTrue(estimate >= 200 && estimate <= 220, "estimate " + estimate);
     }
 
@@ -304,15 +302,15 @@ class AgentRunnerLlmFallbackTest {
         final AgentRunner runner;
         final AgentCancellations cancellations;
 
-        Fixture(LlmClient model, AgentIntent intent, String prompt) throws Exception {
-            this(model, intent, prompt, List.of("chat-a", "chat-b", "chat-c"));
+        Fixture(LlmClient model, String prompt) throws Exception {
+            this(model, prompt, List.of("chat-a", "chat-b", "chat-c"));
         }
 
-        Fixture(LlmClient model, AgentIntent intent, String prompt, List<String> chatModels) throws Exception {
-            this(model, intent, prompt, chatModels, null);
+        Fixture(LlmClient model, String prompt, List<String> chatModels) throws Exception {
+            this(model, prompt, chatModels, null);
         }
 
-        Fixture(LlmClient model, AgentIntent intent, String prompt, List<String> chatModels,
+        Fixture(LlmClient model, String prompt, List<String> chatModels,
                 AgentUsagePolicy usage) throws Exception {
             LocalProject workspace = LocalProject.create();
             UUID projectId = workspace.projectId;

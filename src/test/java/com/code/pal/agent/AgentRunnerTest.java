@@ -3,7 +3,6 @@ package com.code.pal.agent;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.context.ProjectContextService;
-import com.code.pal.agent.domain.AgentIntent;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.domain.RunStatus;
 import com.code.pal.agent.llm.LlmClient;

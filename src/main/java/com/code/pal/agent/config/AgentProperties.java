@@ -352,8 +352,6 @@ public class AgentProperties implements EnvironmentAware {
 
         /** Output cap for reading attached images (the vision models reason before they answer). */
         private int visionMaxOutputTokens = 4_096;
-        /** Output cap for the one-word intent answer. */
-        private int intentMaxOutputTokens = 32;
 
         public void setSmallTalkMaxOutputTokens(int tokens) {
             smallTalkMaxOutputTokens = Math.clamp(tokens, 1, CONVERSATIONAL_OUTPUT_CAP);
