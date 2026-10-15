@@ -43,8 +43,9 @@ final class SpecPlanCompletion {
         var base = new BuildContract(1, input.base().id(), BuildContract.Stack.valueOf(spec.desired().renderStack().name()),
                 BuildDecisions.Storage.valueOf(spec.desired().storage().name()), BuildDecisions.Auth.valueOf(spec.desired().auth().name()),
                 input.base().limits(), SpecPlanValues.theme(spec), routes, SpecPlanValues.types(spec), List.of(), List.of(), assets, env, units, acceptance);
-        var ids = units.stream().map(BuildContract.Unit::id).toList();
-        var allPaths = units.stream().flatMap(unit -> unit.ownedPaths().stream()).toList();
+        base = UnstoredUnitSplit.split(base, input.budget(), mapper);
+        var ids = base.units().stream().map(BuildContract.Unit::id).toList();
+        var allPaths = base.units().stream().flatMap(unit -> unit.ownedPaths().stream()).toList();
         var actionIds = acceptance.browser().stream().map(action -> action.id()).toList();
         var estimate = ContractPlans.estimate(base, ids, input.budget(), new BatchBudget(mapper));
         var batch = new ContractBatch("app", ids, List.of(), allPaths, List.of(), actionIds, input.budget().inputCap(),

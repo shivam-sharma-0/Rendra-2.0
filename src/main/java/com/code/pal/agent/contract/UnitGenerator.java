@@ -40,10 +40,11 @@ public final class UnitGenerator {
     public Output generate(Input input, AgentProperties.ModelSelection model,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checkedCall) {
         String data = mapper.writeValueAsString(input);
-        if (data.length() + SYSTEM.length() > 32000)
+        String policy = SYSTEM + ContractImports.policy(input.contract());
+        if (data.length() + policy.length() > 32000)
             throw new IllegalArgumentException("Focused unit context exceeds capacity; split this unit");
         var messages = new ArrayList<LlmClient.LlmMessage>(
-                List.of(LlmClient.LlmMessage.system(SYSTEM), LlmClient.LlmMessage.user(data)));
+                List.of(LlmClient.LlmMessage.system(policy), LlmClient.LlmMessage.user(data)));
         for (int attempt = 0; attempt < 2; attempt++) {
             LlmClient.LlmResult response;
             try (var ignored = LlmCallContext.purpose(attempt == 0 ? CallPurpose.UNIT : CallPurpose.SCHEMA_CORRECTION,
@@ -74,10 +75,12 @@ public final class UnitGenerator {
                 validate(input, result);
                 return result;
             } catch (RuntimeException invalid) {
+                String reason = ContractPlanner.schemaFeedback(invalid);
                 if (attempt == 1)
-                    throw new IllegalArgumentException("Unit output correction failed; no files merged");
+                    throw new IllegalArgumentException("Unit output correction failed: " + reason + "; no files merged", invalid);
                 messages.add(LlmClient.LlmMessage.user(
-                        "Return only the complete files object. Use exact owned paths and snapshot expectedVersion, no tools or shared/foreign/asset writes. This is the only format correction."));
+                        "Return only the complete files object. Use exact owned paths and snapshot expectedVersion, no tools or shared/foreign/asset writes. "
+                                + "Validator: " + reason + ". Keep the supplied import/navigation policy. This is the only correction."));
             }
         }
         throw new IllegalStateException("Unreachable");
@@ -99,6 +102,7 @@ public final class UnitGenerator {
                 throw new IllegalArgumentException("Unit snapshot version mismatch");
             if (file.content() != null && (file.content().length() > 48000 || file.content().indexOf('\0') >= 0))
                 throw new IllegalArgumentException("Unit output exceeds capacity");
+            ContractImports.validate(input.contract(), input.unit(), file.path(), file.content());
         }
         var needed = new HashSet<>(input.unit().ownedPaths());
         needed.removeAll(assets);

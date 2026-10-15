@@ -344,7 +344,7 @@ public final class ContractCoordinator {
                     if (report.checks().stream().anyMatch(ValidationCheck::unavailable)) {
                         throw new WorkflowStageException("Required batch checks are unavailable");
                     }
-                    repair(ctx, run, c, wave, request, approved.requirementsJson(), common.keySet(), report, checkedCall, beforeIo, activity);
+                    repair(ctx, run, c, wave, request, approved.requirementsJson(), common.keySet(), report, checkedCall, beforeIo, activity, planning);
                     beforeIo.run();
                 }
                 completedBatches.add(orderedBatches.get(waveIndex).id());
@@ -354,12 +354,12 @@ public final class ContractCoordinator {
             var report = validation.run(ctx, ValidationOperation.TYPE_CHECK, null);
             if (report.available() && !report.changeValidationPassed())
                 repair(ctx, run, c, wave, request, approved.requirementsJson(), common.keySet(), report, checkedCall,
-                        beforeIo, activity);
+                        beforeIo, activity, planning);
             beforeIo.run();
             report = validation.run(ctx, ValidationOperation.BUILD, null);
             if (report.available() && !report.changeValidationPassed())
                 repair(ctx, run, c, wave, request, approved.requirementsJson(), common.keySet(), report, checkedCall,
-                        beforeIo, activity);
+                        beforeIo, activity, planning);
             if (c.schemaVersion() == 2) {
                 completedBatches.add(orderedBatches.get(waveIndex).id());
             }
@@ -388,7 +388,7 @@ public final class ContractCoordinator {
                 throw new WorkflowStageException("Required application checks did not pass; staged code was not saved");
             var affected = affected(c, report);
             repair(ctx, run, c, affected, request, approved.requirementsJson(), common.keySet(), report, checkedCall,
-                    beforeIo, activity);
+                    beforeIo, activity, planning);
         }
         int step = 1;
         for (var unit : c.waves().stream().flatMap(List::stream).toList())
@@ -400,7 +400,7 @@ public final class ContractCoordinator {
 
     private void repair(AgentContext ctx, AgentRun run, BuildContract c, List<BuildContract.Unit> units, String request,
             String req, Set<String> shared, ValidationReport report,
-            Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, Runnable beforeIo, Consumer<String> activity) {
+            Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, Runnable beforeIo, Consumer<String> activity, SpecPlanning planning) {
         if (c.schemaVersion() == 2) {
             int beforeFix = changes.view(ctx).revision();
             if (deterministicFixes != null && deterministicFixes.tryFix(ctx, run, c, report)) {
@@ -413,7 +413,7 @@ public final class ContractCoordinator {
                 throw new WorkflowStageException("Scoped patch repair is unavailable");
             }
             activity.accept("Fixing the failing code");
-            structuredRepair.repair(ctx, run, c, units, report, checked, beforeIo);
+            structuredRepair.repair(ctx, run, c, units, report, checked, beforeIo, planning == null ? null : planning.spec());
             return;
         }
         if (changes.validationProgress(ctx).repairLimitExhausted())
@@ -453,22 +453,14 @@ public final class ContractCoordinator {
 
     static List<BuildContract.Unit> affected(BuildContract c, ValidationReport report) {
         var ids = new HashSet<String>();
-        for (var check : report.checks())
-            if (check.required() && check.outcome() == ValidationCheck.Outcome.FAIL)
-                for (var unit : c.units())
-                    if (unit.acceptanceIds().contains(check.id().replaceFirst("^(API_|BROWSER_)", "")))
-                        ids.add(unit.id());
+        var failed = ContractAcceptanceFailures.ids(c, report);
+        c.units().stream().filter(unit -> unit.acceptanceIds().stream().anyMatch(failed::contains)).forEach(unit -> ids.add(unit.id()));
         for (var diagnostic : report.introducedDiagnostics()) {
             if (diagnostic.file() != null) {
                 String owner = c.ownership().get(diagnostic.file());
                 if (owner != null)
                     ids.add(owner);
             }
-            if ("BROWSER_ACCEPTANCE_FAILED".equals(diagnostic.code()))
-                for (var unit : c.units())
-                    for (String id : unit.acceptanceIds())
-                        if (diagnostic.message().contains("Required interaction " + id + " did not pass"))
-                            ids.add(unit.id());
         }
         if (ids.isEmpty() && c.schemaVersion() == 1)
             ids.addAll(c.units().stream().map(BuildContract.Unit::id).toList());

@@ -117,9 +117,20 @@ public final class BatchUnitGenerator {
             }
             var routes = contract.routes().stream().filter(route -> batch.unitIds().contains(route.owner()))
                     .map(BuildContract.Route::path).collect(Collectors.toSet());
-            var pages = spec.spec().pages().stream().filter(page -> routes.contains(page.path())).toList();
-            var pageIds = pages.stream().map(ApprovedSpec.Page::id).collect(Collectors.toSet());
-            var features = spec.spec().features().stream().filter(feature -> feature.pageIds().stream().anyMatch(pageIds::contains)).toList();
+            var pageIds = spec.spec().pages().stream().filter(page -> routes.contains(page.path()))
+                    .map(ApprovedSpec.Page::id).collect(Collectors.toCollection(HashSet::new));
+            var assignedFeatures = new HashSet<String>();
+            for (var scenario : spec.spec().acceptance()) {
+                for (int index = 0; index < scenario.steps().size(); index++) {
+                    if (batch.acceptanceIds().contains(scenario.id() + "_" + index)) {
+                        assignedFeatures.add(scenario.featureId());
+                    }
+                }
+            }
+            var features = spec.spec().features().stream().filter(feature -> assignedFeatures.contains(feature.id())
+                    || feature.pageIds().stream().anyMatch(pageIds::contains)).toList();
+            features.forEach(feature -> pageIds.addAll(feature.pageIds()));
+            var pages = spec.spec().pages().stream().filter(page -> pageIds.contains(page.id())).toList();
             var entities = features.stream().flatMap(feature -> feature.entityIds().stream()).collect(Collectors.toSet());
             data.put("spec", Map.of("title", spec.spec().title(), "language", spec.spec().language(), "goal", spec.spec().goal(),
                     "pages", pages, "features", features, "entities", spec.spec().entities().stream().filter(entity -> entities.contains(entity.id())).toList(),
@@ -167,7 +178,7 @@ public final class BatchUnitGenerator {
 
     private List<UnitGenerator.Output> generatePrepared(List<UnitGenerator.Input> inputs, AgentProperties.ModelSelection model,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, String data, int outputCap, int inputCap) {
-        String policy = SYSTEM;
+        String policy = SYSTEM + ContractImports.policy(inputs.getFirst().contract());
         if (inputs.getFirst().contract().schemaVersion() == 2 && inputs.getFirst().contract().stack() == BuildContract.Stack.STATIC) {
             policy += "\nStatic HTML/CSS/JS only. Backend compiles Tailwind and injects local rendra.css. "
                     + "Use utility classes; no runtime CDN, remote scripts/fonts, CSS imports or compiler directives.";
@@ -225,11 +236,13 @@ public final class BatchUnitGenerator {
                 }
                 return validated;
             } catch (RuntimeException invalid) {
+                String reason = ContractPlanner.schemaFeedback(invalid);
                 if (attempt == 1)
-                    throw new IllegalArgumentException("Batch correction failed; no files merged");
+                    throw new IllegalArgumentException("Batch correction failed: " + reason + "; no files merged", invalid);
                 messages.add(LlmClient.LlmMessage.user(
-                        "Only format/ownership correction: return the complete units object, exact selected IDs, "
-                                + "every owned file and snapshot version. No extra fields. This is the only correction."));
+                        "Return the complete units object, exact selected IDs, every owned file and snapshot version. "
+                                + "No extra fields. Validator: " + reason
+                                + ". Keep the supplied import/navigation policy. This is the only correction."));
             }
         }
         throw new IllegalStateException("Unreachable");

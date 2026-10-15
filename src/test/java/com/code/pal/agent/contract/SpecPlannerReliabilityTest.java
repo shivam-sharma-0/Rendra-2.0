@@ -170,23 +170,17 @@ class SpecPlannerReliabilityTest {
     }
 
     @Test
-    void oversizedAtomicUnitGetsOnePreciseCorrectionAndNeverARaisedBudget() {
+    void oversizedAtomicDraftIsSplitWithoutACorrectionOrRaisedBudget() {
         var source = SpecFixtures.approved();
         var spec = SpecFixtures.envelope(source.spec(), new ApprovedSpec.Desired(ApprovedSpec.RenderStack.VITE,
                 ApprovedSpec.Storage.NONE, ApprovedSpec.Auth.NONE), source.readiness());
         var input = fixture.input(spec, fixture.deterministic(source).id());
         var calls = new AtomicInteger();
         var actual = new ContractPlanner(mapper).plan(input, model, request -> {
-            if (calls.incrementAndGet() == 1) {
-                return reply("{\"units\":[{\"id\":\"app\",\"ownedPaths\":[\"src/App.tsx\",\"src/One.tsx\",\"src/Two.tsx\"]}]}");
-            }
-            assertTrue(request.messages().getLast().content().contains("An oversized unit needs a replacement planner proposal"));
-            return reply("""
-                    {"units":[{"id":"app","ownedPaths":["src/App.tsx"],"imports":["src/One.tsx","src/Two.tsx"]},
-                    {"id":"parts","ownedPaths":["src/One.tsx","src/Two.tsx"]}]}
-                    """);
+            calls.incrementAndGet();
+            return reply("{\"units\":[{\"id\":\"app\",\"ownedPaths\":[\"src/App.tsx\",\"src/One.tsx\",\"src/Two.tsx\"]}]}");
         }, ignored -> {});
-        assertEquals(2, calls.get());
+        assertEquals(1, calls.get());
         assertTrue(actual.batches().size() > 1);
         assertTrue(actual.batches().stream().allMatch(batch -> batch.outputCap() <= input.budget().outputCap()));
         assertTrue(actual.limits().within(input.base().limits()));

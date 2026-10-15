@@ -213,7 +213,13 @@ public final class ContractPlans {
     static BatchBudget.Estimate estimate(BuildContract contract, List<String> ids, BatchBudget.Limits limits,
             BatchBudget estimator) {
         var files = contract.units().stream().filter(unit -> ids.contains(unit.id())).flatMap(unit -> unit.ownedPaths().stream())
-                .filter(path -> contract.assets().stream().noneMatch(asset -> asset.destination().equals(path)))
+                .toList();
+        return estimatePaths(contract, files, limits, estimator);
+    }
+
+    static BatchBudget.Estimate estimatePaths(BuildContract contract, List<String> paths, BatchBudget.Limits limits,
+            BatchBudget estimator) {
+        var files = paths.stream().filter(path -> contract.assets().stream().noneMatch(asset -> asset.destination().equals(path)))
                 .map(path -> new BatchBudget.Source(path, "absent", projectedCharacters(path), projectedCharacters(path))).toList();
         return estimator.estimate(files, "{}", limits);
     }
