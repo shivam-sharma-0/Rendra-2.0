@@ -244,6 +244,102 @@ public class AgentRunner implements AgentRuntime {
                 notifications, null, null, null, null, null, null, null);
     }
 
+    /** Mutable state of one run, shared by its phases and its terminal handlers. */
+    private static final class RunState {
+        final AgentRun run;
+        final DeltaBatcher stream;
+        final RunCancellation cancellation;
+        AutoCloseable beat;
+        AgentRuntimeContext runtime;
+        ProjectContext projectContext;
+        AgentContext ctx;
+        long startedNanos;
+        long deadlineNanos;
+
+        RunState(AgentRun run, DeltaBatcher stream, RunCancellation cancellation) {
+            this.run = run;
+            this.stream = stream;
+            this.cancellation = cancellation;
+        }
+    }
+
+    /** What the tool loop needs once the project context and run size are known. */
+    private record LoopSetup(RunSize size, List<AgentTool> available, List<ToolSpec> specs, int specChars,
+            ConversationCompactor compactor) {
+    }
+
+    /** Counters and the review snapshot the BUILD completion gates keep across iterations. */
+    private static final class BuildGateState {
+        int planningReminders;
+        int implementationReminders;
+        int previewReminders;
+        boolean polished;
+        String firstSummary;
+        int reviewedRevision = -1;
+    }
+
+    /**
+     * Model choice for one run: the preferred route while it works, then each distinct untried
+     * route. A stopped run, quota, accounting, terminal or partial-output failure never fails over.
+     */
+    private final class RouteFailover {
+        private final ProjectType mode;
+        private final AgentProperties.ModelSelection preferred;
+        private final Set<AgentProperties.ModelSelection> failed = new HashSet<>();
+        private LlmException lastFailure;
+
+        RouteFailover(ProjectType mode) {
+            this.mode = mode;
+            this.preferred = props.preferredModel(mode);
+        }
+
+        AgentProperties.ModelSelection next() {
+            AgentProperties.ModelSelection selection = props.available(preferred) && !failed.contains(preferred)
+                    ? preferred
+                    : props.untriedModel(mode, failed);
+            if (selection == null) {
+                throw lastFailure;
+            }
+            return selection;
+        }
+
+        LlmException lastFailure() {
+            return lastFailure;
+        }
+
+        void failed(AgentRun run, AgentProperties.ModelSelection selection, LlmException failure,
+                boolean conversational) {
+            // A stopped run is not a provider failure: no fallback, no cooldown.
+            if (failure instanceof LlmCancelledException) {
+                throw new AgentCancelledException();
+            }
+            if (failure instanceof LlmQuotaExceededException || failure instanceof LlmAccountingException) {
+                throw failure;
+            }
+            if (failure instanceof LlmHttpException rejected && rejected.terminalRequest()) {
+                throw failure;
+            }
+            requireNotCancelled(run);
+            // Keep the conversation intact when a provider rejects a request before it publishes
+            // output. The next model can support a different tool schema or have independent rate
+            // limits; the model-call cap still bounds cost.
+            if (isPartialOutputFailure(failure)) {
+                throw failure;
+            }
+            markUnavailable(selection, failure);
+            failed.add(selection);
+            lastFailure = failure;
+            log.warn("llm_provider_unavailable runId={} conversational={} provider={} model={} reason={}; "
+                    + "trying next configured model", run.getId(), conversational, selection.provider(),
+                    selection.model(), failure.getMessage());
+            if (!conversational) {
+                events.emit(run, AgentStepType.STATUS, "LLM provider unavailable", Map.of(
+                        "provider", selection.provider(), "model", selection.model(),
+                        "retryable", failure instanceof RetryableLlmException));
+            }
+        }
+    }
+
     /**
      * Execute a read-only run end to end; every terminal outcome is persisted and
      * returned.
@@ -251,596 +347,686 @@ public class AgentRunner implements AgentRuntime {
     @Override
     public AgentRunResult run(AgentRun run) {
         DeltaBatcher stream = new DeltaBatcher(run);
-        AutoCloseable beat = null;
-        AgentRuntimeContext runtime = null;
-        ProjectContext projectContext = null;
-        AgentContext ctx = null;
         // The run's Stop signal, bound to this thread so model calls and sandbox commands made for the run
         // stop the moment it is cancelled (not only between iterations).
         RunCancellation cancellation = cancellations == null ? new RunCancellation(run.getId())
                 : cancellations.register(run.getId());
+        RunState state = new RunState(run, stream, cancellation);
         RunCancellation.Registration boundCancellation = RunCancellation.bind(cancellation);
         // Who the run's model calls are for, for the call ledger; the loop's own calls are counted in the run's totals.
         LlmCallContext.Scope callContext = LlmCallContext
                 .bind(new LlmCallContext(run.getUserId(), run.getProjectId(), run.getId(), CallPurpose.AGENT, true));
         try {
-            long startedNanos = System.nanoTime();
-            // Today's limit until the run's size is known; M and L builds get the longer one below.
-            long deadlineNanos = startedNanos + TimeUnit.MILLISECONDS.toNanos(props.getRunTimeoutMs());
-            run.setHeartbeatAt(Instant.now());
-            setStatus(run, RunStatus.RUNNING);
-            log.info("agent_started runId={} projectId={} userId={}", run.getId(), run.getProjectId(), run.getUserId());
-            events.emit(run, AgentStepType.STATUS, "Agent started", Map.of("status", "RUNNING"));
-            beat = heartbeat.start(run.getId(), run.getProjectId());
-            updateAssistant(run, "", MessageStatus.STREAMING);
-            requireNotCancelled(run); // cancelled while still queued — stop before any work
-            // Admission checked the quota when the turn was posted; a long run must also stop once it
-            // crosses it; every checkpoint reads the current durable UTC accounting projection.
-            requireWithinDailyQuota(run);
-
-            // All accepted agent turns require current edit rights, including conversational builds.
-            Project project = projects.requireCanEdit(run.getUserId(), run.getProjectId());
-
-            RunRequestHistory accepted = RunRequestHistory.load(messageRepository, run, HISTORY_CANDIDATE_LIMIT);
-            List<Message> history = accepted.messages();
-            String userRequest = accepted.request().getResolvedRequestText() == null
-                    ? accepted.request().getContent()
-                    : accepted.request().getResolvedRequestText();
-            List<String> attachments = accepted.request().executionAttachmentPaths();
-            RequestRouter.Route route = RequestRouter.route(run.getMode(), userRequest, attachments, false);
-            ProjectType effectiveMode = RequestRouter.mode(run.getMode(), userRequest, attachments);
-            if (effectiveMode != run.getMode()) {
-                run.setMode(effectiveMode);
-                owned(run, () -> runRepository.save(run));
-            }
-            String originalOffer = accepted.request().getSourceProposalId() == null ? accepted.request().getContent()
-                    : messageRepository
-                            .findByIdAndProjectId(accepted.request().getSourceProposalId(), run.getProjectId())
-                            .map(Message::getSuggestedBuildText).orElse(accepted.request().getContent());
-            if (route == RequestRouter.Route.CHANGE && run.getMode() != ProjectType.BUILD
-                    || route == RequestRouter.Route.QUESTION && RequestRouter.positiveChange(userRequest)) {
-                suggestBuild(run, originalOffer, attachments);
-            }
-            if (route == RequestRouter.Route.SMALL_TALK
-                    || route == RequestRouter.Route.UNCLEAR || RequestRouter.productQuestion(userRequest)) {
-                return runConversational(run, stream, history, userRequest, deadlineNanos,
-                        route == RequestRouter.Route.UNCLEAR, attachments);
-            }
-
-            if (run.getMode() == ProjectType.BUILD && buildDecisions != null) {
-                var decision = buildDecisions.state(run.getProjectId());
-                if (decision.blocked())
-                    throw new WorkflowStageException(decision.problem());
-            }
-            if (run.getMode() == ProjectType.BUILD)
-                moveProject(run, ProjectStage.BUILDING);
-            // BUILD runs work on a staged copy committed at the end; other runs read the project itself.
-            String root = run.getMode() == ProjectType.BUILD ? changeSets.start(run.getId(), run.getProjectId()) : ".";
-            projectContext = projectContexts.build(files, run.getProjectId(), root, userRequest, history, List.of());
-            RunSize size = runSize(run, project, userRequest, projectContext);
-            if (usage != null)
-                usage.configureRun(run.getId(), run.getUserId(), size.tier());
-            deadlineNanos = startedNanos + TimeUnit.MILLISECONDS.toNanos(size.timeoutMs());
-            events.emit(run, AgentStepType.STATUS, "Run size",
-                    Map.of("tier", size.tier().name(), "reasons", size.reasons(),
-                            "timeoutMs", size.timeoutMs(), "maxIterations", size.maxIterations()));
-            SequentialCheckpoints.Progress durableProgress = null;
-            if (checkpoints != null) {
-                durableProgress = checkpoints.configure(run, size);
-                deadlineNanos = Math.min(deadlineNanos,
-                        System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(durableProgress.remainingMs()));
-            }
-            AgentPlanState plan = new AgentPlanState();
-            ctx = new AgentContext(run.getProjectId(), run.getUserId(), run.getMode(), root,
-                    AgentProjectMetadata.from(project), projectContext.trace(), run.getId(), plan, files);
-            ctx.contextTrace().patchMissLimit(props.getMaxPatchMisses());
-            String resumed = run.getMode() == ProjectType.BUILD ? changeSets.resumePlan(ctx) : null;
-            List<AgentTool> available = toolsForRun(run.getMode());
-            List<ToolSpec> specs = available.stream()
-                    .map(t -> new ToolSpec(t.name(), t.description(), t.parametersSchema())).toList();
-            int specChars = specs.toString().length();
-            ConversationCompactor compactor = props.isCompactContext()
-                    ? new ConversationCompactor(objectMapper, props.getCompactKeepTurns(), props.getCompactMinChars())
-                    : null;
-
-            List<LlmMessage> convo = new ArrayList<>();
-            convo.add(LlmMessage.system(systemPrompt(run.getMode())));
-            if (!projectContext.projectContextMessage().isBlank()) {
-                convo.add(LlmMessage.user(projectContext.projectContextMessage()));
-            }
-            projectContext.conversation().stream().map(AgentRunner::toLlmMessage).forEach(convo::add);
-            if (accepted.request().getResolvedRequestText() != null) {
-                convo.add(LlmMessage.user(userRequest));
-            }
-            if (!attachments.isEmpty() && vision != null) {
-                events.emit(run, AgentStepType.STATUS, "Reading attachments", Map.of("files", attachments));
-                convo.add(LlmMessage
-                        .user(VisionService.asContext(vision.describe(run.getProjectId(), attachments, userRequest))));
-            }
-            if (resumed != null)
-                convo.add(LlmMessage.user(resumed));
-            int initialContextChars = convo.stream()
-                    .mapToInt(message -> message.content() == null ? 0 : message.content().length()).sum()
-                    + specs.toString().length();
-            runtime = new AgentRuntimeContext(run.getId(), run.getProjectId(), run.getUserId(), userRequest, convo,
-                    props.getContextBudgetChars(), initialContextChars, plan);
-            if (durableProgress != null)
-                runtime.restoreCounters(durableProgress.iterations(), durableProgress.modelCalls(),
-                        durableProgress.toolCalls());
-            runtime.transitionTo(AgentRuntimeStatus.RUNNING);
-            runtime.transitionPhase(AgentPhase.EXPLORE);
-            events.emit(run, AgentStepType.STATUS, "Project context prepared",
-                    contextAudit(projectContext.diagnostics()));
-
-            if (attachments.isEmpty() && contractCoordinator != null
-                    && contractCoordinator.eligible(run, size, userRequest)) {
-                if (checkpoints == null)
-                    throw new AgentLimitExceededException("Durable structured execution is unavailable");
-                final AgentRuntimeContext structuredRuntime = runtime;
-                final long structuredDeadline = deadlineNanos;
-                Function<LlmRequest, LlmResult> checkedCall = request -> {
-                    long currentDeadline = Math.min(structuredDeadline, System.nanoTime()
-                            + TimeUnit.MILLISECONDS.toNanos(checkpoints.progress(run.getId()).remainingMs()));
-                    requireBeforeDeadline(currentDeadline);
-                    requireNotCancelled(run);
-                    requireWithinDailyQuota(run);
-                    if (request.messages().stream().mapToInt(m -> m.content() == null ? 0 : m.content().length())
-                            .sum() > props.getContextBudgetChars())
-                        throw new AgentLimitExceededException("Structured context limit reached");
-                    synchronized (structuredRuntime) {
-                        requireModelCallAvailable(structuredRuntime, size);
-                        if (!checkpoints.reserveModelIteration(run))
-                            throw new AgentLimitExceededException("Durable model/iteration/deadline limit reached");
-                        structuredRuntime.beginIteration();
-                        structuredRuntime.recordModelCall();
-                    }
-                    var budget = callBudget(currentDeadline);
-                    if (request.budget() != null && request.budget().compareTo(budget) < 0)
-                        budget = request.budget();
-                    var bounded = new LlmRequest(request.provider(), request.model(), request.messages(),
-                            request.tools(), request.temperature(), budget, request.toolChoice(), request.maxTokens(),
-                            request.jsonSchema());
-                    var response = llm.chat(bounded);
-                    synchronized (run) {
-                        accountTokens(run, response);
-                    }
-                    return response;
-                };
-                Runnable beforeIo = () -> {
-                    requireNotCancelled(run);
-                    requireBeforeDeadline(structuredDeadline);
-                    requireToolCallsAvailable(structuredRuntime, 1, size);
-                    if (!checkpoints.reserveTools(run, 1))
-                        throw new AgentLimitExceededException("Durable operation/deadline limit reached");
-                    structuredRuntime.recordToolCalls(1);
-                };
-                var outcome = contractCoordinator.execute(ctx, run, size, userRequest,
-                        projectContext.projectContextMessage(), checkedCall, beforeIo,
-                        title -> events.emit(run, AgentStepType.STATUS, title, null));
-                if (run.getMode() == ProjectType.BUILD) {
-                    beforeIo.run();
-                    projects.requireCanEdit(run.getUserId(), run.getProjectId());
-                    if (!hasPreviewEntrypoint(ctx))
-                        throw new AgentValidationFailedException("The structured build has no preview entrypoint");
-                    var committed = changeSets.commit(ctx, run);
-                    if (committed.changedPaths().isEmpty())
-                        throw new AgentValidationFailedException("The structured build produced no changes");
-                    events.emit(run, AgentStepType.STATUS, "Change set committed",
-                            Map.of("changedFiles", committed.changedPaths(), "snapshotRef", committed.snapshotRef()));
-                    if (artifacts != null)
-                        artifacts.writeBuild(run, "COMMITTED", committed.changedPaths());
-                    if (databases != null)
-                        databases.ensure(run.getProjectId());
-                    buildSite(run);
-                    moveProject(run, ProjectStage.REVIEW);
-                    stream.append(BuildReplyText.success(outcome.summary(), run));
-                } else
-                    stream.append(outcome.summary());
-                runtime.transitionPhase(AgentPhase.FINISH);
-                runtime.transitionTo(AgentRuntimeStatus.COMPLETED);
-                setStatus(run, RunStatus.DONE);
-                stream.complete();
-                notifyBuild(run, true);
-                events.emit(run, AgentStepType.STATUS, "Agent completed", counters(runtime));
-                emitContextUsage(run, projectContext, runtime);
-                return result(run, runtime, stream.content(), null);
-            }
-
-            int planningReminders = 0;
-            int implementationReminders = 0;
-            int previewReminders = 0;
-            // One review turn per build, once the change validates: weak models stop at the first
-            // version that runs, and the checklist brings back what they skipped.
-            boolean polished = !props.isPolishTurn();
-            if (run.getMode() == ProjectType.BUILD && props.isAutomaticStarter() && buildDecisions != null) {
-                var starter = AutomaticStarter.select(ctx, buildDecisions.state(run.getProjectId()).choice(),
-                        userRequest);
-                if (starter != null && available.stream().anyMatch(tool -> tool.name().equals("startProject"))) {
-                    requireBeforeDeadline(deadlineNanos);
-                    requireNotCancelled(run);
-                    requireToolCallsAvailable(runtime, 1, size);
-                    if (checkpoints != null && !checkpoints.reserveTools(run, 1))
-                        throw new AgentLimitExceededException("Durable preparation limit reached");
-                    if (!ctx.plan().exists())
-                        ctx.plan()
-                                .revise(List.of("Prepare the approved application setup",
-                                        "Implement the requested features", "Validate the application"),
-                                        "Backend starter preparation");
-                    runtime.recordToolCalls(1);
-                    var setup = executeTools(available,
-                            List.of(new ToolCall("backend_prepare", "startProject",
-                                    objectMapper.writeValueAsString(Map.of("stack", starter.id(), "title",
-                                            project.getName() == null ? "App" : project.getName())))),
-                            ctx, run, runtime, deadlineNanos);
-                    if (!setup.allSucceeded())
-                        throw new AgentValidationFailedException(
-                                "Approved starter preparation failed; no code was saved");
-                    String prepared = objectMapper.writeValueAsString(AutomaticStarter.context(ctx, starter));
-                    String data = "Backend prepared the approved starter in this stage. Keep its setup; do not call startProject again. Implement the request on top. Starter data: "
-                            + prepared;
-                    if (!runtime.reserveContext(data.length()))
-                        throw new AgentLimitExceededException("Prepared starter exceeds context capacity");
-                    runtime.messages().add(LlmMessage.user(data));
-                }
-            }
-            // The answer from before the review, and the revision it described: when the review changes
-            // nothing, its reply is talk about the review, not an answer for the user.
-            String firstSummary = null;
-            int reviewedRevision = -1;
-            // One model for the whole run (the first available in priority order); another one only for
-            // the calls made while it is failing, and back to it once its cooldown is over.
-            AgentProperties.ModelSelection preferred = props.preferredModel(run.getMode());
-            var failedModels = new HashSet<AgentProperties.ModelSelection>();
-            LlmException lastProviderFailure = null;
-            for (int i = runtime.iteration(); i < size.maxIterations(); i++) {
-                requireBeforeDeadline(deadlineNanos);
-                requireNotCancelled(run);
-                // Terminate known failure before reserving/calling a model whose reply would be discarded.
-                if (run.getMode() == ProjectType.BUILD && changeSets.validationProgress(ctx).repairLimitExhausted())
-                    throw new AgentValidationFailedException(validationFailureMessage(run.getId()));
-                if (ctx.contextTrace().patchLimitReached())
-                    throw new AgentValidationFailedException(
-                            "Repeated patch misses; staged changes were not committed. Re-read and revise the approach for: "
-                                    + ctx.contextTrace().patchBlockedPaths());
-                if (compactor != null) {
-                    ConversationCompactor.Saved saved = compactor.compact(runtime.messages());
-                    saved.omittedReadPaths().forEach(ctx.contextTrace()::forgetRead);
-                    if (saved.total() > 0)
-                        runtime.recordCompaction(saved.resultChars(), saved.argumentChars());
-                }
-                long actualChars = specChars;
-                for (var message : runtime.messages()) {
-                    actualChars += message.content() == null ? 0 : message.content().length();
-                    if (message.toolCalls() != null)
-                        for (var call : message.toolCalls()) {
-                            actualChars += call.arguments() == null ? 0 : call.arguments().length();
-                            if (call.extraContent() != null)
-                                actualChars += objectMapper.writeValueAsString(call.extraContent()).length();
-                        }
-                }
-                if (actualChars > props.getContextBudgetChars())
-                    throw new AgentLimitExceededException(
-                            "Context including tool arguments exceeds configured capacity; no further model call was sent");
-                AgentProperties.ModelSelection selection = props.available(preferred)
-                        && !failedModels.contains(preferred) ? preferred
-                                : props.untriedModel(run.getMode(), failedModels);
-                if (selection == null)
-                    throw lastProviderFailure;
-                if (checkpoints != null && !checkpoints.reserveModelIteration(run))
-                    throw new AgentLimitExceededException("Durable model/iteration/deadline limit reached");
-                runtime.beginIteration();
-                requireModelCallAvailable(runtime, size);
-                requireWithinDailyQuota(run);
-                runtime.transitionTo(AgentRuntimeStatus.WAITING_FOR_MODEL);
-                runtime.recordModelCall();
-                log.info("model_called runId={} iteration={} modelCall={} provider={} model={}", run.getId(),
-                        runtime.iteration(),
-                        runtime.modelCallCount(), selection.provider(), selection.model());
-                events.emit(run, AgentStepType.STATUS, "Model called", Map.of(
-                        "iteration", runtime.iteration(), "modelCall", runtime.modelCallCount()));
-                LlmResult res;
-                try {
-                    // A build's reply is its final summary: what the model says between tool calls is
-                    // narration for the timeline, not part of the answer.
-                    // A build cannot finish before it has a plan and has changed files, so until then the
-                    // model must call a tool (weak models otherwise answer in prose and stop).
-                    boolean mustAct = run.getMode() == ProjectType.BUILD
-                            && (!ctx.plan().exists() || changeSets.view(ctx).touchedPaths().isEmpty());
-                    res = llm.chatStreaming(new LlmRequest(
-                            selection.provider(), selection.model(), runtime.messages(), specs,
-                            props.getLlm().getTemperature(), callBudget(deadlineNanos), mustAct ? "required" : null,
-                            props.getLlm().getMaxOutputTokens()),
-                            run.getMode() == ProjectType.BUILD ? delta -> {
-                            } : stream::append);
-                } catch (LlmException providerFailure) {
-                    // A stopped run is not a provider failure: no fallback, no cooldown.
-                    if (providerFailure instanceof LlmCancelledException)
-                        throw new AgentCancelledException();
-                    if (providerFailure instanceof LlmQuotaExceededException)
-                        throw providerFailure;
-                    if (providerFailure instanceof LlmAccountingException)
-                        throw providerFailure;
-                    if (providerFailure instanceof LlmHttpException rejected && rejected.terminalRequest())
-                        throw providerFailure;
-                    requireNotCancelled(run);
-                    // Keep the conversation intact when a provider rejects a request before it
-                    // publishes output. The next round-robin model can support a different tool
-                    // schema or have independent rate limits; the model-call cap still bounds cost.
-                    if (isPartialOutputFailure(providerFailure))
-                        throw providerFailure;
-                    markUnavailable(selection, providerFailure);
-                    failedModels.add(selection);
-                    lastProviderFailure = providerFailure;
-                    log.warn(
-                            "llm_provider_unavailable runId={} provider={} model={} reason={}; trying next configured model",
-                            run.getId(), selection.provider(), selection.model(), providerFailure.getMessage());
-                    events.emit(run, AgentStepType.STATUS, "LLM provider unavailable", Map.of(
-                            "provider", selection.provider(), "model", selection.model(),
-                            "retryable", providerFailure instanceof RetryableLlmException));
-                    continue;
-                }
-                props.markModelAvailable(selection);
-                stream.flush();
-                accountTokens(run, res);
-
-                boolean hasReasoning = res.reasoning() != null && !res.reasoning().isBlank();
-                // In a build every message is kept for the timeline: with tools it is narration, without
-                // them it is either the final answer or a reply a gate will send back.
-                boolean narrated = res.content() != null && !res.content().isBlank()
-                        && (res.hasToolCalls() || run.getMode() == ProjectType.BUILD);
-                if (hasReasoning || narrated) {
-                    Map<String, Object> thinking = new HashMap<>();
-                    if (hasReasoning)
-                        thinking.put("reasoning", res.reasoning());
-                    if (narrated)
-                        thinking.put("narration", truncateNarration(res.content()));
-                    thinking.put("toolCallCount", res.toolCalls().size());
-                    events.emit(run, AgentStepType.THINKING, "Model reasoning", thinking);
-                }
-
-                boolean completionRequested = false;
-                if (res.hasToolCalls()) {
-                    requireToolCallsAvailable(runtime, res.toolCalls().size(), size);
-                    if (checkpoints != null && !checkpoints.reserveTools(run, res.toolCalls().size()))
-                        throw new AgentLimitExceededException("Durable tool/deadline limit reached");
-                    runtime.recordToolCalls(res.toolCalls().size());
-                    runtime.messages().add(new LlmMessage("assistant", budgetAssistantContext(runtime, res.content()),
-                            res.toolCalls(), null));
-                    runtime.transitionTo(AgentRuntimeStatus.EXECUTING_TOOL);
-                    var executed = executeTools(available, res.toolCalls(), ctx, run, runtime, deadlineNanos);
-                    for (int index = 0; index < res.toolCalls().size(); index++) {
-                        String toolResult = budgetToolResult(runtime, executed.results().get(index));
-                        var call = res.toolCalls().get(index);
-                        if ("readFile".equals(call.name())
-                                && objectMapper.readTree(toolResult).path("bodyOmitted").asBoolean(false)) {
-                            var path = objectMapper.readTree(call.arguments()).path("path");
-                            if (path.isString())
-                                ctx.contextTrace().forgetRead(ctx.resolvePath(path.asString()));
-                        }
-                        runtime.messages().add(LlmMessage.toolResult(call.id(), toolResult));
-                    }
-                    completionRequested = run.getMode() == ProjectType.BUILD && executed.allSucceeded()
-                            && "finishBuild".equals(res.toolCalls().getLast().name());
-                    if (!completionRequested)
-                        continue;
-                }
-                if (!res.hasToolCalls() || completionRequested) {
-                    if (run.getMode() == ProjectType.BUILD) {
-                        if (!ctx.plan().exists()) {
-                            if (planningReminders++ > 0) {
-                                throw new AgentValidationFailedException(
-                                        "The agent did not create an implementation plan before finishing the build");
-                            }
-                            runtime.messages().add(LlmMessage.user(
-                                    "BUILD GATE: The build cannot finish yet because no plan was created. "
-                                            + "Call setPlan with concrete file-oriented steps now, then implement the request with the file tools."));
-                            continue;
-                        }
-                        if (changeSets.view(ctx).touchedPaths().isEmpty()) {
-                            if (implementationReminders++ > 0) {
-                                throw new AgentValidationFailedException(
-                                        "The agent did not create or modify any project files");
-                            }
-                            runtime.messages().add(LlmMessage.user(
-                                    "BUILD GATE: The plan exists but no project files were changed. "
-                                            + "Use createFile or patchFile to implement the approved request, then validate the staged revision."));
-                            continue;
-                        }
-                        if (changeSets.hasUnvalidatedChanges(ctx)) {
-                            // The final gate is deterministic. A model does not need an extra turn
-                            // just to call validation after its last mutation.
-                            ValidationReport finalReport = validation.validateAll(ctx);
-                            events.emit(run, AgentStepType.STATUS, "Final validation", Map.of(
-                                    "validationOutcome", finalReport.outcome().name(),
-                                    "validationPassed", finalReport.changeValidationPassed(),
-                                    "introducedDiagnosticCount", finalReport.introducedDiagnostics().size(),
-                                    "repairAttempts", finalReport.repairAttempts()));
-                            if (!finalReport.changeValidationPassed()) {
-                                if (changeSets.validationProgress(ctx).repairLimitExhausted()) {
-                                    throw new AgentValidationFailedException(validationFailureMessage(run.getId()));
-                                }
-                                runtime.messages().add(LlmMessage.user(finalValidationRepairPrompt(finalReport)));
-                                continue;
-                            }
-                        }
-                        if (!hasPreviewEntrypoint(ctx)) {
-                            if (previewReminders++ > 0) {
-                                throw new AgentValidationFailedException(
-                                        "The build has no browser preview entrypoint; no changes were committed");
-                            }
-                            runtime.messages().add(LlmMessage.user(
-                                    "BUILD GATE: The project is not previewable yet. Create a functional frontend entrypoint "
-                                            + "at index.html, client/index.html, client/public/index.html, frontend/index.html, "
-                                            + "or a supported dist/build index.html, then finish the build."));
-                            continue;
-                        }
-                        if (!polished) {
-                            polished = true;
-                            firstSummary = res.content();
-                            reviewedRevision = changeSets.view(ctx).revision();
-                            runtime.messages().add(LlmMessage.assistant(res.content() == null || res.content().isBlank()
-                                    ? "The first version is built and validated."
-                                    : res.content()));
-                            runtime.messages().add(LlmMessage.user(polishPrompt(userRequest)));
-                            events.emit(run, AgentStepType.STATUS, "Polish check", null);
-                            continue;
-                        }
-                        // Before the commit: committing closes the change set, and with it its revision.
-                        String answer = reviewedRevision >= 0 && changeSets.view(ctx).revision() == reviewedRevision
-                                ? firstSummary
-                                : res.content();
-                        String summary = completionRequested
-                                ? objectMapper.readTree(res.toolCalls().getLast().arguments()).path("summary")
-                                        .asString("")
-                                : answer;
-                        events.emit(run, AgentStepType.STATUS, "Saving changes", null);
-                        ChangeSetService.CommitResult committed = changeSets.commit(ctx, run);
-                        if (committed.changedPaths().isEmpty()) {
-                            throw new AgentValidationFailedException(
-                                    "The staged build produced no committed file changes");
-                        }
-                        events.emit(run, AgentStepType.STATUS, "Change set committed", Map.of(
-                                "changedFiles", committed.changedPaths(), "snapshotRef", committed.snapshotRef()));
-                        if (artifacts != null)
-                            artifacts.writeBuild(run, "COMMITTED", committed.changedPaths());
-                        if (databases != null)
-                            databases.ensure(run.getProjectId());
-                        buildSite(run);
-                        moveProject(run, ProjectStage.REVIEW);
-                        stream.append(BuildReplyText.success(summary, run));
-                    }
-                    runtime.transitionPhase(AgentPhase.FINISH);
-                    runtime.transitionTo(AgentRuntimeStatus.COMPLETED);
-                    // Run DONE before the reply shows as complete: a user who answers the moment it
-                    // appears must not be told a request is still in progress.
-                    setStatus(run, RunStatus.DONE);
-                    stream.complete();
-                    notifyBuild(run, true);
-                    events.emit(run, AgentStepType.STATUS, "Agent completed", counters(runtime));
-                    emitContextUsage(run, projectContext, runtime);
-                    log.info("agent_completed runId={} iterations={} modelCalls={} toolCalls={}", run.getId(),
-                            runtime.iteration(), runtime.modelCallCount(), runtime.toolCallCount());
-                    return result(run, runtime, stream.content(), null);
-                }
-
-            }
-
-            throw new AgentLimitExceededException("Agent iteration limit reached");
+            return execute(state);
         } catch (PromotionRecoveryPendingException pending) {
-            events.emit(run, AgentStepType.STATUS, "Save recovery pending", null);
-            try {
-                runsFlagRecovery(run);
-            } catch (RuntimeException unavailable) {
-                log.warn("save_recovery_status_deferred runId={}", run.getId());
-            }
-            cancellation.cancel();
-            run.setError(pending.getMessage());
-            return result(run, runtime, "Code save needs recovery verification; project writes are paused.",
-                    run.getError());
+            return saveRecoveryPending(state, pending);
         } catch (TrustedOperationPendingException pending) {
             cancellation.cancel();
             run.setError(pending.getMessage());
-            return result(run, runtime, "Project operation cleanup is pending.", run.getError());
+            return result(run, state.runtime, "Project operation cleanup is pending.", run.getError());
         } catch (LeaseLostException lost) {
             // Replacement/recovery owns durable state. A stale worker emits no terminal writes.
-            return ownershipLost(run, runtime, cancellation);
+            return ownershipLost(run, state.runtime, cancellation);
         } catch (AgentCancelledException | LlmCancelledException e) {
-            if (cancellation.isOwnershipLost()) {
-                return ownershipLost(run, runtime, cancellation);
-            }
-            log.info("agent_cancelled runId={}", run.getId());
-            if (runtime != null)
-                runtime.transitionTo(AgentRuntimeStatus.CANCELLED);
-            run.setError("Cancelled by user");
-            setStatus(run, RunStatus.CANCELLED);
-            moveProject(run, ProjectStage.FAILED);
-            if (artifacts != null)
-                artifacts.writeBuild(run, "CANCELLED", List.of());
-            updateAssistant(run, "Run cancelled.", MessageStatus.FAILED);
-            events.emit(run, AgentStepType.STATUS, "Agent cancelled", safeCounters(runtime));
-            emitContextUsage(run, projectContext, runtime);
-            return result(run, runtime, "Run cancelled.", run.getError());
+            return cancelled(state);
         } catch (AgentQuotaExceededException | LlmQuotaExceededException e) {
-            log.info("agent_quota_exceeded runId={} userId={}", run.getId(), run.getUserId());
-            if (runtime != null)
-                runtime.transitionTo(AgentRuntimeStatus.FAILED);
-            String message = run.getMode() == ProjectType.BUILD
-                    ? e.getMessage() + " The build was stopped before any change was committed."
-                    : e.getMessage();
-            run.setError(message);
-            boolean runBudget = e instanceof LlmQuotaExceededException quota && quota.runBudget();
-            run.setFailureReason(
-                    runBudget ? AgentFailureReason.RUN_TOKEN_BUDGET_EXCEEDED : AgentFailureReason.DAILY_QUOTA_EXCEEDED);
-            setStatus(run, RunStatus.FAILED);
-            moveProject(run, ProjectStage.FAILED);
-            if (artifacts != null)
-                artifacts.writeBuild(run, "FAILED", List.of());
-            updateAssistant(run, message, MessageStatus.FAILED);
-            events.emit(run, AgentStepType.STATUS,
-                    runBudget ? "Agent stopped: run budget" : "Agent stopped: daily quota", Map.of(
-                            "status", "FAILED", "reason",
-                            runBudget ? "RUN_TOKEN_BUDGET_EXCEEDED" : "DAILY_QUOTA_EXCEEDED", "message", message));
-            emitContextUsage(run, projectContext, runtime);
-            return result(run, runtime, message, message);
+            return quotaExceeded(state, e);
         } catch (AgentValidationFailedException e) {
-            log.info("agent_validation_failed runId={}", run.getId());
-            if (runtime != null)
-                runtime.transitionTo(AgentRuntimeStatus.FAILED);
-            run.setError(e.getMessage());
-            run.setFailureReason(AgentFailureReason.BUILD_VALIDATION_FAILED);
-            setStatus(run, RunStatus.FAILED);
-            moveProject(run, ProjectStage.FAILED);
-            if (artifacts != null)
-                artifacts.writeBuild(run, "FAILED", List.of());
-            notifyBuild(run, false);
-            String validationMessage = "I couldn't complete this build. No new changes were saved. Open Details to review the checks.";
-            updateAssistant(run, validationMessage, MessageStatus.FAILED);
-            events.emit(run, AgentStepType.STATUS, "Agent validation failed", Map.of(
-                    "status", "FAILED", "reason", "BUILD_GATE_FAILED", "message", e.getMessage()));
-            emitContextUsage(run, projectContext, runtime);
-            return result(run, runtime, validationMessage, e.getMessage());
+            return validationFailed(state, e);
         } catch (Exception e) {
-            log.warn("agent_failed runId={} errorType={} message={}", run.getId(), e.getClass().getSimpleName(),
-                    e.getMessage());
-            if (runtime != null)
-                runtime.transitionTo(AgentRuntimeStatus.FAILED);
-            run.setError(safeError(e));
-            run.setFailureReason(e instanceof LlmHttpException rejected && rejected.terminalRequest()
-                    ? AgentFailureReason.PROVIDER_REQUEST_REJECTED
-                    : e instanceof AgentLimitExceededException ? AgentFailureReason.RUN_LIMIT_REACHED
-                            : e instanceof WorkflowStageException ? AgentFailureReason.USER_REVIEW_REQUIRED
-                                    : AgentFailureReason.AGENT_FAILED);
-            setStatus(run, RunStatus.FAILED);
-            moveProject(run, ProjectStage.FAILED);
-            if (artifacts != null)
-                artifacts.writeBuild(run, "FAILED", List.of());
-            notifyBuild(run, false);
-            String failureMessage = run.getCodeSavedAt() == null
-                    ? (e instanceof WorkflowStageException ? safeError(e)
-                            : "Something went wrong while running the agent.")
-                    : "Your code changes were saved. Preview preparation failed; the saved code is available.";
-            if (run.getCodeSavedAt() != null)
-                recordPreview(run, "FAILED");
-            updateAssistant(run, failureMessage, MessageStatus.FAILED);
-            events.emit(run, AgentStepType.STATUS, "Agent failed", safeCounters(runtime));
-            emitContextUsage(run, projectContext, runtime);
-            return result(run, runtime, failureMessage, run.getError());
+            return failed(state, e);
         } finally {
             callContext.close();
             boundCancellation.close();
-            if (cancellations != null)
-                cancellations.unregister(run.getId());
-            if (drafts != null)
-                drafts.finish(run.getId());
-            changeSets.finish(run);
-            validation.clear(run.getId());
-            stopQuietly(beat);
-            try {
-                queue.clearCancel(run.getId());
-            } catch (RuntimeException unavailable) {
-                log.warn("Redis cancel cleanup deferred runId={} errorType={}",
-                        run.getId(), unavailable.getClass().getSimpleName());
+            cleanup(state);
+        }
+    }
+
+    private AgentRunResult execute(RunState state) throws Exception {
+        AgentRun run = state.run;
+        state.startedNanos = System.nanoTime();
+        // Today's limit until the run's size is known; M and L builds get the longer one below.
+        state.deadlineNanos = state.startedNanos + TimeUnit.MILLISECONDS.toNanos(props.getRunTimeoutMs());
+        run.setHeartbeatAt(Instant.now());
+        setStatus(run, RunStatus.RUNNING);
+        log.info("agent_started runId={} projectId={} userId={}", run.getId(), run.getProjectId(), run.getUserId());
+        events.emit(run, AgentStepType.STATUS, "Agent started", Map.of("status", "RUNNING"));
+        state.beat = heartbeat.start(run.getId(), run.getProjectId());
+        updateAssistant(run, "", MessageStatus.STREAMING);
+        requireNotCancelled(run); // cancelled while still queued — stop before any work
+        // Admission checked the quota when the turn was posted; a long run must also stop once it
+        // crosses it; every checkpoint reads the current durable UTC accounting projection.
+        requireWithinDailyQuota(run);
+
+        // All accepted agent turns require current edit rights, including conversational builds.
+        Project project = projects.requireCanEdit(run.getUserId(), run.getProjectId());
+
+        RunRequestHistory accepted = RunRequestHistory.load(messageRepository, run, HISTORY_CANDIDATE_LIMIT);
+        List<Message> history = accepted.messages();
+        String userRequest = accepted.request().getResolvedRequestText() == null
+                ? accepted.request().getContent()
+                : accepted.request().getResolvedRequestText();
+        List<String> attachments = accepted.request().executionAttachmentPaths();
+        RequestRouter.Route route = RequestRouter.route(run.getMode(), userRequest, attachments, false);
+        ProjectType effectiveMode = RequestRouter.mode(run.getMode(), userRequest, attachments);
+        if (effectiveMode != run.getMode()) {
+            run.setMode(effectiveMode);
+            owned(run, () -> runRepository.save(run));
+        }
+        String originalOffer = accepted.request().getSourceProposalId() == null ? accepted.request().getContent()
+                : messageRepository
+                        .findByIdAndProjectId(accepted.request().getSourceProposalId(), run.getProjectId())
+                        .map(Message::getSuggestedBuildText).orElse(accepted.request().getContent());
+        if (route == RequestRouter.Route.CHANGE && run.getMode() != ProjectType.BUILD
+                || route == RequestRouter.Route.QUESTION && RequestRouter.positiveChange(userRequest)) {
+            suggestBuild(run, originalOffer, attachments);
+        }
+        if (route == RequestRouter.Route.SMALL_TALK
+                || route == RequestRouter.Route.UNCLEAR || RequestRouter.productQuestion(userRequest)) {
+            return runConversational(run, state.stream, history, userRequest, state.deadlineNanos,
+                    route == RequestRouter.Route.UNCLEAR, attachments);
+        }
+
+        requireBuildAllowed(run);
+        LoopSetup setup = prepareLoop(state, project, accepted, userRequest, attachments);
+        if (attachments.isEmpty() && contractCoordinator != null
+                && contractCoordinator.eligible(run, setup.size(), userRequest)) {
+            return runStructured(state, setup.size(), userRequest);
+        }
+        prepareStarter(state, project, setup, userRequest);
+        return runToolLoop(state, setup, userRequest);
+    }
+
+    private void requireBuildAllowed(AgentRun run) {
+        if (run.getMode() == ProjectType.BUILD && buildDecisions != null) {
+            var decision = buildDecisions.state(run.getProjectId());
+            if (decision.blocked()) {
+                throw new WorkflowStageException(decision.problem());
             }
+        }
+        if (run.getMode() == ProjectType.BUILD) {
+            moveProject(run, ProjectStage.BUILDING);
+        }
+    }
+
+    private LoopSetup prepareLoop(RunState state, Project project, RunRequestHistory accepted, String userRequest,
+            List<String> attachments) {
+        AgentRun run = state.run;
+        // BUILD runs work on a staged copy committed at the end; other runs read the project itself.
+        String root = run.getMode() == ProjectType.BUILD ? changeSets.start(run.getId(), run.getProjectId()) : ".";
+        state.projectContext = projectContexts.build(files, run.getProjectId(), root, userRequest,
+                accepted.messages(), List.of());
+        RunSize size = runSize(run, project, userRequest, state.projectContext);
+        if (usage != null) {
+            usage.configureRun(run.getId(), run.getUserId(), size.tier());
+        }
+        state.deadlineNanos = state.startedNanos + TimeUnit.MILLISECONDS.toNanos(size.timeoutMs());
+        events.emit(run, AgentStepType.STATUS, "Run size",
+                Map.of("tier", size.tier().name(), "reasons", size.reasons(),
+                        "timeoutMs", size.timeoutMs(), "maxIterations", size.maxIterations()));
+        SequentialCheckpoints.Progress durableProgress = null;
+        if (checkpoints != null) {
+            durableProgress = checkpoints.configure(run, size);
+            state.deadlineNanos = Math.min(state.deadlineNanos,
+                    System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(durableProgress.remainingMs()));
+        }
+        AgentPlanState plan = new AgentPlanState();
+        state.ctx = new AgentContext(run.getProjectId(), run.getUserId(), run.getMode(), root,
+                AgentProjectMetadata.from(project), state.projectContext.trace(), run.getId(), plan, files);
+        state.ctx.contextTrace().patchMissLimit(props.getMaxPatchMisses());
+        String resumed = run.getMode() == ProjectType.BUILD ? changeSets.resumePlan(state.ctx) : null;
+        List<AgentTool> available = toolsForRun(run.getMode());
+        List<ToolSpec> specs = available.stream()
+                .map(t -> new ToolSpec(t.name(), t.description(), t.parametersSchema())).toList();
+        int specChars = specs.toString().length();
+        ConversationCompactor compactor = props.isCompactContext()
+                ? new ConversationCompactor(objectMapper, props.getCompactKeepTurns(), props.getCompactMinChars())
+                : null;
+
+        List<LlmMessage> convo = initialConversation(state, accepted, userRequest, attachments, resumed);
+        int initialContextChars = convo.stream()
+                .mapToInt(message -> message.content() == null ? 0 : message.content().length()).sum()
+                + specs.toString().length();
+        state.runtime = new AgentRuntimeContext(run.getId(), run.getProjectId(), run.getUserId(), userRequest, convo,
+                props.getContextBudgetChars(), initialContextChars, plan);
+        if (durableProgress != null) {
+            state.runtime.restoreCounters(durableProgress.iterations(), durableProgress.modelCalls(),
+                    durableProgress.toolCalls());
+        }
+        state.runtime.transitionTo(AgentRuntimeStatus.RUNNING);
+        state.runtime.transitionPhase(AgentPhase.EXPLORE);
+        events.emit(run, AgentStepType.STATUS, "Project context prepared",
+                contextAudit(state.projectContext.diagnostics()));
+        return new LoopSetup(size, available, specs, specChars, compactor);
+    }
+
+    private List<LlmMessage> initialConversation(RunState state, RunRequestHistory accepted, String userRequest,
+            List<String> attachments, String resumed) {
+        AgentRun run = state.run;
+        List<LlmMessage> convo = new ArrayList<>();
+        convo.add(LlmMessage.system(systemPrompt(run.getMode())));
+        if (!state.projectContext.projectContextMessage().isBlank()) {
+            convo.add(LlmMessage.user(state.projectContext.projectContextMessage()));
+        }
+        state.projectContext.conversation().stream().map(AgentRunner::toLlmMessage).forEach(convo::add);
+        if (accepted.request().getResolvedRequestText() != null) {
+            convo.add(LlmMessage.user(userRequest));
+        }
+        if (!attachments.isEmpty() && vision != null) {
+            events.emit(run, AgentStepType.STATUS, "Reading attachments", Map.of("files", attachments));
+            convo.add(LlmMessage
+                    .user(VisionService.asContext(vision.describe(run.getProjectId(), attachments, userRequest))));
+        }
+        if (resumed != null) {
+            convo.add(LlmMessage.user(resumed));
+        }
+        return convo;
+    }
+
+    private AgentRunResult runStructured(RunState state, RunSize size, String userRequest) {
+        AgentRun run = state.run;
+        if (checkpoints == null) {
+            throw new AgentLimitExceededException("Durable structured execution is unavailable");
+        }
+        final AgentRuntimeContext structuredRuntime = state.runtime;
+        final long structuredDeadline = state.deadlineNanos;
+        Function<LlmRequest, LlmResult> checkedCall = request -> {
+            long currentDeadline = Math.min(structuredDeadline, System.nanoTime()
+                    + TimeUnit.MILLISECONDS.toNanos(checkpoints.progress(run.getId()).remainingMs()));
+            requireBeforeDeadline(currentDeadline);
+            requireNotCancelled(run);
+            requireWithinDailyQuota(run);
+            if (request.messages().stream().mapToInt(m -> m.content() == null ? 0 : m.content().length())
+                    .sum() > props.getContextBudgetChars()) {
+                throw new AgentLimitExceededException("Structured context limit reached");
+            }
+            synchronized (structuredRuntime) {
+                requireModelCallAvailable(structuredRuntime, size);
+                if (!checkpoints.reserveModelIteration(run)) {
+                    throw new AgentLimitExceededException("Durable model/iteration/deadline limit reached");
+                }
+                structuredRuntime.beginIteration();
+                structuredRuntime.recordModelCall();
+            }
+            var budget = callBudget(currentDeadline);
+            if (request.budget() != null && request.budget().compareTo(budget) < 0) {
+                budget = request.budget();
+            }
+            var bounded = new LlmRequest(request.provider(), request.model(), request.messages(),
+                    request.tools(), request.temperature(), budget, request.toolChoice(), request.maxTokens(),
+                    request.jsonSchema());
+            var response = llm.chat(bounded);
+            synchronized (run) {
+                accountTokens(run, response);
+            }
+            return response;
+        };
+        Runnable beforeIo = () -> {
+            requireNotCancelled(run);
+            requireBeforeDeadline(structuredDeadline);
+            requireToolCallsAvailable(structuredRuntime, 1, size);
+            if (!checkpoints.reserveTools(run, 1)) {
+                throw new AgentLimitExceededException("Durable operation/deadline limit reached");
+            }
+            structuredRuntime.recordToolCalls(1);
+        };
+        var outcome = contractCoordinator.execute(state.ctx, run, size, userRequest,
+                state.projectContext.projectContextMessage(), checkedCall, beforeIo,
+                title -> events.emit(run, AgentStepType.STATUS, title, null));
+        if (run.getMode() == ProjectType.BUILD) {
+            beforeIo.run();
+            projects.requireCanEdit(run.getUserId(), run.getProjectId());
+            if (!hasPreviewEntrypoint(state.ctx)) {
+                throw new AgentValidationFailedException("The structured build has no preview entrypoint");
+            }
+            commitBuild(run, state.ctx, state.stream, outcome.summary(), "The structured build produced no changes");
+        } else {
+            state.stream.append(outcome.summary());
+        }
+        return completeRun(state);
+    }
+
+    private void prepareStarter(RunState state, Project project, LoopSetup setup, String userRequest) {
+        AgentRun run = state.run;
+        AgentContext ctx = state.ctx;
+        if (run.getMode() != ProjectType.BUILD || !props.isAutomaticStarter() || buildDecisions == null) {
+            return;
+        }
+        var starter = AutomaticStarter.select(ctx, buildDecisions.state(run.getProjectId()).choice(), userRequest);
+        if (starter == null || setup.available().stream().noneMatch(tool -> tool.name().equals("startProject"))) {
+            return;
+        }
+        requireBeforeDeadline(state.deadlineNanos);
+        requireNotCancelled(run);
+        requireToolCallsAvailable(state.runtime, 1, setup.size());
+        if (checkpoints != null && !checkpoints.reserveTools(run, 1)) {
+            throw new AgentLimitExceededException("Durable preparation limit reached");
+        }
+        if (!ctx.plan().exists()) {
+            ctx.plan().revise(List.of("Prepare the approved application setup",
+                    "Implement the requested features", "Validate the application"),
+                    "Backend starter preparation");
+        }
+        state.runtime.recordToolCalls(1);
+        String arguments = objectMapper.writeValueAsString(Map.of("stack", starter.id(), "title",
+                project.getName() == null ? "App" : project.getName()));
+        var setupResult = executeTools(setup.available(),
+                List.of(new ToolCall("backend_prepare", "startProject", arguments)),
+                ctx, run, state.runtime, state.deadlineNanos);
+        if (!setupResult.allSucceeded()) {
+            throw new AgentValidationFailedException("Approved starter preparation failed; no code was saved");
+        }
+        String prepared = objectMapper.writeValueAsString(AutomaticStarter.context(ctx, starter));
+        String data = "Backend prepared the approved starter in this stage. Keep its setup; "
+                + "do not call startProject again. Implement the request on top. Starter data: " + prepared;
+        if (!state.runtime.reserveContext(data.length())) {
+            throw new AgentLimitExceededException("Prepared starter exceeds context capacity");
+        }
+        state.runtime.messages().add(LlmMessage.user(data));
+    }
+
+    private AgentRunResult runToolLoop(RunState state, LoopSetup setup, String userRequest) {
+        AgentRun run = state.run;
+        AgentRuntimeContext runtime = state.runtime;
+        AgentContext ctx = state.ctx;
+        BuildGateState gates = new BuildGateState();
+        // One review turn per build, once the change validates: weak models stop at the first
+        // version that runs, and the checklist brings back what they skipped.
+        gates.polished = !props.isPolishTurn();
+        // One model for the whole run (the first available in priority order); another one only for
+        // the calls made while it is failing.
+        RouteFailover routes = new RouteFailover(run.getMode());
+        for (int i = runtime.iteration(); i < setup.size().maxIterations(); i++) {
+            requireIterationAllowed(state, setup);
+            AgentProperties.ModelSelection selection = routes.next();
+            reserveModelCall(state, setup.size(), selection);
+            LlmResult res;
+            try {
+                // A build's reply is its final summary: what the model says between tool calls is
+                // narration for the timeline, not part of the answer.
+                // A build cannot finish before it has a plan and has changed files, so until then the
+                // model must call a tool (weak models otherwise answer in prose and stop).
+                boolean mustAct = run.getMode() == ProjectType.BUILD
+                        && (!ctx.plan().exists() || changeSets.view(ctx).touchedPaths().isEmpty());
+                res = llm.chatStreaming(new LlmRequest(
+                        selection.provider(), selection.model(), runtime.messages(), setup.specs(),
+                        props.getLlm().getTemperature(), callBudget(state.deadlineNanos),
+                        mustAct ? "required" : null, props.getLlm().getMaxOutputTokens()),
+                        run.getMode() == ProjectType.BUILD ? delta -> {
+                        } : state.stream::append);
+            } catch (LlmException providerFailure) {
+                routes.failed(run, selection, providerFailure, false);
+                continue;
+            }
+            props.markModelAvailable(selection);
+            state.stream.flush();
+            accountTokens(run, res);
+            emitThinking(run, res);
+
+            boolean completionRequested = false;
+            if (res.hasToolCalls()) {
+                completionRequested = runToolCalls(state, setup, res);
+                if (!completionRequested) {
+                    continue;
+                }
+            }
+            if (run.getMode() == ProjectType.BUILD) {
+                if (!passBuildGates(state, gates, res, userRequest)) {
+                    continue;
+                }
+                // Before the commit: committing closes the change set, and with it its revision.
+                String answer = gates.reviewedRevision >= 0
+                        && changeSets.view(ctx).revision() == gates.reviewedRevision ? gates.firstSummary
+                                : res.content();
+                String summary = completionRequested
+                        ? objectMapper.readTree(res.toolCalls().getLast().arguments()).path("summary").asString("")
+                        : answer;
+                events.emit(run, AgentStepType.STATUS, "Saving changes", null);
+                commitBuild(run, ctx, state.stream, summary, "The staged build produced no committed file changes");
+            }
+            return completeRun(state);
+        }
+        throw new AgentLimitExceededException("Agent iteration limit reached");
+    }
+
+    /** Checks done before every model call: deadline, Stop, repair and patch limits, context size. */
+    private void requireIterationAllowed(RunState state, LoopSetup setup) {
+        AgentRun run = state.run;
+        AgentContext ctx = state.ctx;
+        requireBeforeDeadline(state.deadlineNanos);
+        requireNotCancelled(run);
+        // Terminate known failure before reserving/calling a model whose reply would be discarded.
+        if (run.getMode() == ProjectType.BUILD && changeSets.validationProgress(ctx).repairLimitExhausted()) {
+            throw new AgentValidationFailedException(validationFailureMessage(run.getId()));
+        }
+        if (ctx.contextTrace().patchLimitReached()) {
+            throw new AgentValidationFailedException("Repeated patch misses; staged changes were not committed. "
+                    + "Re-read and revise the approach for: " + ctx.contextTrace().patchBlockedPaths());
+        }
+        if (setup.compactor() != null) {
+            ConversationCompactor.Saved saved = setup.compactor().compact(state.runtime.messages());
+            saved.omittedReadPaths().forEach(ctx.contextTrace()::forgetRead);
+            if (saved.total() > 0) {
+                state.runtime.recordCompaction(saved.resultChars(), saved.argumentChars());
+            }
+        }
+        if (contextChars(state.runtime.messages(), setup.specChars()) > props.getContextBudgetChars()) {
+            throw new AgentLimitExceededException(
+                    "Context including tool arguments exceeds configured capacity; no further model call was sent");
+        }
+    }
+
+    private long contextChars(List<LlmMessage> messages, int specChars) {
+        long chars = specChars;
+        for (var message : messages) {
+            chars += message.content() == null ? 0 : message.content().length();
+            if (message.toolCalls() == null) {
+                continue;
+            }
+            for (var call : message.toolCalls()) {
+                chars += call.arguments() == null ? 0 : call.arguments().length();
+                if (call.extraContent() != null) {
+                    chars += objectMapper.writeValueAsString(call.extraContent()).length();
+                }
+            }
+        }
+        return chars;
+    }
+
+    private void reserveModelCall(RunState state, RunSize size, AgentProperties.ModelSelection selection) {
+        AgentRun run = state.run;
+        AgentRuntimeContext runtime = state.runtime;
+        if (checkpoints != null && !checkpoints.reserveModelIteration(run)) {
+            throw new AgentLimitExceededException("Durable model/iteration/deadline limit reached");
+        }
+        runtime.beginIteration();
+        requireModelCallAvailable(runtime, size);
+        requireWithinDailyQuota(run);
+        runtime.transitionTo(AgentRuntimeStatus.WAITING_FOR_MODEL);
+        runtime.recordModelCall();
+        log.info("model_called runId={} iteration={} modelCall={} provider={} model={}", run.getId(),
+                runtime.iteration(), runtime.modelCallCount(), selection.provider(), selection.model());
+        events.emit(run, AgentStepType.STATUS, "Model called", Map.of(
+                "iteration", runtime.iteration(), "modelCall", runtime.modelCallCount()));
+    }
+
+    private void emitThinking(AgentRun run, LlmResult res) {
+        boolean hasReasoning = res.reasoning() != null && !res.reasoning().isBlank();
+        // In a build every message is kept for the timeline: with tools it is narration, without
+        // them it is either the final answer or a reply a gate will send back.
+        boolean narrated = res.content() != null && !res.content().isBlank()
+                && (res.hasToolCalls() || run.getMode() == ProjectType.BUILD);
+        if (!hasReasoning && !narrated) {
+            return;
+        }
+        Map<String, Object> thinking = new HashMap<>();
+        if (hasReasoning) {
+            thinking.put("reasoning", res.reasoning());
+        }
+        if (narrated) {
+            thinking.put("narration", truncateNarration(res.content()));
+        }
+        thinking.put("toolCallCount", res.toolCalls().size());
+        events.emit(run, AgentStepType.THINKING, "Model reasoning", thinking);
+    }
+
+    /** Executes the model's tool calls; true when a BUILD asked to finish and every call succeeded. */
+    private boolean runToolCalls(RunState state, LoopSetup setup, LlmResult res) {
+        AgentRun run = state.run;
+        AgentRuntimeContext runtime = state.runtime;
+        AgentContext ctx = state.ctx;
+        requireToolCallsAvailable(runtime, res.toolCalls().size(), setup.size());
+        if (checkpoints != null && !checkpoints.reserveTools(run, res.toolCalls().size())) {
+            throw new AgentLimitExceededException("Durable tool/deadline limit reached");
+        }
+        runtime.recordToolCalls(res.toolCalls().size());
+        runtime.messages().add(new LlmMessage("assistant", budgetAssistantContext(runtime, res.content()),
+                res.toolCalls(), null));
+        runtime.transitionTo(AgentRuntimeStatus.EXECUTING_TOOL);
+        var executed = executeTools(setup.available(), res.toolCalls(), ctx, run, runtime, state.deadlineNanos);
+        for (int index = 0; index < res.toolCalls().size(); index++) {
+            String toolResult = budgetToolResult(runtime, executed.results().get(index));
+            var call = res.toolCalls().get(index);
+            if ("readFile".equals(call.name())
+                    && objectMapper.readTree(toolResult).path("bodyOmitted").asBoolean(false)) {
+                var path = objectMapper.readTree(call.arguments()).path("path");
+                if (path.isString()) {
+                    ctx.contextTrace().forgetRead(ctx.resolvePath(path.asString()));
+                }
+            }
+            runtime.messages().add(LlmMessage.toolResult(call.id(), toolResult));
+        }
+        return run.getMode() == ProjectType.BUILD && executed.allSucceeded()
+                && "finishBuild".equals(res.toolCalls().getLast().name());
+    }
+
+    /**
+     * BUILD completion gates: plan, changed files, final validation, preview entrypoint and the
+     * optional review turn. False means a gate sent the model back with a message.
+     */
+    private boolean passBuildGates(RunState state, BuildGateState gates, LlmResult res, String userRequest) {
+        AgentRun run = state.run;
+        AgentRuntimeContext runtime = state.runtime;
+        AgentContext ctx = state.ctx;
+        if (!ctx.plan().exists()) {
+            if (gates.planningReminders++ > 0) {
+                throw new AgentValidationFailedException(
+                        "The agent did not create an implementation plan before finishing the build");
+            }
+            runtime.messages().add(LlmMessage.user(
+                    "BUILD GATE: The build cannot finish yet because no plan was created. "
+                            + "Call setPlan with concrete file-oriented steps now, then implement the request with "
+                            + "the file tools."));
+            return false;
+        }
+        if (changeSets.view(ctx).touchedPaths().isEmpty()) {
+            if (gates.implementationReminders++ > 0) {
+                throw new AgentValidationFailedException("The agent did not create or modify any project files");
+            }
+            runtime.messages().add(LlmMessage.user(
+                    "BUILD GATE: The plan exists but no project files were changed. "
+                            + "Use createFile or patchFile to implement the approved request, then validate the "
+                            + "staged revision."));
+            return false;
+        }
+        if (changeSets.hasUnvalidatedChanges(ctx)) {
+            // The final gate is deterministic. A model does not need an extra turn
+            // just to call validation after its last mutation.
+            ValidationReport finalReport = validation.validateAll(ctx);
+            events.emit(run, AgentStepType.STATUS, "Final validation", Map.of(
+                    "validationOutcome", finalReport.outcome().name(),
+                    "validationPassed", finalReport.changeValidationPassed(),
+                    "introducedDiagnosticCount", finalReport.introducedDiagnostics().size(),
+                    "repairAttempts", finalReport.repairAttempts()));
+            if (!finalReport.changeValidationPassed()) {
+                if (changeSets.validationProgress(ctx).repairLimitExhausted()) {
+                    throw new AgentValidationFailedException(validationFailureMessage(run.getId()));
+                }
+                runtime.messages().add(LlmMessage.user(finalValidationRepairPrompt(finalReport)));
+                return false;
+            }
+        }
+        if (!hasPreviewEntrypoint(ctx)) {
+            if (gates.previewReminders++ > 0) {
+                throw new AgentValidationFailedException(
+                        "The build has no browser preview entrypoint; no changes were committed");
+            }
+            runtime.messages().add(LlmMessage.user(
+                    "BUILD GATE: The project is not previewable yet. Create a functional frontend entrypoint "
+                            + "at index.html, client/index.html, client/public/index.html, frontend/index.html, "
+                            + "or a supported dist/build index.html, then finish the build."));
+            return false;
+        }
+        if (!gates.polished) {
+            gates.polished = true;
+            gates.firstSummary = res.content();
+            gates.reviewedRevision = changeSets.view(ctx).revision();
+            runtime.messages().add(LlmMessage.assistant(res.content() == null || res.content().isBlank()
+                    ? "The first version is built and validated."
+                    : res.content()));
+            runtime.messages().add(LlmMessage.user(polishPrompt(userRequest)));
+            events.emit(run, AgentStepType.STATUS, "Polish check", null);
+            return false;
+        }
+        return true;
+    }
+
+    /** Saves the staged build and prepares its preview; the reply describes the saved change. */
+    private void commitBuild(AgentRun run, AgentContext ctx, DeltaBatcher stream, String summary,
+            String noChangesMessage) {
+        ChangeSetService.CommitResult committed = changeSets.commit(ctx, run);
+        if (committed.changedPaths().isEmpty()) {
+            throw new AgentValidationFailedException(noChangesMessage);
+        }
+        events.emit(run, AgentStepType.STATUS, "Change set committed",
+                Map.of("changedFiles", committed.changedPaths(), "snapshotRef", committed.snapshotRef()));
+        if (artifacts != null) {
+            artifacts.writeBuild(run, "COMMITTED", committed.changedPaths());
+        }
+        if (databases != null) {
+            databases.ensure(run.getProjectId());
+        }
+        buildSite(run);
+        moveProject(run, ProjectStage.REVIEW);
+        stream.append(BuildReplyText.success(summary, run));
+    }
+
+    private AgentRunResult completeRun(RunState state) {
+        AgentRun run = state.run;
+        AgentRuntimeContext runtime = state.runtime;
+        runtime.transitionPhase(AgentPhase.FINISH);
+        runtime.transitionTo(AgentRuntimeStatus.COMPLETED);
+        // Run DONE before the reply shows as complete: a user who answers the moment it
+        // appears must not be told a request is still in progress.
+        setStatus(run, RunStatus.DONE);
+        state.stream.complete();
+        notifyBuild(run, true);
+        events.emit(run, AgentStepType.STATUS, "Agent completed", counters(runtime));
+        emitContextUsage(run, state.projectContext, runtime);
+        log.info("agent_completed runId={} iterations={} modelCalls={} toolCalls={}", run.getId(),
+                runtime.iteration(), runtime.modelCallCount(), runtime.toolCallCount());
+        return result(run, runtime, state.stream.content(), null);
+    }
+
+    private AgentRunResult saveRecoveryPending(RunState state, PromotionRecoveryPendingException pending) {
+        AgentRun run = state.run;
+        events.emit(run, AgentStepType.STATUS, "Save recovery pending", null);
+        try {
+            runsFlagRecovery(run);
+        } catch (RuntimeException unavailable) {
+            log.warn("save_recovery_status_deferred runId={}", run.getId());
+        }
+        state.cancellation.cancel();
+        run.setError(pending.getMessage());
+        return result(run, state.runtime, "Code save needs recovery verification; project writes are paused.",
+                run.getError());
+    }
+
+    /** Shared terminal bookkeeping for cancelled and failed runs. */
+    private void markEnded(RunState state, AgentRuntimeStatus runtimeStatus, RunStatus runStatus,
+            String artifactState) {
+        AgentRun run = state.run;
+        if (state.runtime != null) {
+            state.runtime.transitionTo(runtimeStatus);
+        }
+        setStatus(run, runStatus);
+        moveProject(run, ProjectStage.FAILED);
+        if (artifacts != null) {
+            artifacts.writeBuild(run, artifactState, List.of());
+        }
+    }
+
+    private AgentRunResult cancelled(RunState state) {
+        AgentRun run = state.run;
+        if (state.cancellation.isOwnershipLost()) {
+            return ownershipLost(run, state.runtime, state.cancellation);
+        }
+        log.info("agent_cancelled runId={}", run.getId());
+        run.setError("Cancelled by user");
+        markEnded(state, AgentRuntimeStatus.CANCELLED, RunStatus.CANCELLED, "CANCELLED");
+        updateAssistant(run, "Run cancelled.", MessageStatus.FAILED);
+        events.emit(run, AgentStepType.STATUS, "Agent cancelled", safeCounters(state.runtime));
+        emitContextUsage(run, state.projectContext, state.runtime);
+        return result(run, state.runtime, "Run cancelled.", run.getError());
+    }
+
+    private AgentRunResult quotaExceeded(RunState state, RuntimeException e) {
+        AgentRun run = state.run;
+        log.info("agent_quota_exceeded runId={} userId={}", run.getId(), run.getUserId());
+        String message = run.getMode() == ProjectType.BUILD
+                ? e.getMessage() + " The build was stopped before any change was committed."
+                : e.getMessage();
+        run.setError(message);
+        boolean runBudget = e instanceof LlmQuotaExceededException quota && quota.runBudget();
+        run.setFailureReason(
+                runBudget ? AgentFailureReason.RUN_TOKEN_BUDGET_EXCEEDED : AgentFailureReason.DAILY_QUOTA_EXCEEDED);
+        markEnded(state, AgentRuntimeStatus.FAILED, RunStatus.FAILED, "FAILED");
+        updateAssistant(run, message, MessageStatus.FAILED);
+        events.emit(run, AgentStepType.STATUS,
+                runBudget ? "Agent stopped: run budget" : "Agent stopped: daily quota", Map.of(
+                        "status", "FAILED", "reason",
+                        runBudget ? "RUN_TOKEN_BUDGET_EXCEEDED" : "DAILY_QUOTA_EXCEEDED", "message", message));
+        emitContextUsage(run, state.projectContext, state.runtime);
+        return result(run, state.runtime, message, message);
+    }
+
+    private AgentRunResult validationFailed(RunState state, AgentValidationFailedException e) {
+        AgentRun run = state.run;
+        log.info("agent_validation_failed runId={}", run.getId());
+        run.setError(e.getMessage());
+        run.setFailureReason(AgentFailureReason.BUILD_VALIDATION_FAILED);
+        markEnded(state, AgentRuntimeStatus.FAILED, RunStatus.FAILED, "FAILED");
+        notifyBuild(run, false);
+        String validationMessage = "I couldn't complete this build. No new changes were saved. "
+                + "Open Details to review the checks.";
+        updateAssistant(run, validationMessage, MessageStatus.FAILED);
+        events.emit(run, AgentStepType.STATUS, "Agent validation failed", Map.of(
+                "status", "FAILED", "reason", "BUILD_GATE_FAILED", "message", e.getMessage()));
+        emitContextUsage(run, state.projectContext, state.runtime);
+        return result(run, state.runtime, validationMessage, e.getMessage());
+    }
+
+    private AgentRunResult failed(RunState state, Exception e) {
+        AgentRun run = state.run;
+        log.warn("agent_failed runId={} errorType={} message={}", run.getId(), e.getClass().getSimpleName(),
+                e.getMessage());
+        run.setError(safeError(e));
+        run.setFailureReason(e instanceof LlmHttpException rejected && rejected.terminalRequest()
+                ? AgentFailureReason.PROVIDER_REQUEST_REJECTED
+                : e instanceof AgentLimitExceededException ? AgentFailureReason.RUN_LIMIT_REACHED
+                        : e instanceof WorkflowStageException ? AgentFailureReason.USER_REVIEW_REQUIRED
+                                : AgentFailureReason.AGENT_FAILED);
+        markEnded(state, AgentRuntimeStatus.FAILED, RunStatus.FAILED, "FAILED");
+        notifyBuild(run, false);
+        String failureMessage = run.getCodeSavedAt() == null
+                ? (e instanceof WorkflowStageException ? safeError(e)
+                        : "Something went wrong while running the agent.")
+                : "Your code changes were saved. Preview preparation failed; the saved code is available.";
+        if (run.getCodeSavedAt() != null) {
+            recordPreview(run, "FAILED");
+        }
+        updateAssistant(run, failureMessage, MessageStatus.FAILED);
+        events.emit(run, AgentStepType.STATUS, "Agent failed", safeCounters(state.runtime));
+        emitContextUsage(run, state.projectContext, state.runtime);
+        return result(run, state.runtime, failureMessage, run.getError());
+    }
+
+    private void cleanup(RunState state) {
+        AgentRun run = state.run;
+        if (cancellations != null) {
+            cancellations.unregister(run.getId());
+        }
+        if (drafts != null) {
+            drafts.finish(run.getId());
+        }
+        changeSets.finish(run);
+        validation.clear(run.getId());
+        stopQuietly(state.beat);
+        try {
+            queue.clearCancel(run.getId());
+        } catch (RuntimeException unavailable) {
+            log.warn("Redis cancel cleanup deferred runId={} errorType={}",
+                    run.getId(), unavailable.getClass().getSimpleName());
         }
     }
 
@@ -893,8 +1079,7 @@ public class AgentRunner implements AgentRuntime {
 
         LlmResult res = null;
         StringBuilder decisionText = new StringBuilder();
-        LlmException lastFailure = null;
-        var failedModels = new HashSet<AgentProperties.ModelSelection>();
+        RouteFailover routes = new RouteFailover(ProjectType.CHAT);
         try (LlmCallContext.Scope smallTalk = LlmCallContext.purpose(CallPurpose.SMALL_TALK, true)) {
             // Small talk gets the same fallback as the main loop: a provider that is down or out of
             // budget hands over to the next configured chat model instead of failing the reply.
@@ -902,16 +1087,9 @@ public class AgentRunner implements AgentRuntime {
                 requireBeforeDeadline(deadlineNanos);
                 requireNotCancelled(run);
                 requireWithinDailyQuota(run);
-                AgentProperties.ModelSelection selection = props.preferredModel(ProjectType.CHAT);
-                if (failedModels.contains(selection) || !props.available(selection)) {
-                    selection = props.untriedModel(ProjectType.CHAT, failedModels);
-                }
-                if (selection == null) {
-                    throw lastFailure;
-                }
+                AgentProperties.ModelSelection selection = routes.next();
                 log.info("model_called runId={} conversational=true attempt={} provider={} model={}", run.getId(),
-                        attempt,
-                        selection.provider(), selection.model());
+                        attempt, selection.provider(), selection.model());
                 try {
                     res = llm.chatStreaming(new LlmRequest(selection.provider(), selection.model(), convo, List.of(),
                             props.getLlm().getTemperature(), callBudget(deadlineNanos))
@@ -919,31 +1097,11 @@ public class AgentRunner implements AgentRuntime {
                             unclear ? decisionText::append : stream::append);
                     props.markModelAvailable(selection);
                 } catch (LlmException providerFailure) {
-                    if (providerFailure instanceof LlmCancelledException) {
-                        throw new AgentCancelledException();
-                    }
-                    if (providerFailure instanceof LlmQuotaExceededException
-                            || providerFailure instanceof LlmAccountingException) {
-                        throw providerFailure;
-                    }
-                    if (providerFailure instanceof LlmHttpException rejected
-                            && rejected.terminalRequest()) {
-                        throw providerFailure;
-                    }
-                    requireNotCancelled(run);
-                    if (isPartialOutputFailure(providerFailure)) {
-                        throw providerFailure;
-                    }
-                    markUnavailable(selection, providerFailure);
-                    failedModels.add(selection);
-                    lastFailure = providerFailure;
-                    log.warn(
-                            "llm_provider_unavailable runId={} conversational=true provider={} model={} reason={}; trying next configured model",
-                            run.getId(), selection.provider(), selection.model(), providerFailure.getMessage());
+                    routes.failed(run, selection, providerFailure, true);
                 }
             }
             if (res == null) {
-                throw lastFailure;
+                throw routes.lastFailure();
             }
             if (unclear) {
                 var decision = UnclearReply.decode(objectMapper,
