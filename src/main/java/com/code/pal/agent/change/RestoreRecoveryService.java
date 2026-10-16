@@ -56,25 +56,29 @@ public class RestoreRecoveryService {
             journal.state(entry.id(), "RECOVERY_REQUIRED");
         }
 
-        PromotionJournal.Entry proof = promotions.read(entry.runId());
-        if (proof == null || !proof.projectId().equals(entry.projectId()) || !proof.state().equals("SAVED")) {
-            throw new IllegalStateException("Restore promotion proof is unavailable");
+        List<PromotionJournal.FileState> proof = entry.files();
+        if (proof == null) {
+            PromotionJournal.Entry promotion = promotions.read(entry.runId());
+            if (promotion == null || !promotion.projectId().equals(entry.projectId()) || !promotion.state().equals("SAVED")) {
+                throw new IllegalStateException("Restore promotion proof is unavailable");
+            }
+            proof = promotion.files();
         }
-        PromotionJournal.validate(proof.files());
+        PromotionJournal.validate(proof);
         // Promotion.before is the desired restored code; Promotion.after is the pre-restore live code.
-        if (matches(entry, proof.files(), true)) {
+        if (matches(entry, proof, true)) {
             finish(entry, "RESTORED");
             return;
         }
-        if (matches(entry, proof.files(), false)) {
+        if (matches(entry, proof, false)) {
             finish(entry, "ROLLED_BACK");
             return;
         }
 
-        for (PromotionJournal.FileState file : proof.files()) {
+        for (PromotionJournal.FileState file : proof) {
             rollBackProvenFile(entry, file);
         }
-        if (matches(entry, proof.files(), false)) {
+        if (matches(entry, proof, false)) {
             finish(entry, "ROLLED_BACK");
         } else {
             journal.state(entry.id(), "RECOVERY_REQUIRED");
@@ -83,6 +87,12 @@ public class RestoreRecoveryService {
     }
 
     private boolean matches(RestoreJournal.Entry entry, List<PromotionJournal.FileState> proof, boolean restored) {
+        if (entry.files() != null) {
+            var expected = new SavedBuildManifest(proof.stream()
+                    .filter(file -> !(restored ? file.before() : file.after()).equals(FileVersions.ABSENT))
+                    .map(file -> new SavedBuildManifest.File(file.path(), restored ? file.before() : file.after())).toList());
+            return expected.equals(SavedBuildManifest.scan(files, entry.projectId(), "."));
+        }
         return proof.stream().allMatch(file -> files.version(entry.projectId(), ".", file.path())
                 .equals(restored ? file.before() : file.after()));
     }

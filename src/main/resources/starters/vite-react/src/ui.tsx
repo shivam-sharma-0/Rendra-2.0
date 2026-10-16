@@ -1,6 +1,7 @@
 import { useId } from 'react'
 import type {
   ButtonHTMLAttributes,
+  HTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
   SelectHTMLAttributes,
@@ -144,16 +145,16 @@ export function Select({ id, label, hint, error, options, className, ...props }:
   )
 }
 
-export interface CardProps {
+export interface CardProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
   title?: string
   actions?: ReactNode
   children: ReactNode
   className?: string
 }
 
-export function Card({ title, actions, children, className }: CardProps) {
+export function Card({ title, actions, children, className, ...props }: CardProps) {
   return (
-    <section className={cx('min-w-0 rounded-ui border border-border bg-background p-4 shadow-sm', className)}>
+    <section {...props} className={cx('min-w-0 rounded-ui border border-border bg-background p-4 shadow-sm', className)}>
       {title || actions ? (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           {title ? <h2 className="text-lg font-semibold">{title}</h2> : <span />}
@@ -175,17 +176,27 @@ const BADGE_TONES: Record<BadgeTone, string> = {
   danger: 'bg-red-100 text-red-800',
 }
 
-export function Badge({ tone = 'neutral', children }: { tone?: BadgeTone; children: ReactNode }) {
+export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
+  tone?: BadgeTone
+}
+
+export function Badge({ tone = 'neutral', className, children, ...props }: BadgeProps) {
   return (
-    <span className={cx('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium', BADGE_TONES[tone])}>
+    <span {...props} className={cx('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium', BADGE_TONES[tone], className)}>
       {children}
     </span>
   )
 }
 
-export function EmptyState({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
+export interface EmptyStateProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
+  title: string
+  description?: string
+  action?: ReactNode
+}
+
+export function EmptyState({ title, description, action, className, ...props }: EmptyStateProps) {
   return (
-    <div className="grid justify-items-center gap-2 rounded-ui border border-dashed border-border p-8 text-center">
+    <div {...props} className={cx('grid justify-items-center gap-2 rounded-ui border border-dashed border-border p-8 text-center', className)}>
       <p className="font-medium">{title}</p>
       {description ? <p className="text-sm text-muted">{description}</p> : null}
       {action}
@@ -193,7 +204,7 @@ export function EmptyState({ title, description, action }: { title: string; desc
   )
 }
 
-export interface PageShellProps {
+export interface PageShellProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
   title: string
   nav?: ReactNode
   actions?: ReactNode
@@ -201,9 +212,9 @@ export interface PageShellProps {
 }
 
 /** A responsive page: a header that wraps instead of overflowing on phones, and a centred content column. */
-export function PageShell({ title, nav, actions, children }: PageShellProps) {
+export function PageShell({ title, nav, actions, children, className, ...props }: PageShellProps) {
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div {...props} className={cx('min-h-screen bg-background text-foreground', className)}>
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
           <p className="text-lg font-semibold">{title}</p>

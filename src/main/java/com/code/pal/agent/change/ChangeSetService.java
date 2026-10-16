@@ -72,6 +72,13 @@ public class ChangeSetService {
 
     private PromotionJournal journal;
 
+    private SavedBuildStore savedBuilds;
+
+    @Autowired(required = false)
+    void useSavedBuilds(SavedBuildStore savedBuilds) {
+        this.savedBuilds = savedBuilds;
+    }
+
     @Autowired
     void useJournal(PromotionJournal journal) {
         this.journal = journal;
@@ -776,6 +783,15 @@ public class ChangeSetService {
             }
             verifyVersions(set.projectId, ".", proof, false);
             sandbox.enforceQuota(set.projectId);
+            if (savedBuilds != null) {
+                try {
+                    savedBuilds.capture(run.getId(), set.projectId);
+                } catch (RuntimeException unavailable) {
+                    // Missing history must never certify a partial version or discard an otherwise valid save.
+                    log.warn("saved_build_snapshot_unavailable runId={} errorType={}",
+                            run.getId(), unavailable.getClass().getSimpleName());
+                }
+            }
             Instant savedAt;
             finalizationAttempted = true;
             if (journal != null)
@@ -846,6 +862,14 @@ public class ChangeSetService {
         } catch (RuntimeException ignored) {
         }
         pruneHistory(set.projectId, run.getId());
+        if (savedBuilds != null) {
+            try {
+                savedBuilds.retireOldBodies(set.projectId);
+            } catch (RuntimeException deferred) {
+                log.warn("saved_build_cleanup_deferred project={} errorType={}",
+                        set.projectId, deferred.getClass().getSimpleName());
+            }
+        }
         return new CommitResult(snapshotRef, changed);
     }
 

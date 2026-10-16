@@ -6,7 +6,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.json.JsonMapper;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -14,10 +16,13 @@ import java.util.UUID;
 @Service
 public class RestoreJournal {
     private static final long QUARANTINE_BACKOFF_SECONDS = 300;
-    private static final String SELECT_ENTRY = "select id,run_id,project_id,backup_root,state from agent_code_restores ";
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+    private static final String SELECT_ENTRY = "select id,run_id,project_id,backup_root,state,actor_id,expected_digest,restore_files_json "
+            + "from agent_code_restores ";
     private static final RowMapper<Entry> ENTRY_MAPPER = (row, index) -> new Entry(
             row.getObject("id", UUID.class), row.getObject("run_id", UUID.class),
-            row.getObject("project_id", UUID.class), row.getString("backup_root"), row.getString("state"));
+            row.getObject("project_id", UUID.class), row.getString("backup_root"), row.getString("state"),
+            row.getObject("actor_id", Long.class), row.getString("expected_digest"), decode(row.getString("restore_files_json")));
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
@@ -33,6 +38,17 @@ public class RestoreJournal {
         tx.executeWithoutResult(s -> jdbc.update(
                 "insert into agent_code_restores(id,run_id,project_id,backup_root,state) values (?,?,?,?,'PREPARING')",
                 id, run, project, backup));
+    }
+
+    public void prepareSaved(UUID id, UUID run, UUID project, Long actor, String digest, List<PromotionJournal.FileState> files) {
+        PromotionJournal.validate(files);
+        if (actor == null || digest == null || !digest.matches("sha256:[a-f0-9]{64}")) {
+            throw new IllegalArgumentException("Saved restore needs an actor and reviewed source digest");
+        }
+        tx.executeWithoutResult(status -> jdbc.update(
+                "insert into agent_code_restores(id,run_id,project_id,backup_root,state,actor_id,expected_digest,restore_files_json) "
+                        + "values (?,?,?,?,'PREPARING',?,?,?)", id, run, project, ".codepal/restore/" + id,
+                actor, digest, JSON.writeValueAsString(files)));
     }
 
     public void state(UUID id, String state) {
@@ -51,7 +67,25 @@ public class RestoreJournal {
         return tx.execute(s -> jdbc.queryForObject("select state from agent_code_restores where id=?", String.class, id));
     }
 
-    public record Entry(UUID id, UUID runId, UUID projectId, String backup, String state) {}
+    public record Entry(UUID id, UUID runId, UUID projectId, String backup, String state,
+                        Long actorId, String expectedDigest, List<PromotionJournal.FileState> files) {
+        public Entry(UUID id, UUID runId, UUID projectId, String backup, String state) {
+            this(id, runId, projectId, backup, state, null, null, null);
+        }
+
+        public Entry {
+            files = files == null ? null : List.copyOf(files);
+        }
+    }
+
+    private static List<PromotionJournal.FileState> decode(String json) {
+        if (json == null) {
+            return null;
+        }
+        var files = Arrays.asList(JSON.readValue(json, PromotionJournal.FileState[].class));
+        PromotionJournal.validate(files);
+        return List.copyOf(files);
+    }
 
     public List<Entry> pending() {
         // Filter before LIMIT: recent quarantines cannot crowd out a newer interrupted restore.

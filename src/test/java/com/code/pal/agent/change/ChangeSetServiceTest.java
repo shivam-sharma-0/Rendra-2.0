@@ -69,6 +69,26 @@ class ChangeSetServiceTest {
     }
 
     @Test
+    void capturesTheSavedAfterVersionAndHistoryFailureCannotUndoAValidSave() {
+        var versions = mock(SavedBuildStore.class);
+        service.useSavedBuilds(versions);
+        project.write("App.tsx", "before");
+        UUID id = UUID.randomUUID();
+        AgentContext context = context(id, service.start(id, project.projectId), "Patch", "Validate");
+        service.patch(context, "App.tsx", project.files.version(project.projectId, context.root(), "App.tsx"), "before", "after");
+        service.recordProjectValidation(context, true, List.of());
+        doAnswer(call -> {
+            assertEquals("after", project.read("App.tsx"));
+            throw new IllegalStateException("fixture history unavailable");
+        }).when(versions).capture(id, project.projectId);
+        var saved = run(id);
+        service.commit(context, saved);
+        assertNotNull(saved.getCodeSavedAt());
+        assertEquals("after", project.read("App.tsx"));
+        verify(versions).capture(id, project.projectId);
+    }
+
+    @Test
     void rejectsCommitWhenUserChangedLiveFile() {
         project.write("App.tsx", "old");
         UUID runId = UUID.randomUUID();
