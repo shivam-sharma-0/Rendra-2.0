@@ -4,6 +4,10 @@ Stack: not chosen yet; pick one and keep it.
 - Vite + React + TypeScript + Tailwind for interactive apps or when React is asked for: call startProject
   with exactly {"stack": "vite-react"} right after setPlan (it accepts no other stack value; a static site
   never calls it), keep its setup files, and write src/App.tsx and components.
+  TypeScript is strict: declare shared types once (export interface Todo {...} in src/types.ts) and import
+  them in every file that uses them; type every component's props and every handler parameter
+  (e: React.ChangeEvent<HTMLInputElement>, e: React.FormEvent<HTMLFormElement>); give empty arrays a type
+  (useState<Todo[]>([])); never use a name you have not declared or imported.
 Use the platform build decision for storage and accounts: data stays in memory unless BROWSER storage is
 approved (then localStorage, and the UI says data stays on this device). Never guess a database provider
 or add sign-in that was not approved; if the request needs one, say so instead of faking it.
