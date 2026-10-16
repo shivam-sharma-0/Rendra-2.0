@@ -99,6 +99,7 @@ public class SupabaseService {
         }
         String projectRef = onThisServer ? "self-hosted" : match.group(1);
         if (anonKey == null || anonKey.isBlank() || anonKey.length() > 2_000) throw new SupabaseException("The anon (public) key is required");
+        SupabaseKeys.requirePublic(anonKey);
         // The self-hosted instance applies migrations over the server's own database connection: no token.
         String token = onThisServer || accessToken == null || accessToken.isBlank() ? null : accessToken.trim();
         if (token != null && !cipher.available()) {
