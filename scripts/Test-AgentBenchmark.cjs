@@ -160,8 +160,8 @@ async function accept(record, definition, result) {
   if (definition.id === 6) actions = [action('bakery', 'ASSERT_TEXT', 'h1', 'Solar Bakery'),
     action('menu', 'ASSERT_COUNT', '#menu', '1'), action('contact', 'CLICK', 'a[href="#contact"]'),
     action('contact-section', 'ASSERT_COUNT', '#contact', '1')];
-  if (definition.id === 7) actions = [action('classes', 'CLICK', 'a[href="/classes"]'), action('classes-route', 'ASSERT_ROUTE', null, '/classes'),
-    action('yoga', 'ASSERT_TEXT', 'body', 'Yoga'), action('contact', 'CLICK', 'a[href="/contact"]'),
+  if (definition.id === 7) actions = [action('classes', 'CLICK', 'a[href="/classes"], a[href="#/classes"]'), action('classes-route', 'ASSERT_ROUTE', null, '/classes'),
+    action('yoga', 'ASSERT_TEXT', 'body', 'Yoga'), action('contact', 'CLICK', 'a[href="/contact"], a[href="#/contact"]'),
     action('contact-route', 'ASSERT_ROUTE', null, '/contact'), action('name', 'FILL', '#name', 'Synthetic visitor'),
     action('email', 'FILL', '#email', 'visitor@example.invalid'), action('message', 'FILL', '#message', 'Synthetic enquiry'),
     action('send', 'CLICK', '#send'), action('sent', 'ASSERT_TEXT', '#contact-status', 'Message received')];

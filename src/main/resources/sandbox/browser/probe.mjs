@@ -278,7 +278,8 @@ for (const expected of acceptanceActions) {
   }
   const expression = `(() => {
     const a = ${JSON.stringify(expected)};
-    if (a.kind === 'ASSERT_ROUTE') return location.pathname === a.value;
+    // A hash router ("#/classes", which works under any hosting prefix) and a path router both count.
+    if (a.kind === 'ASSERT_ROUTE') return (location.hash.startsWith('#/') ? location.hash.slice(1).split('?')[0] : location.pathname) === a.value;
     if (a.kind === 'ASSERT_COUNT') return document.querySelectorAll(a.selector).length === Number(a.value);
     const el = document.querySelector(a.selector); if (!el) return false;
     if (a.kind === 'ASSERT_TEXT') return (el.textContent ?? '').includes(a.value);
