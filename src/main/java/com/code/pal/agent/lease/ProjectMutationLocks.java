@@ -20,6 +20,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 @Component
 public class ProjectMutationLocks {
     private static final ConcurrentMap<Path,ReentrantLock> LOCAL=new ConcurrentHashMap<>();
+    /** A run must outwait its own short background copies (draft preview on a slow share) instead of failing. */
+    private static final long WAIT_SECONDS=30;
     private final Path directory;
     public ProjectMutationLocks(WorkspaceStorage storage) { this(storage,new AgentProperties()); }
     @Autowired
@@ -37,12 +39,12 @@ public class ProjectMutationLocks {
         ReentrantLock local=LOCAL.computeIfAbsent(path,key->new ReentrantLock(true));
         FileChannel channel=null;
         try {
-            if(!local.tryLock(5,TimeUnit.SECONDS)) throw new IllegalStateException("Project mutation is busy");
+            if(!local.tryLock(WAIT_SECONDS,TimeUnit.SECONDS)) throw new IllegalStateException("Project mutation is busy");
             try {
                 Files.createDirectories(directory);
                 if(!Files.isDirectory(directory,LinkOption.NOFOLLOW_LINKS)) throw new IOException("Unsafe mutation lock directory");
                 channel=FileChannel.open(path,StandardOpenOption.CREATE,StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS);
-                long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+                long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
                 FileLock lock=null;
                 while(lock==null && System.nanoTime()<end) {lock=channel.tryLock();if(lock==null) Thread.sleep(10);}
                 if(lock==null) throw new IOException("Shared project mutation lock is busy");
