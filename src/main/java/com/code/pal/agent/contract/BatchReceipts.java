@@ -40,7 +40,7 @@ final class BatchReceipts {
             }
         });
         return ContractStore.hash("batch-receipt-v1/GENERATION/" + run.getRequestFingerprint() + "/"
-                + ContractStore.hash(mapper.writeValueAsString(inputs.getFirst().contract())) + "/" + batch.id() + "/"
+                + ContractIdentity.hash(inputs.getFirst().contract(), mapper) + "/" + batch.id() + "/"
                 + ContractScaffold.revision() + "/" + props.getMaxRepairAttempts() + "/" + props.getSandbox().isRequired()
                 + "/" + props.getSandbox().isRuntimeCheck() + "/" + versions);
     }

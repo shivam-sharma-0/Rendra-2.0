@@ -6,6 +6,7 @@ import com.code.pal.agent.validation.BehaviorCriteria.BrowserKind;
 import com.code.pal.project.spec.ApprovedSpec;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,7 +16,6 @@ import java.util.regex.Pattern;
 /** Ground pre-code selectors in named implementation targets; known non-route links become href checks. */
 public final class SpecAcceptance {
     private static final Pattern HREF = Pattern.compile("\\[\\s*href\\s*(=|\\^=|\\*=)\\s*(['\"])(.*?)\\2\\s*]", Pattern.CASE_INSENSITIVE);
-    private static final Pattern ANCHOR = Pattern.compile("(?:^|[ >+~])a(?:$|[.#\\[:\\s])", Pattern.CASE_INSENSITIVE);
     private static final Pattern STATE = Pattern.compile("(?::(?:checked|disabled|enabled|empty|valid|invalid)|:not\\(:(?:checked|disabled|enabled)\\))$");
 
     public record Target(String testId, String originalSelector) {
@@ -43,14 +43,20 @@ public final class SpecAcceptance {
             if (!"BROWSER".equals(scenario.kind())) {
                 throw new IllegalArgumentException("Required connector acceptance needs its approved adapter");
             }
+            var positiveSelectors = new HashSet<String>();
             for (int index = 0; index < scenario.steps().size(); index++) {
                 var step = scenario.steps().get(index);
                 String id = scenario.id() + "_" + index;
                 var kind = BrowserKind.valueOf(step.kind());
                 var next = index + 1 < scenario.steps().size() ? scenario.steps().get(index + 1) : null;
-                String selector = selector(id, step.selector(), targets);
-                boolean link = kind == BrowserKind.CLICK && step.selector() != null
-                        && (ANCHOR.matcher(step.selector()).find() || HREF.matcher(step.selector()).find());
+                boolean zeroCount = kind == BrowserKind.ASSERT_COUNT && step.value() != null && step.value().matches("0+");
+                boolean unprovedAbsence = zeroCount
+                        && !positiveSelectors.contains(step.selector());
+                String selector = unprovedAbsence ? step.selector() : selector(scenario.id(), id, step.selector(), targets);
+                if (kind == BrowserKind.ASSERT_TEXT || kind == BrowserKind.ASSERT_COUNT && !zeroCount) {
+                    positiveSelectors.add(step.selector());
+                }
+                boolean link = kind == BrowserKind.CLICK && anchor(step.selector());
                 if (!link) {
                     actions.add(new BrowserAction(id, kind, selector, step.value()));
                     continue;
@@ -90,7 +96,11 @@ public final class SpecAcceptance {
                         throw new IllegalArgumentException("Internal navigation acceptance needs an approved page destination");
                     }
                     predicate = "[href" + operator + quoted(target) + "]";
-                    if (!operator.equals("=") && !target.startsWith("mailto:") && !target.startsWith("tel:")) {
+                    boolean relative = !target.matches("(?is)^[a-z][a-z0-9+.-]*:.*") && !target.startsWith("#");
+                    if (!operator.equals("=") && relative && needsDestination) {
+                        throw new IllegalArgumentException("Partial internal navigation needs an exact approved destination before UI interactions");
+                    }
+                    if (!operator.equals("=") && !relative && !target.startsWith("mailto:") && !target.startsWith("tel:")) {
                         predicate += safeLinks();
                     }
                 }
@@ -131,14 +141,55 @@ public final class SpecAcceptance {
                 + ":not([href=\"#\"]):not([href=\"mailto:\"]):not([href=\"tel:\"])";
     }
 
-    private static String selector(String id, String original, Map<String, Target> targets) {
+    /** Strip attribute/string/pseudo-function contents before inspecting the final compound's type. */
+    private static boolean anchor(String selector) {
+        if (selector == null) {
+            return false;
+        }
+        var structural = new StringBuilder();
+        int brackets = 0;
+        int parentheses = 0;
+        char quote = 0;
+        for (int index = 0; index < selector.length(); index++) {
+            char current = selector.charAt(index);
+            if (quote != 0) {
+                if (current == '\\') {
+                    index++;
+                } else if (current == quote) {
+                    quote = 0;
+                }
+                continue;
+            }
+            if (current == '\'' || current == '"') {
+                quote = current;
+            } else if (current == '[') {
+                brackets++;
+            } else if (current == ']') {
+                brackets--;
+            } else if (brackets == 0 && current == '(') {
+                parentheses++;
+            } else if (brackets == 0 && current == ')') {
+                parentheses--;
+            } else if (brackets == 0 && parentheses == 0) {
+                structural.append(current);
+            }
+        }
+        String shape = structural.toString().strip();
+        if (shape.isEmpty() || shape.contains(",") || brackets != 0 || parentheses != 0 || quote != 0) {
+            return false;
+        }
+        String[] compounds = shape.split("[\\s>+~]+");
+        return compounds[compounds.length - 1].matches("(?i)a(?:[.#:].*)?");
+    }
+
+    private static String selector(String scenario, String id, String original, Map<String, Target> targets) {
         if (original == null || Set.of("html", "body", ":root").contains(original)) {
             return original;
         }
         var state = STATE.matcher(original);
         String suffix = state.find() ? state.group() : "";
         String base = suffix.isEmpty() ? original : original.substring(0, original.length() - suffix.length());
-        String key = base.contains("#") || base.contains("[") ? base : id;
+        String key = base.contains("#") || base.contains("[") ? base : scenario + ":" + base;
         var target = targets.computeIfAbsent(key, value -> new Target("rendra_" + id, base));
         return "[data-testid~=" + quoted(target.testId()) + "]" + suffix;
     }

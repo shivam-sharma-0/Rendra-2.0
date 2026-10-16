@@ -1,8 +1,10 @@
 package com.code.pal.agent.contract;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 
 /** Trusted validation inputs. Phase/batch do not change compilation identity for the same source. */
@@ -17,8 +19,8 @@ public record ValidationRequest(UUID runId, UUID projectId, UUID contractId, lon
         Objects.requireNonNull(projectId);
         Objects.requireNonNull(contractId);
         Objects.requireNonNull(phase);
-        requiredChecks = Set.copyOf(requiredChecks);
-        completedBatchIds = Set.copyOf(completedBatchIds);
+        requiredChecks = Collections.unmodifiableSortedSet(new TreeSet<>(requiredChecks));
+        completedBatchIds = Collections.unmodifiableSortedSet(new TreeSet<>(completedBatchIds));
         if (planRevision < 1 || stagedRevision < 0 || phase == Phase.BATCH && (batchId == null || batchId.isBlank())
                 || !requiredChecks.contains("BUILD")) {
             throw new IllegalArgumentException("Incomplete validation identity");

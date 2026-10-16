@@ -6,6 +6,8 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -53,6 +55,20 @@ class DeterministicFixersTest {
         var fix = fixers.plan(contract, Map.of("package.json", "{}"), Set.of("LOCKFILE_MISMATCH", "MISSING_LOGIN"));
         assertTrue(fix.replacements().isEmpty());
         assertFalse(fix.refreshLockfiles());
+    }
+
+    @Test
+    void defectSignatureMatchesCanonicalKeysAndSortedDefects() {
+        var contract = new SpecPlanningTest().deterministic(SpecFixtures.browser());
+        var snapshot = Map.of("z.ts", "last", "package.json", "{}", "a.ts", "first");
+        var defects = Set.of("LOCKFILE_MISMATCH", "UNKNOWN", "DEPENDENCY_VERSION_UNAVAILABLE");
+        var material = new TreeMap<String, Object>();
+        material.put("contract", contract.id());
+        material.put("revision", ContractScaffold.revision());
+        material.put("input", new TreeMap<>(snapshot));
+        material.put("defects", new TreeSet<>(defects));
+        String expected = ContractStore.hash(mapper.writeValueAsString(material));
+        assertEquals(expected, fixers.plan(contract, snapshot, defects).signature());
     }
 
     @Test

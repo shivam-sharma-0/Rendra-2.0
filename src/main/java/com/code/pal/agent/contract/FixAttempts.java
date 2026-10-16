@@ -35,7 +35,7 @@ public final class FixAttempts {
                 throw new IllegalStateException("Fixer requires an accepted request identity");
             }
             String root = ".codepal/fix-attempts/" + run.getId();
-            String contractHash = ContractStore.hash(mapper.writeValueAsString(contract));
+            String contractHash = ContractIdentity.hash(contract, mapper);
             var signatures = new TreeSet<String>();
             if (files.exists(run.getProjectId(), root, "attempts.json")) {
                 try {

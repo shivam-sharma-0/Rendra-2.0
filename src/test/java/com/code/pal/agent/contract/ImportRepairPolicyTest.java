@@ -14,6 +14,7 @@ import com.code.pal.project.spec.SpecFixtures;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -64,6 +65,48 @@ class ImportRepairPolicyTest {
             return new LlmClient.LlmResult(fixture.mapper.writeValueAsString(patch), null, List.of(), null, "stop");
         }, () -> {});
         assertEquals(after, fixture.project.files.readText(ctx.projectId(), ctx.root(), "src/App.tsx"));
+    }
+
+    @Test
+    void missingOwnedImportTargetIsIncludedAsAnAbsentWritableFile() {
+        repairWithAbsentImport(true);
+    }
+
+    @Test
+    void missingCoordinatorImportIsReadOnlyAbsentContext() {
+        repairWithAbsentImport(false);
+    }
+
+    private void repairWithAbsentImport(boolean owned) {
+        // Coordinator modules live under the contract-owned client root, e.g. src/rendra/<contract>/types.ts.
+        String target = owned ? "src/local-state.ts" : contract.clientRoot() + "types.ts";
+        String module = owned ? "./local-state" : "./" + contract.clientRoot().substring("src/".length()) + "types";
+        String before = "import * as state from '" + module + "'; export default () => <h1>Before</h1>";
+        var run = fixture.run(ProjectType.BUILD);
+        run.setRequestFingerprint("accepted");
+        var ctx = fixture.context(run);
+        ctx.plan().revise(List.of("Build tasks"), "Fixture");
+        fixture.project.files.writeText(ctx.projectId(), ctx.root(), "src/App.tsx", before);
+        when(fixture.store.forRun(ctx.projectId(), run.getId())).thenReturn(
+                new ContractStore.Stored(run.getId(), ctx.projectId(), contract, "hash", fixture.binding, "APPROVED", "BUILD_REQUEST"));
+        repairs.repair(ctx, run, contract, contract.units(), report(ctx, List.of("src/App.tsx")), request -> {
+            var input = fixture.mapper.readTree(request.messages().get(1).content());
+            var view = input.path(owned ? "files" : "interfaces").path(target);
+            assertEquals("absent", view.path("version").asString());
+            assertTrue(view.path("content").isNull());
+            if (!owned) {
+                assertFalse(input.path("files").has(target));
+            }
+            var edits = new ArrayList<RepairPatch.FilePatch>();
+            edits.add(new RepairPatch.FilePatch("src/App.tsx", input.at("/files/src~1App.tsx/version").asString(),
+                    List.of(new RepairPatch.Edit(before, "export default () => <h1>After</h1>"))));
+            if (owned) {
+                edits.add(new RepairPatch.FilePatch(target, "absent", List.of(new RepairPatch.Edit("", "export const tasks = []"))));
+            }
+            var patch = new RepairPatch(1, input.path("batchId").asString(), input.path("diagnosticsRevision").asString(), edits);
+            return new LlmClient.LlmResult(fixture.mapper.writeValueAsString(patch), null, List.of(), null, "stop");
+        }, () -> {});
+        assertEquals(owned, fixture.project.files.exists(ctx.projectId(), ctx.root(), target));
     }
 
     @Test

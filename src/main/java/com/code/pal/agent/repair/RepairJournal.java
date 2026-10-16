@@ -1,6 +1,7 @@
 package com.code.pal.agent.repair;
 
 import com.code.pal.agent.contract.BuildContract;
+import com.code.pal.agent.contract.ContractIdentity;
 import com.code.pal.agent.contract.ContractStore;
 import com.code.pal.agent.contract.UnitGenerator;
 import com.code.pal.agent.domain.AgentRun;
@@ -13,8 +14,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -131,30 +132,85 @@ public final class RepairJournal {
     }
 
     public List<UnitGenerator.Output> overlay(AgentRun run, BuildContract contract, List<UnitGenerator.Output> generated, Map<String, String> actualVersions) {
-        var repaired = new HashMap<String, String>();
-        var proved = new HashMap<String, Set<String>>();
-        for (var round : read(run, contract).rounds()) {
+        var rounds = read(run, contract).rounds();
+        for (var round : rounds) {
             if (round.state().equals("QUARANTINED")) {
                 throw new IllegalStateException("Repair targets require operator recovery");
             }
-            if (round.state().equals("APPLIED") || round.state().equals("PREPARED")) {
-                round.files().forEach(delta -> {
-                    repaired.put(delta.path(), delta.content());
-                    var versions = proved.computeIfAbsent(delta.path(), path -> new HashSet<>());
-                    versions.add(delta.expectedVersion());
-                    versions.add("sha256:" + ContractStore.hash(delta.content()));
-                });
-            }
         }
-        return generated.stream().map(output -> new UnitGenerator.Output(output.files().stream().map(delta -> {
-            String actual = actualVersions.get(delta.path());
-            String expected = actual != null && proved.getOrDefault(delta.path(), Set.of()).contains(actual) ? actual : delta.expectedVersion();
-            return new UnitGenerator.Delta(delta.path(), expected, repaired.getOrDefault(delta.path(), delta.content()));
-        }).toList())).toList();
+        var invalid = new HashSet<UnitGenerator.Delta>();
+        var result = new ArrayList<UnitGenerator.Output>();
+        for (var output : generated) {
+            var merged = new ArrayList<UnitGenerator.Delta>();
+            for (var generatedFile : output.files()) {
+                var repairs = rounds.stream().filter(round -> Set.of("APPLIED", "PREPARED").contains(round.state()))
+                        .flatMap(round -> round.files().stream()).filter(file -> file.path().equals(generatedFile.path())).toList();
+                String body = generatedFile.content();
+                String hash = body == null ? "absent" : "sha256:" + ContractStore.hash(body);
+                int matching = -1;
+                for (int index = 0; index < repairs.size(); index++) {
+                    var repair = repairs.get(index);
+                    String after = "sha256:" + ContractStore.hash(repair.content());
+                    if (hash.equals(repair.expectedVersion()) || hash.equals(after)) {
+                        matching = index;
+                    }
+                }
+                if (matching < 0) {
+                    invalid.addAll(repairs);
+                    merged.add(generatedFile);
+                    continue;
+                }
+                var proved = new HashSet<String>();
+                String ancestor = repairs.get(matching).expectedVersion();
+                for (int index = matching - 1; index >= 0; index--) {
+                    var repair = repairs.get(index);
+                    String after = "sha256:" + ContractStore.hash(repair.content());
+                    if (!after.equals(ancestor)) {
+                        break;
+                    }
+                    proved.add(repair.expectedVersion());
+                    proved.add(after);
+                    ancestor = repair.expectedVersion();
+                }
+                for (int index = matching; index < repairs.size(); index++) {
+                    var repair = repairs.get(index);
+                    String after = "sha256:" + ContractStore.hash(repair.content());
+                    if (hash.equals(repair.expectedVersion()) || hash.equals(after)) {
+                        body = repair.content();
+                        hash = after;
+                        proved.add(repair.expectedVersion());
+                        proved.add(after);
+                    } else {
+                        invalid.add(repair);
+                    }
+                }
+                String actual = actualVersions.get(generatedFile.path());
+                String expected = actual != null && proved.contains(actual) ? actual : generatedFile.expectedVersion();
+                merged.add(new UnitGenerator.Delta(generatedFile.path(), expected, body));
+            }
+            result.add(new UnitGenerator.Output(merged));
+        }
+        if (!invalid.isEmpty()) {
+            invalidate(run, contract, invalid);
+        }
+        return List.copyOf(result);
+    }
+
+    /** Keep the round spent, but never replay patches against unrelated regenerated source. */
+    private void invalidate(AgentRun run, BuildContract contract, Set<UnitGenerator.Delta> invalid) {
+        leases.guarded(run.getProjectId(), () -> {
+            var state = read(run, contract);
+            var rounds = state.rounds().stream().map(round -> {
+                var retained = round.files().stream().filter(file -> !invalid.contains(file)).toList();
+                return retained.size() == round.files().size() ? round
+                        : new Round(round.number(), round.diagnosticsRevision(), retained.isEmpty() ? "INVALIDATED" : round.state(), retained);
+            }).toList();
+            write(run, new State(state.request(), state.contractHash(), rounds));
+        });
     }
 
     private State read(AgentRun run, BuildContract contract) {
-        String expected = ContractStore.hash(mapper.writeValueAsString(contract));
+        String expected = ContractIdentity.hash(contract, mapper);
         if (run.getRequestFingerprint() == null) {
             throw new IllegalStateException("Repair requires a durable accepted request");
         }

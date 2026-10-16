@@ -4,6 +4,7 @@ import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.contract.BuildContract;
 import com.code.pal.agent.contract.ContractAcceptanceFailures;
+import com.code.pal.agent.contract.ContractIdentity;
 import com.code.pal.agent.contract.ContractImports;
 import com.code.pal.agent.contract.ContractStore;
 import com.code.pal.agent.contract.SpecAcceptance;
@@ -89,7 +90,7 @@ public final class StructuredRepair {
         if (report.changeSetRevision() != changes.view(ctx).revision()) {
             throw new IllegalStateException("Repair diagnostics are stale");
         }
-        var paths = diagnosedPaths(contract, candidates, report);
+        var paths = new HashSet<>(diagnosedPaths(contract, candidates, report));
         if (paths.isEmpty()) {
             throw new IllegalStateException("Repair needs attributed failing code files; shared ABI needs a new plan");
         }
@@ -106,8 +107,20 @@ public final class StructuredRepair {
             imports.addAll(ContractImports.repairDependencies(contract, unit, path, value.content()));
         });
         contract.assets().forEach(asset -> imports.remove(asset.destination()));
-        imports.stream().filter(path -> !paths.contains(path)).sorted().forEach(path -> interfaces.put(path, read(ctx, path)));
-        String revision = "sha256:" + ContractStore.hash(mapper.writeValueAsString(Map.of("report", report, "files", snapshot)));
+        for (String path : imports.stream().sorted().toList()) {
+            if (paths.contains(path)) {
+                continue;
+            }
+            boolean exists = files.exists(ctx.projectId(), ctx.root(), path);
+            var value = exists ? read(ctx, path) : new UnitGenerator.FileView("absent", null);
+            if (!exists && candidates.stream().anyMatch(unit -> unit.ownedPaths().contains(path))) {
+                paths.add(path);
+                snapshot.put(path, value);
+            } else {
+                interfaces.put(path, value);
+            }
+        }
+        String revision = "sha256:" + ContractIdentity.hashValue(Map.of("report", report, "files", snapshot), mapper);
         var scope = new RepairPatches.Scope("repair", revision, paths, snapshot);
         String policy = POLICY + ContractImports.policy(contract) + SpecAcceptance.policy();
         String input = mapper.writeValueAsString(Map.of("batchId", scope.batchId(), "diagnosticsRevision", revision,

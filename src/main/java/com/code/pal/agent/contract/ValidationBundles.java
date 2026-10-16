@@ -93,8 +93,8 @@ public final class ValidationBundles {
             checks.putIfAbsent(required, new ValidationCheck(required, ValidationCheck.Outcome.SKIPPED, true, "Required coverage was not reported"));
         }
         var diagnostics = new ArrayList<ProjectDiagnostic>(report.introducedDiagnostics());
-        String revision = "sha256:" + ContractStore.hash(mapper.writeValueAsString(Map.of("request", request,
-                "checks", checks, "diagnostics", diagnostics)));
+        String revision = "sha256:" + ContractIdentity.hashValue(Map.of("request", request,
+                "checks", checks, "diagnostics", diagnostics), mapper);
         return new ValidationBundle(request, revision, List.copyOf(checks.values()), diagnostics, commands, artifact,
                 ready && report.available() && report.commandSucceeded() && report.changeValidationPassed());
     }

@@ -86,12 +86,13 @@ class SpecAcceptanceHooksTest {
     }
 
     @Test
-    void ambiguousGenericButtonsGetDistinctActionHooksInsteadOfBindingToTheFirstButton() {
+    void repeatedGenericSelectorsShareTheScenarioHookAndPreserveTheirAssertions() {
         var approved = spec(List.of(new ApprovedSpec.Step("CLICK", "button", null),
                 new ApprovedSpec.Step("ASSERT_TEXT", "output", "Added"), new ApprovedSpec.Step("CLICK", "button", null),
                 new ApprovedSpec.Step("ASSERT_TEXT", "output", "Deleted")));
         var actions = SpecPlanValues.acceptance(approved).browser();
-        assertNotEquals(actions.getFirst().selector(), actions.get(2).selector());
+        assertEquals(actions.getFirst().selector(), actions.get(2).selector());
+        assertEquals(actions.get(1).selector(), actions.get(3).selector());
         assertEquals("Added", actions.get(1).value());
         assertEquals("Deleted", actions.get(3).value());
     }

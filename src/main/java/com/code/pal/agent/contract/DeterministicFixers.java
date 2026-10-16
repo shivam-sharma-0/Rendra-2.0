@@ -63,8 +63,8 @@ public final class DeterministicFixers {
                 }
             }
         }
-        String signature = ContractStore.hash(mapper.writeValueAsString(Map.of("contract", contract.id(), "revision", ContractScaffold.revision(),
-                "input", new TreeMap<>(snapshot), "defects", new TreeSet<>(defects))));
+        String signature = ContractIdentity.hashValue(Map.of("contract", contract.id(), "revision", ContractScaffold.revision(),
+                "input", new TreeMap<>(snapshot), "defects", new TreeSet<>(defects)), mapper);
         return new Fix(replacements, refresh, signature);
     }
 
