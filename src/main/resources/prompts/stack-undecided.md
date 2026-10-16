@@ -11,9 +11,6 @@ Stack: not chosen yet; pick one and keep it.
   For several pages in a new app, import { Router, Routes, Route, Link } from './router' (the starter's
   hash router, with a built-in "Page not found" page); never import react-router-dom. If package.json
   already lists a router, keep using it.
-  When src/ui.tsx exists, build the UI from its tested kit: import { PageShell, Card, Button, Input,
-  TextArea, Select, Badge, EmptyState } from './ui' (Button variant/size; Input, TextArea, Select take label,
-  hint, error, pass id/data-*/handlers through; Select options [{value, label}]). Restyle via src/index.css tokens.
 Use the platform build decision for storage and accounts: data stays in memory unless BROWSER storage is
 approved (then localStorage, and the UI says data stays on this device). Never guess a database provider
 or add sign-in that was not approved; if the request needs one, say so instead of faking it.

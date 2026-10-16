@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "templateVersion": "2026-10-16.3",
+  "templateVersion": "2026-10-16.4",
   "node": "22.23.3",
   "npm": "10.9.9",
   "image": "node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c"

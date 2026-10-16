@@ -20,7 +20,7 @@ class StarterTest {
     void theViteStarterHasTheSetupFilesButNotTheApp() {
         Map<String, String> files = Starter.VITE_REACT.files("Tip <Calc> & \"more\"");
         assertEquals(List.of(".gitignore", ".nvmrc", "starter-runtime.json", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts", "index.html", "src/main.tsx",
-                "src/index.css", "src/router.tsx", "src/ui.tsx"), List.copyOf(files.keySet()));
+                "src/index.css", "src/router.tsx"), List.copyOf(files.keySet()));
         assertTrue(files.get("index.html").contains("<title>Tip &lt;Calc&gt; &amp; &quot;more&quot;</title>"));
         assertTrue(files.get("index.html").contains("src=\"/src/main.tsx\""));
         assertTrue(files.get("src/index.css").startsWith("@import \"tailwindcss\";"));
