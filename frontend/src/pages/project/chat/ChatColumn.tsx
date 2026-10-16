@@ -33,6 +33,8 @@ type ChatColumnProps = {
   onOpenDetails: (runId?: string) => void
   onOpenPreview: () => void
   onOpenThinking: (reasoning: string, seconds: number) => void
+  /** A failed build was retried from its draft. */
+  onRetried?: (run: AgentRun) => void
   /** The project was renamed. */
   onProjectChange: (project: Project) => void
   layoutMode: LayoutMode
@@ -45,7 +47,7 @@ type ChatColumnProps = {
 export function ChatColumn({
   project, messages, runs, stepsByRun, loading, hasOlder, loadingOlder, onLoadOlder,
   requirements, rollbackError, sendError, editRequest, onSend, onFeedback, onEdit,
-  onOpenDetails, onOpenPreview, onOpenThinking, onProjectChange, layoutMode, chatWidth, dragging, onToggleFocus,
+  onOpenDetails, onOpenPreview, onOpenThinking, onRetried, onProjectChange, layoutMode, chatWidth, dragging, onToggleFocus,
 }: ChatColumnProps) {
   const [quote, setQuote] = useState<Quote | null>(null)
   const shell = useShellMenu()
@@ -96,6 +98,7 @@ export function ChatColumn({
                 const msgSteps = msgRun ? stepsByRun[msgRun.id] ?? [] : []
                 return (
                   <ChatMessage key={m.id} message={m} run={msgRun} steps={msgSteps} currentPreview={msgRun?.id === latestSavedRun}
+                    projectId={project?.id} onRetried={onRetried}
                     onOpenDetails={() => onOpenDetails(msgRun?.id)} onOpenPreview={onOpenPreview} onOpenThinking={onOpenThinking}
                     onFeedback={(feedback) => onFeedback(m.id, feedback)} onEdit={onEdit}
                     onBuild={(action) => onSend(action.message, action.mode, [], action.attachments, action.proposalId)} />

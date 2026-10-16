@@ -1181,8 +1181,7 @@ public class AgentRunner implements AgentRuntime {
         run.setFailureReason(AgentFailureReason.BUILD_VALIDATION_FAILED);
         markEnded(state, AgentRuntimeStatus.FAILED, RunStatus.FAILED, "FAILED");
         notifyBuild(run, false);
-        String validationMessage = "I couldn't complete this build. No new changes were saved. "
-                + "Open Details to review the checks.";
+        String validationMessage = FailureExplanation.validation(validation == null ? null : validation.lastReport(run.getId()));
         updateAssistant(run, validationMessage, MessageStatus.FAILED);
         events.emit(run, AgentStepType.STATUS, "Agent validation failed", Map.of(
                 "status", "FAILED", "reason", "BUILD_GATE_FAILED", "message", e.getMessage()));
@@ -1202,10 +1201,7 @@ public class AgentRunner implements AgentRuntime {
                                 : AgentFailureReason.AGENT_FAILED);
         markEnded(state, AgentRuntimeStatus.FAILED, RunStatus.FAILED, "FAILED");
         notifyBuild(run, false);
-        String failureMessage = run.getCodeSavedAt() == null
-                ? (e instanceof WorkflowStageException ? safeError(e)
-                        : "Something went wrong while running the agent.")
-                : "Your code changes were saved. Preview preparation failed; the saved code is available.";
+        String failureMessage = FailureExplanation.failure(run.getFailureReason(), run.getCodeSavedAt() != null, safeError(e));
         if (run.getCodeSavedAt() != null) {
             recordPreview(run, "FAILED");
         }

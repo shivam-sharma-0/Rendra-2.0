@@ -112,6 +112,7 @@ export default function ProjectPage() {
           onEdit={requestEdit}
           onOpenDetails={(runId) => { setDetailsRunId(runId ?? null); openView('details') }}
           onOpenPreview={() => openView('preview')}
+          onRetried={acceptRetriedRun}
           onOpenThinking={(reasoning, seconds) => {
             setThinkingPanel({ reasoning, seconds })
             openView('thinking')

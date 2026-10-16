@@ -12,8 +12,9 @@ import { BuildSuggestion } from './BuildSuggestion'
 import { buildReply, readableBuildText } from './buildReply'
 
 /** One turn of the conversation: an assistant reply (thinking / build progress while pending) or a user message. */
-export function ChatMessage({ message, run, currentPreview = true, onOpenDetails, onOpenPreview, onFeedback, onEdit, onBuild }: {
-  message: Message; run?: AgentRun; steps: AgentStep[]
+export function ChatMessage({ message, run, projectId, currentPreview = true, onOpenDetails, onOpenPreview, onRetried, onFeedback, onEdit, onBuild }: {
+  message: Message; run?: AgentRun; steps: AgentStep[]; projectId?: string
+  onRetried?: (run: AgentRun) => void
   currentPreview?: boolean
   onOpenDetails: () => void; onOpenPreview: () => void
   onOpenThinking: (reasoning: string, seconds: number) => void
@@ -29,7 +30,8 @@ export function ChatMessage({ message, run, currentPreview = true, onOpenDetails
 
   return (
     <article className="msg msg--agent" data-message-id={message.id} data-role="ASSISTANT">
-      {build && run && <BuildReplyCard run={run} currentPreview={currentPreview} onOpenDetails={onOpenDetails} onOpenPreview={onOpenPreview} />}
+      {build && run && <BuildReplyCard run={run} projectId={projectId} explanation={message.content} currentPreview={currentPreview}
+        onOpenDetails={onOpenDetails} onOpenPreview={onOpenPreview} onRetried={onRetried} />}
       {pending || (build && active)
         ? (!build && <ThinkingLine since={run?.createdAt ?? message.createdAt} queued={run?.status === 'QUEUED'} />)
         : (
