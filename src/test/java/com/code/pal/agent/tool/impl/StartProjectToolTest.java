@@ -77,6 +77,21 @@ class StartProjectToolTest {
         assertEquals("startProject", tool.name());
     }
 
+    @Test void aMernRequestWithoutApprovedMernStorageSetsUpTheWebStarter() {
+        var decisions = mock(com.code.pal.project.capability.BuildDecisions.class);
+        org.mockito.Mockito.when(decisions.state(project.projectId)).thenReturn(new com.code.pal.project.capability.BuildDecisions.State(
+                new com.code.pal.project.capability.BuildDecisions.Choice(1, com.code.pal.project.capability.BuildDecisions.Storage.BROWSER,
+                        com.code.pal.project.capability.BuildDecisions.Auth.NONE, null),
+                new com.code.pal.project.capability.BuildDecisions.Available(false, null), null));
+        tool.setBuildDecisions(decisions);
+        AgentContext context = context();
+        @SuppressWarnings("unchecked") var result = (Map<String, Object>) tool.execute(Map.of("stack", "mern"), context);
+        assertEquals("vite-react", result.get("stack"));
+        assertTrue(result.get("next").toString().contains("not MERN"));
+        assertFalse(project.files.exists(project.projectId, context.root(), "server/package.json"));
+        org.mockito.Mockito.verify(decisions).requireStarter(project.projectId, "vite-react");
+    }
+
     @Test void aStarterMismatchDoesNotWriteAnySetupFile() {
         var decisions = mock(com.code.pal.project.capability.BuildDecisions.class);
         org.mockito.Mockito.doThrow(new com.code.pal.project.exception.WorkflowStageException("Approved storage is MERN"))

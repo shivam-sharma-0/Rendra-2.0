@@ -59,8 +59,13 @@ public class StartProjectTool implements AgentTool {
     @Override
     public Object execute(Map<String, Object> args, AgentContext context) {
         Object stack = args.get("stack");
-        Starter starter = Starter.of(stack == null ? "" : stack.toString())
+        Starter requested = Starter.of(stack == null ? "" : stack.toString())
                 .orElseThrow(() -> new IllegalArgumentException("stack must be \"vite-react\" or \"mern\""));
+        // The approved storage decides the stack: without approved MERN storage a "mern" request is a web app.
+        var state = buildDecisions == null ? null : buildDecisions.state(context.projectId());
+        var choice = state == null ? null : state.choice();
+        Starter starter = requested == Starter.MERN && choice != null && choice.storage() != BuildDecisions.Storage.MERN
+                ? Starter.VITE_REACT : requested;
         if (buildDecisions != null) buildDecisions.requireStarter(context.projectId(), starter.id());
         for (String manifest : MANIFESTS) {
             if (context.files().exists(context.projectId(), context.root(), manifest)) {
@@ -78,7 +83,9 @@ public class StartProjectTool implements AgentTool {
         List<String> created = changeSets.createBatch(context, files.entrySet().stream()
                 .map(entry -> new ChangeSetService.NewFile(entry.getKey(), entry.getValue())).toList())
                 .stream().map(ChangeSetService.MutationResult::path).toList();
+        String next = starter == requested ? starter.next()
+                : "Approved storage is not MERN, so the vite-react starter was set up (no server). " + starter.next();
         return Map.of("stack", starter.id(), "templateVersion", Starter.TEMPLATE_VERSION,
-                "createdFiles", List.copyOf(created), "next", starter.next());
+                "createdFiles", List.copyOf(created), "next", next);
     }
 }
