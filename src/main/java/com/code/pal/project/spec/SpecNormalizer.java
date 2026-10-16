@@ -39,6 +39,9 @@ public final class SpecNormalizer {
         if (spec == null || !spec.isObject() || !spec.path("features").isArray()) {
             return null;
         }
+        if (spec.path("acceptance").size() > 24 || spec.path("features").size() > 24) {
+            return null;   // cutting an oversized list would drop approved behaviour without saying so
+        }
         ObjectNode copy = (ObjectNode) spec.deepCopy();
         var known = new HashSet<String>();
         copy.path("features").forEach(feature -> {

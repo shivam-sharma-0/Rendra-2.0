@@ -26,7 +26,8 @@ class SupabaseLocalIT {
     private static final String DB = System.getProperty("codepal.supabase.db", "jdbc:postgresql://127.0.0.1:55322/postgres");
     private static final String KEY = System.getProperty("codepal.supabase.key", "sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH");
 
-    private final SelfHostedSupabase instance = new SelfHostedSupabase(URL, DB, "postgres", "postgres");
+    // This opt-in local fixture explicitly exercises the operator-only path; ordinary constructors remain disabled.
+    private final SelfHostedSupabase instance = new SelfHostedSupabase(URL, DB, "postgres", "postgres", true);
     private final SupabaseClient client = new SupabaseClient(new ObjectMapper(), "https://api.supabase.com");
     private final String table = "codepal_it_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
     private final HttpClient http = HttpClient.newHttpClient();
@@ -69,7 +70,7 @@ class SupabaseLocalIT {
         SupabaseException failure = assertThrows(SupabaseException.class, () -> instance.runSql(
                 "create table public." + table + " (id int); select * from table_that_does_not_exist;"));
 
-        assertTrue(failure.getMessage().contains("table_that_does_not_exist"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("SQLSTATE 42P01"), failure.getMessage());
         assertEquals(404, rest("GET", null).statusCode(), "the table from the failed migration was rolled back");
     }
 

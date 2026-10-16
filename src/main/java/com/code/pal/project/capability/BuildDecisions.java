@@ -64,6 +64,13 @@ public class BuildDecisions {
         this.jdbc = jdbc;
     }
 
+    private com.code.pal.project.supabase.SelfHostedSupabase selfHosted;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void useSelfHosted(com.code.pal.project.supabase.SelfHostedSupabase selfHosted) {
+        this.selfHosted = selfHosted;
+    }
+
     @Transactional(readOnly = true)
     public Available available(UUID projectId) {
         var sandbox = properties.getSandbox();
@@ -71,8 +78,12 @@ public class BuildDecisions {
                 ? nonBlank(sandbox.getAppsDatabaseImage()) && nonBlank(sandbox.getAppsNetwork())
                 : sandbox.isAllowHostExecution() && nonBlank(sandbox.getLocalAppsDatabaseUri()));
         // The projection excludes URLs and both public/private key values.
-        String revision = connections.capability(projectId).map(connection -> digest(
-                connection.getProjectRef() + "/" + connection.getMode() + "/" + connection.getUpdatedAt())).orElse(null);
+        // A connection to the operator's own instance is usable only where the operator enabled its SQL path.
+        String revision = connections.capability(projectId)
+                .filter(connection -> connection.getMode() != com.code.pal.project.supabase.SupabaseConnection.Mode.SELF_HOSTED
+                        || selfHosted != null && selfHosted.operatorSqlEnabled())
+                .map(connection -> digest(
+                        connection.getProjectRef() + "/" + connection.getMode() + "/" + connection.getUpdatedAt())).orElse(null);
         return new Available(mern, revision);
     }
 

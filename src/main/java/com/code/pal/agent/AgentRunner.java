@@ -601,6 +601,14 @@ public class AgentRunner implements AgentRuntime {
             return;
         }
         var approved = approvedSpecs.current(run.getProjectId());
+        if (installed != null) {
+            // Installed checks stay required, so resuming without their exact recipe would build blind.
+            var recipe = approved.filter(AgentRunner::browserVerifiable).flatMap(ToolLoopAcceptance::from)
+                    .filter(compiled -> installed.equals(compiled.criteria()))
+                    .orElseThrow(() -> new WorkflowStageException("Required acceptance changed during this run; start a new run"));
+            convo.add(LlmMessage.user(ToolLoopAcceptance.promptSection(recipe)));
+            return;
+        }
         if (approved.isEmpty()) {
             return;
         }
@@ -616,12 +624,8 @@ public class AgentRunner implements AgentRuntime {
         if (compiled.isEmpty()) {
             return;
         }
-        if (installed == null) {
-            behaviorCriteria.install(run.getId(), run.getProjectId(), approved.get().requirementsProjection(),
-                    approved.get().requirementsRevision(), compiled.get().criteria());
-        } else if (!installed.equals(compiled.get().criteria())) {
-            throw new WorkflowStageException("Required acceptance changed during this run; start a new run");
-        }
+        behaviorCriteria.install(run.getId(), run.getProjectId(), approved.get().requirementsProjection(),
+                approved.get().requirementsRevision(), compiled.get().criteria());
         convo.add(LlmMessage.user(ToolLoopAcceptance.promptSection(compiled.get())));
     }
 

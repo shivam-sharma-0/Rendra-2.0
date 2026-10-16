@@ -518,6 +518,8 @@ public class RequirementServiceImpl implements RequirementService {
                     accent, muted (hex colors), radius, spacing (like "8px"), font: system|serif|mono}; acceptance
                     [{id, featureId, kind: "BROWSER", steps [{kind: CLICK|FILL|SELECT|ASSERT_TEXT|ASSERT_COUNT|
                     ASSERT_ROUTE|RELOAD, selector, value}], expected}] with at least one scenario per feature;
+                    Use at most 24 browser actions across all acceptance scenarios combined, not 24 per scenario;
+                    combine redundant steps while preserving feature coverage, and never truncate required checks.
                     constraints {responsive: true, accessibility: true, exclusions: []}. Ids are letters, digits and _.
                     Page featureIds and feature pageIds must agree.""";
 

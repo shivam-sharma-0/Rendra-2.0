@@ -115,6 +115,18 @@ class SpecNormalizerTest {
     }
 
     @Test
+    void draftDoesNotTruncateAnOversizedAcceptanceArray() {
+        var draft = (tools.jackson.databind.node.ObjectNode) mapper.readTree(VALID);
+        var scenarios = (tools.jackson.databind.node.ArrayNode) draft.path("acceptance");
+        for (int index = 0; index < 23; index++) {
+            var copy = (tools.jackson.databind.node.ObjectNode) scenarios.get(0).deepCopy();
+            scenarios.add(copy.put("id", "extra" + index));
+        }
+        assertEquals(25, scenarios.size());
+        assertEquals(null, SpecNormalizer.draft(draft), "25 valid scenarios are not silently cut to 24");
+    }
+
+    @Test
     void aDraftWithNothingCheckableIsNoSpec() {
         String noChecks = VALID.replaceAll("\"kind\":\"ASSERT_[A-Z]+\"", "\"kind\":\"CLICK\"");
         assertEquals(null, SpecNormalizer.draft(mapper.readTree(noChecks)));

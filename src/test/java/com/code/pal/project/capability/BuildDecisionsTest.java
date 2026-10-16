@@ -54,6 +54,16 @@ class BuildDecisionsTest {
         assertThrows(WorkflowStageException.class, () -> decisions.approve(answers("SUPABASE", "NONE"), decisions.available(id)));
     }
 
+    @Test void anOperatorInstanceConnectionIsUnavailableUnlessTheOperatorEnabledItsSql() {
+        var connection = connect();
+        when(connection.getMode()).thenReturn(com.code.pal.project.supabase.SupabaseConnection.Mode.SELF_HOSTED);
+        assertFalse(decisions.available(id).supabaseConnected(), "default-deny without the operator component");
+        decisions.useSelfHosted(new com.code.pal.project.supabase.SelfHostedSupabase("", "", "postgres", ""));
+        assertFalse(decisions.available(id).supabaseConnected(), "operator SQL off");
+        decisions.useSelfHosted(new com.code.pal.project.supabase.SelfHostedSupabase("", "", "postgres", "", true));
+        assertTrue(decisions.available(id).supabaseConnected());
+    }
+
     @Test void disconnectedOrChangedConnectionInvalidatesApproval() {
         var connection = connect();
         approve(BuildDecisions.Storage.SUPABASE, BuildDecisions.Auth.ACCOUNTS);

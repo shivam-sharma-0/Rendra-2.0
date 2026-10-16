@@ -87,6 +87,17 @@ class RequirementServiceImplTest {
     }
 
     @Test
+    void theSpecPromptBudgetsTwentyFourActionsAcrossAllScenariosWithoutDroppingChecks() {
+        service.start(7L, projectId);
+
+        String prompt = String.join("\n", prompts);
+        assertTrue(prompt.contains("at most 24 browser actions across all acceptance scenarios combined"));
+        assertTrue(prompt.contains("not 24 per scenario"));
+        assertTrue(prompt.contains("never truncate required checks"));
+        assertEquals(1, modelCalls.get(), "The budget instruction must use the existing spec call");
+    }
+
+    @Test
     void imagesAttachedToTheOpeningPromptShapeTheQuestionsAndGoWithTheApprovedBuild() {
         List<String> images = List.of("uploads/1-design.png");
         when(messages.openingAttachments(projectId)).thenReturn(images);

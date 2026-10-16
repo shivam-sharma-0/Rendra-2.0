@@ -1,5 +1,7 @@
 package com.code.pal.project.supabase;
 
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -11,11 +13,12 @@ import java.sql.Statement;
 /**
  * The one Supabase instance the server operator runs (local development stack or a self-hosted
  * deployment), configured in {@code app.supabase.self-hosted.*}. Projects connect to it by its URL; it has
- * no Management API, so approved migrations run over its database connection, each in one transaction.
+ * no Management API. SQL is disabled unless the operator explicitly enables the single-tenant development path.
  * The URL and the database come from server configuration only, never from a user, so connecting cannot
  * make the backend reach an arbitrary host.
  */
 @Component
+@Slf4j
 public class SelfHostedSupabase {
     private static final int QUERY_TIMEOUT_SECONDS = 90;
 
@@ -23,15 +26,27 @@ public class SelfHostedSupabase {
     private final String databaseUrl;
     private final String databaseUser;
     private final String databasePassword;
+    private final boolean operatorSqlEnabled;
 
+    /** Direct construction remains default-deny, including fixtures that previously supplied only credentials. */
+    public SelfHostedSupabase(String url, String databaseUrl, String databaseUser, String databasePassword) {
+        this(url, databaseUrl, databaseUser, databasePassword, false);
+    }
+
+    @Autowired
     public SelfHostedSupabase(@Value("${app.supabase.self-hosted.url:}") String url,
                               @Value("${app.supabase.self-hosted.db-url:}") String databaseUrl,
                               @Value("${app.supabase.self-hosted.db-user:postgres}") String databaseUser,
-                              @Value("${app.supabase.self-hosted.db-password:}") String databasePassword) {
+                              @Value("${app.supabase.self-hosted.db-password:}") String databasePassword,
+                              @Value("${codepal.supabase.self-hosted.operator-sql-enabled:false}") boolean operatorSqlEnabled) {
         this.url = url == null ? "" : url.trim().replaceAll("/+$", "");
         this.databaseUrl = databaseUrl == null ? "" : databaseUrl.trim();
         this.databaseUser = databaseUser;
         this.databasePassword = databasePassword;
+        this.operatorSqlEnabled = operatorSqlEnabled;
+        if (operatorSqlEnabled) {
+            log.warn("supabase_operator_sql_enabled: privileged SQL is enabled for single-tenant development only; never use on a shared/public server");
+        }
     }
 
     /** Whether {@code projectUrl} (normalized, no trailing slash) is this server's instance. */
@@ -40,17 +55,31 @@ public class SelfHostedSupabase {
     }
 
     public boolean migrationsAvailable() {
-        return !databaseUrl.isEmpty();
+        return operatorSqlEnabled && !databaseUrl.isEmpty();
+    }
+
+    public boolean operatorSqlEnabled() {
+        return operatorSqlEnabled;
+    }
+
+    public void requireOperatorSqlEnabled() {
+        if (!operatorSqlEnabled) {
+            throw new SelfHostedSqlDisabledException();
+        }
     }
 
     /**
-     * Runs one migration in a transaction (all of it or nothing), then asks PostgREST to reload its schema
-     * cache so new tables are served at once.
+     * Uses an operator database transaction and requests PostgREST schema refresh for a local migration.
+     * This development-only path does not confine SQL statements or provide tenant isolation.
      *
-     * @throws SupabaseException with the database's message when it fails
+     * @throws SelfHostedSqlDisabledException when operator SQL is disabled
+     * @throws SupabaseException with a sanitized SQL state when the operator database fails
      */
     public void runSql(String sql) {
-        if (!migrationsAvailable()) throw new SupabaseException("This server has no database configured for its Supabase instance");
+        requireOperatorSqlEnabled();
+        if (!migrationsAvailable()) {
+            throw new SupabaseException("This server has no database configured for its Supabase instance");
+        }
         try (Connection connection = DriverManager.getConnection(databaseUrl, databaseUser, databasePassword)) {
             connection.setAutoCommit(false);
             try (Statement statement = connection.createStatement()) {
@@ -63,7 +92,12 @@ public class SelfHostedSupabase {
                 throw failure;
             }
         } catch (SQLException failure) {
-            throw new SupabaseException(failure.getMessage());
+            String state = failure.getSQLState();
+            if (state == null || !state.matches("[A-Z0-9]{5}")) {
+                state = "unknown";
+            }
+            // Driver messages/cause chains may contain the URL, password or SQL; do not send them to a client or log.
+            throw new SupabaseException("Self-hosted SQL failed (SQLSTATE " + state + "). Check the migration and operator database configuration.");
         }
     }
 }

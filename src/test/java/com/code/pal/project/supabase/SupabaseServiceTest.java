@@ -123,6 +123,33 @@ class SupabaseServiceTest {
     }
 
     @Test
+    void theOperatorInstanceCannotBeConnectedWhileItsSqlIsDisabled() {
+        var operator = new SelfHostedSupabase(base + "/operator", "", "postgres", "");
+        var guarded = new SupabaseService(projects, connections(), migrations(), variables(),
+                new SupabaseClient(new ObjectMapper(), base), operator, cipher, project.files, events, new FakeTransactions(),
+                "^http://127\\.0\\.0\\.1:\\d+/([a-z0-9]{20})$");
+
+        var failure = assertThrows(SelfHostedSqlDisabledException.class,
+                () -> guarded.connect(7L, projectId, base + "/operator", ANON, null));
+
+        assertEquals("SELF_HOSTED_SQL_DISABLED", failure.code());
+        assertTrue(connectionStore.isEmpty() && variableStore.isEmpty());
+    }
+
+    @Test
+    void aSelfHostedApplyUsesTheExplicitDisabledCodeBeforeAnySqlIsSent() {
+        connectionStore.put(projectId, SupabaseConnection.builder().projectId(projectId).projectRef("self-hosted")
+                .url("https://operator.invalid").anonKey(ANON).mode(SupabaseConnection.Mode.SELF_HOSTED).build());
+        project.write("supabase/migrations/1_a.sql", "select 1;");
+
+        var failure = assertThrows(SelfHostedSqlDisabledException.class, () -> service.apply(7L, projectId));
+
+        assertEquals("SELF_HOSTED_SQL_DISABLED", failure.code());
+        assertTrue(executedSql.isEmpty());
+        assertTrue(migrationStore.isEmpty());
+    }
+
+    @Test
     void disconnectingRemovesTheConnectionAndItsVariables() {
         service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
 

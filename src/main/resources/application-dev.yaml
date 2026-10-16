@@ -7,3 +7,10 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
+
+# Explicit operator opt-in for the owner's single-tenant dev box. Never use this profile on a shared/public server.
+# Set the environment override to false to keep the development profile default-deny as well.
+codepal:
+  supabase:
+    self-hosted:
+      operator-sql-enabled: ${CODEPAL_SUPABASE_SELF_HOSTED_OPERATOR_SQL_ENABLED:true}

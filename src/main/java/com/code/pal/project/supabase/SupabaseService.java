@@ -93,6 +93,9 @@ public class SupabaseService {
         tx.executeWithoutResult(state -> projects.requireManageable(userId, projectId));
         String cleanUrl = url == null ? "" : url.trim().replaceAll("/+$", "");
         boolean onThisServer = selfHosted.matches(cleanUrl);
+        if (onThisServer) {
+            selfHosted.requireOperatorSqlEnabled();   // the operator's shared instance is not offered to tenants
+        }
         Matcher match = projectUrl.matcher(cleanUrl);
         if (!onThisServer && !match.matches()) {
             throw new SupabaseException("Use the project URL from Supabase settings, like https://<project>.supabase.co");
@@ -162,6 +165,9 @@ public class SupabaseService {
             projects.requireManageable(userId, projectId);
             return connections.findById(projectId).orElseThrow(() -> new WorkflowStageException("Connect Supabase first"));
         });
+        if (connection.getMode() == SupabaseConnection.Mode.SELF_HOSTED) {
+            selfHosted.requireOperatorSqlEnabled();
+        }
         if (!migrationsEnabled(connection)) {
             throw new WorkflowStageException(connection.getMode() == SupabaseConnection.Mode.SELF_HOSTED
                     ? "This server has no database configured for its Supabase instance"

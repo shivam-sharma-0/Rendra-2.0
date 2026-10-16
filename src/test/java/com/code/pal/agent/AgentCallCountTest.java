@@ -57,6 +57,15 @@ class AgentCallCountTest {
         var recipe=com.code.pal.agent.contract.ToolLoopAcceptance.promptSection(com.code.pal.agent.contract.ToolLoopAcceptance.from(browser).orElseThrow());
         assertFalse(prompts.contains(recipe),"no browser recipe is offered for cloud data");
     }
+    @Test void aResumedRunWhoseApprovedSpecVanishedStopsInsteadOfBuildingBlind() {
+        var compiled=com.code.pal.agent.contract.ToolLoopAcceptance.from(com.code.pal.project.spec.SpecFixtures.approved()).orElseThrow();
+        specs=mock(com.code.pal.project.spec.ApprovedSpecs.class);when(specs.current(any())).thenReturn(Optional.empty());
+        criteria=mock(RunBehaviorCriteria.class);when(criteria.current(any())).thenReturn(compiled.criteria());
+        existing.put("package.json","{\"name\":\"calculator\"}");
+        var trial=trial(true,false,false);
+        assertEquals(RunStatus.FAILED,trial.result.status());assertEquals(0,trial.calls,"no model call without the recipe");
+        assertNull(trial.code);
+    }
     @Test void aResumedRunGetsTheSameGuidanceForTheChecksItAlreadyInstalled() {
         var approved=com.code.pal.project.spec.SpecFixtures.approved();
         var compiled=com.code.pal.agent.contract.ToolLoopAcceptance.from(approved).orElseThrow();
