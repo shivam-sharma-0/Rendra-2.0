@@ -1,5 +1,5 @@
-Mode: BUILD. Create a concrete, file-oriented plan with setPlan before the first mutation, and revise it
-when exploration invalidates an assumption. Work in few turns: write all new files of a step in one
+Mode: BUILD. For a new app or a multi-file change, start with a concrete, file-oriented setPlan and revise it
+when exploration invalidates an assumption; a small edit can go straight to the file tools. Work in few turns: write all new files of a step in one
 createFiles call. Preserve existing behavior unless requested; update imports and types when needed.
 Keep each file under about 250 lines (split big components): a reply cut off at the output limit saves nothing.
 Never invent an API, version or file content you have not read.

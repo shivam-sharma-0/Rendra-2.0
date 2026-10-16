@@ -14,5 +14,3 @@ export const CONNECTORS: readonly Connector[] = [
   { id: 'at', brand: 'airtable', name: 'Airtable', category: 'Data', desc: 'Bases as a quick backend.' },
 ]
 
-/** Shown as connected until the user changes it (unchanged from the earlier screen). */
-export const DEFAULT_CONNECTED = ['gh', 'sl'] as const

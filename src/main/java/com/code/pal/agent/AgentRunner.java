@@ -279,6 +279,8 @@ public class AgentRunner implements AgentRuntime {
         AgentContext ctx;
         long startedNanos;
         long deadlineNanos;
+        /** The project had no app files when the run started: its first build gets the completeness review. */
+        boolean newProject;
 
         RunState(AgentRun run, DeltaBatcher stream, RunCancellation cancellation) {
             this.run = run;
@@ -294,7 +296,6 @@ public class AgentRunner implements AgentRuntime {
 
     /** Counters and the review snapshot the BUILD completion gates keep across iterations. */
     private static final class BuildGateState {
-        int planningReminders;
         int implementationReminders;
         int previewReminders;
         boolean polished;
@@ -456,6 +457,7 @@ public class AgentRunner implements AgentRuntime {
 
         requireBuildAllowed(run);
         LoopSetup setup = prepareLoop(state, project, accepted, userRequest, attachments);
+        state.newProject = projectShape(run.getProjectId(), state.ctx.root()).equals(BuildPrompt.ProjectShape.EMPTY);
         if (attachments.isEmpty() && contractCoordinator != null) {
             ContractCoordinator.SpecPlanning planning = specPlanning(run, state.ctx.root());
             if (contractCoordinator.eligible(run, setup.size(), userRequest, planning)) {
@@ -945,15 +947,8 @@ public class AgentRunner implements AgentRuntime {
         AgentRuntimeContext runtime = state.runtime;
         AgentContext ctx = state.ctx;
         if (!ctx.plan().exists()) {
-            if (gates.planningReminders++ > 0) {
-                throw new AgentValidationFailedException(
-                        "The agent did not create an implementation plan before finishing the build");
-            }
-            runtime.messages().add(LlmMessage.user(
-                    "BUILD GATE: The build cannot finish yet because no plan was created. "
-                            + "Call setPlan with concrete file-oriented steps now, then implement the request with "
-                            + "the file tools."));
-            return false;
+            // A direct change needs no extra model turn just to write a plan; the backend records a minimal one.
+            ctx.plan().revise(List.of("Apply the requested change", "Validate the result"), "Backend plan for a direct change");
         }
         if (changeSets.view(ctx).touchedPaths().isEmpty()) {
             if (gates.implementationReminders++ > 0) {
@@ -1000,7 +995,8 @@ public class AgentRunner implements AgentRuntime {
                             + "or a supported dist/build index.html, then finish the build."));
             return false;
         }
-        if (!gates.polished) {
+        if (!gates.polished && state.newProject) {
+            // Only a new app's first build gets the completeness review; follow-up edits skip this extra call.
             gates.polished = true;
             gates.firstSummary = res.content();
             gates.reviewedRevision = changeSets.view(ctx).revision();
