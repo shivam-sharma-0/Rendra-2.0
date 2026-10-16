@@ -84,7 +84,12 @@ public class SupabaseService {
 
     public record Migration(String name, String status, String sql) {}
 
-    public record ApplyResult(List<String> applied, String failed, String error, List<String> remaining, UUID operationId, String state) {}
+    public record ApplyResult(List<String> applied, String failed, String error, List<String> remaining, UUID operationId, String state,
+                              List<String> ownerAttestedApplied, List<String> ownerAttestedNotApplied) {
+        public ApplyResult(List<String> applied, String failed, String error, List<String> remaining, UUID operationId, String state) {
+            this(applied, failed, error, remaining, operationId, state, List.of(), List.of());
+        }
+    }
 
     public record MigrationReview(String expectedManifestHash, UUID connectionEpoch, List<Migration> migrations) {}
 
@@ -129,6 +134,11 @@ public class SupabaseService {
             if (connection.getProjectRef() != null && !connection.getProjectRef().equals(projectRef)) {
                 migrations.deleteByProjectId(projectId);   // a different database: nothing is applied there yet
             }
+            SupabaseConnection.Mode mode = onThisServer ? SupabaseConnection.Mode.SELF_HOSTED : SupabaseConnection.Mode.CLOUD;
+            if (!projectRef.equals(connection.getProjectRef()) || mode != connection.getMode()) {
+                // A token verified for the old target must never carry SQL authority to a new one.
+                connection.setAccessTokenCipher(null);
+            }
             connection.setProjectRef(projectRef);
             connection.setUrl(cleanUrl);
             connection.setAnonKey(anonKey.trim());
@@ -166,10 +176,13 @@ public class SupabaseService {
             return appliedByName(projectId);
         });
         List<Migration> result = new ArrayList<>();
+        String target = tx.execute(state -> connections.findById(projectId).map(connection ->
+                SupabaseMigrationLedger.targetKey(connection.getMode().name(), connection.getProjectRef(), connection.getUrl())).orElse("disconnected"));
+        var evidence = ledger.migrationEvidence(target);
         for (String name : migrationFiles(projectId)) {
             String sql = read(projectId, name);
             SupabaseMigration record = applied.get(name);
-            String status = record == null ? "PENDING" : record.getChecksum().equals(checksum(sql)) ? "APPLIED" : "CHANGED_AFTER_APPLY";
+            String status = migrationStatus(record, evidence.get(name), checksum(sql));
             result.add(new Migration(name, status, sql));
         }
         return result;
@@ -186,9 +199,10 @@ public class SupabaseService {
         SupabaseConnection connection = requireApplyConnection(userId, projectId);
         SupabaseMigrationManifest manifest = capture(projectId, connection);
         Map<String, SupabaseMigration> applied = tx.execute(state -> appliedByName(projectId));
+        var evidence = ledger.migrationEvidence(manifest.targetKey());
         List<Migration> reviewed = manifest.sources().stream().map(source -> {
             SupabaseMigration record = applied.get(source.name());
-            String status = record == null ? "PENDING" : record.getChecksum().equals(source.checksum()) ? "APPLIED" : "CHANGED_AFTER_APPLY";
+            String status = migrationStatus(record, evidence.get(source.name()), source.checksum());
             return new Migration(source.name(), status, source.sql());
         }).toList();
         return new MigrationReview(manifest.hash(), manifest.connectionEpoch(), reviewed);
@@ -225,7 +239,38 @@ public class SupabaseService {
     }
 
     private static ApplyResult result(SupabaseMigrationLedger.Outcome outcome) {
-        return new ApplyResult(outcome.applied(), outcome.failed(), outcome.code(), outcome.remaining(), outcome.operationId(), outcome.state());
+        return new ApplyResult(outcome.applied(), outcome.failed(), outcome.code(), outcome.remaining(), outcome.operationId(), outcome.state(),
+                outcome.ownerAttestedApplied(), outcome.ownerAttestedNotApplied());
+    }
+
+    public SupabaseOwnerAttestations.LegacyReview legacyReview(Long userId, UUID projectId) {
+        tx.executeWithoutResult(state -> projects.requireManageable(userId, projectId));
+        return ledger.legacyReview(userId, projectId, () -> projects.requireManageable(userId, projectId));
+    }
+
+    public SupabaseOwnerAttestations.Receipt adoptLegacy(Long userId, UUID projectId, String expectedReviewHash, String idempotencyKey, boolean confirmed) {
+        tx.executeWithoutResult(state -> projects.requireManageable(userId, projectId));
+        return ledger.adoptLegacy(userId, projectId, expectedReviewHash, idempotencyKey, confirmed, () -> projects.requireManageable(userId, projectId));
+    }
+
+    public SupabaseOwnerAttestations.RecoveryReview recoveryReview(Long userId, UUID projectId, UUID operationId) {
+        tx.executeWithoutResult(state -> projects.requireManageable(userId, projectId));
+        return ledger.recoveryReview(userId, projectId, operationId, () -> projects.requireManageable(userId, projectId));
+    }
+
+    public SupabaseOwnerAttestations.Receipt resolveRecovery(Long userId, UUID projectId, UUID operationId, String expectedReviewHash,
+                                                           String idempotencyKey, List<SupabaseOwnerAttestations.ResolutionDecision> decisions,
+                                                           boolean senderQuiescentConfirmed) {
+        tx.executeWithoutResult(state -> projects.requireManageable(userId, projectId));
+        return ledger.resolveRecovery(userId, projectId, operationId, expectedReviewHash, idempotencyKey, decisions, senderQuiescentConfirmed,
+                () -> projects.requireManageable(userId, projectId));
+    }
+
+    private static String migrationStatus(SupabaseMigration legacy, SupabaseMigrationEvidence.Applied evidence, String checksum) {
+        if (legacy != null && !legacy.getChecksum().equals(checksum)) return "CHANGED_AFTER_APPLY";
+        if (evidence == null) return legacy == null ? "PENDING" : "LEGACY_UNBOUND";
+        if (!evidence.checksum().equals(checksum)) return "CHANGED_AFTER_APPLY";
+        return evidence.attestationId() == null ? "APPLIED" : "OWNER_ATTESTED_APPLIED";
     }
 
     private SupabaseConnection requireApplyConnection(Long userId, UUID projectId) {

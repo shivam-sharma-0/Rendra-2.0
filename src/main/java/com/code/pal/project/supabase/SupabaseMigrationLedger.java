@@ -13,6 +13,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -31,20 +32,28 @@ public class SupabaseMigrationLedger {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
     private final DataCipher cipher;
+    private final SupabaseOwnerAttestations attestations;
 
     public SupabaseMigrationLedger(JdbcTemplate jdbc, PlatformTransactionManager transactions, DataCipher cipher) {
         this.jdbc = jdbc;
         this.tx = new TransactionTemplate(transactions);
         this.cipher = cipher;
+        this.attestations = new SupabaseOwnerAttestations(jdbc, tx, this::now, this::checkpoint);
     }
 
-    public record Outcome(UUID operationId, String state, List<String> applied, String failed, String code, List<String> remaining) {}
+    public record Outcome(UUID operationId, String state, List<String> applied, String failed, String code, List<String> remaining,
+                          List<String> ownerAttestedApplied, List<String> ownerAttestedNotApplied) {
+        public Outcome(UUID operationId, String state, List<String> applied, String failed, String code, List<String> remaining) {
+            this(operationId, state, applied, failed, code, remaining, List.of(), List.of());
+        }
+    }
 
     private record Operation(UUID id, UUID project, String target, UUID epoch, String hash, Long actor, String state,
                              UUID owner, long fence, Instant expires, String code) {}
 
     private record Step(UUID id, String name, String checksum, int bytes, String state) {}
     private record Claim(Operation operation, boolean acquired) {}
+    private record Pending(List<SupabaseMigrationManifest.Source> sources, List<UUID> attestationIds) {}
 
     private static final RowMapper<Operation> OPERATIONS = (rs, row) -> new Operation(
             rs.getObject("id", UUID.class), rs.getObject("project_id", UUID.class), rs.getString("target_key"),
@@ -82,6 +91,7 @@ public class SupabaseMigrationLedger {
                 boolean dispatched = Boolean.TRUE.equals(tx.execute(status -> dispatch(owner, step, manifest, beforeSend)));
                 if (!dispatched) break;
                 checkpoint("AFTER_SENDING");
+                if (!Boolean.TRUE.equals(tx.execute(status -> ownsLive(owner, operation(owner.id(), true))))) break;
                 sender.accept(source);
                 checkpoint("AFTER_REMOTE_SUCCESS");
                 boolean settled = Boolean.TRUE.equals(tx.execute(status -> settle(owner, step, manifest)));
@@ -125,13 +135,15 @@ public class SupabaseMigrationLedger {
         Integer active = jdbc.queryForObject("select count(*) from supabase_apply_operations where (project_id=? or target_key=?) and state in " + ACTIVE,
                 Integer.class, manifest.projectId(), manifest.targetKey());
         if (active != null && active > 0) throw problem("MIGRATION_TARGET_BUSY");
-        List<SupabaseMigrationManifest.Source> pending = pending(manifest);
+        Pending plan = pending(manifest);
+        List<SupabaseMigrationManifest.Source> pending = plan.sources();
         UUID id = UUID.randomUUID();
         Instant timestamp = now();
         jdbc.update("insert into supabase_apply_operations(id,project_id,target_key,connection_epoch,manifest_hash,idempotency_key,approved_by,state,"
-                        + "owner_id,fence,lease_expires_at,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,1,?,?,?)",
+                        + "owner_id,fence,lease_expires_at,created_at,updated_at,owner_attestation_ids) values (?,?,?,?,?,?,?,?,?,1,?,?,?,?::uuid[])",
                 id, manifest.projectId(), manifest.targetKey(), manifest.connectionEpoch(), manifest.hash(), key, actor,
-                pending.isEmpty() ? "COMPLETED" : "PREPARED", UUID.randomUUID(), at(timestamp.plusSeconds(LEASE_SECONDS)), at(timestamp), at(timestamp));
+                pending.isEmpty() ? completionState(plan.attestationIds()) : "PREPARED", UUID.randomUUID(), at(timestamp.plusSeconds(LEASE_SECONDS)),
+                at(timestamp), at(timestamp), uuidArray(plan.attestationIds()));
         for (int i = 0; i < pending.size(); i++) {
             var source = pending.get(i);
             jdbc.update("insert into supabase_migration_attempts(id,operation_id,ordinal,name,checksum,byte_count,sql_cipher,state) "
@@ -141,20 +153,19 @@ public class SupabaseMigrationLedger {
     }
 
     /** Historical target/file proof is independent of credential epochs and Rendra project aliases. */
-    private List<SupabaseMigrationManifest.Source> pending(SupabaseMigrationManifest manifest) {
+    private Pending pending(SupabaseMigrationManifest manifest) {
+        var evidence = SupabaseMigrationEvidence.applied(jdbc, manifest.targetKey());
         Map<String, String> proof = new HashMap<>();
-        jdbc.query("select a.name,a.checksum from supabase_migration_attempts a join supabase_apply_operations o on o.id=a.operation_id "
-                + "where o.target_key=? and a.state='APPLIED'", rs -> {
-            String previous = proof.put(rs.getString("name"), rs.getString("checksum"));
-            if (previous != null && !previous.equals(rs.getString("checksum"))) throw problem("MIGRATION_APPLIED_SOURCE_CHANGED");
-        }, manifest.targetKey());
+        evidence.forEach((name, applied) -> proof.put(name, applied.checksum()));
         Map<String, String> current = new HashMap<>();
         manifest.sources().forEach(source -> current.put(source.name(), source.checksum()));
         proof.forEach((name, checksum) -> {
             if (!checksum.equals(current.get(name))) throw problem("MIGRATION_APPLIED_SOURCE_CHANGED");
         });
         requireBoundLegacyHistory(manifest.projectId(), manifest.targetKey(), proof);
-        return manifest.sources().stream().filter(source -> !proof.containsKey(source.name())).toList();
+        List<UUID> attestationIds = evidence.values().stream().map(SupabaseMigrationEvidence.Applied::attestationId)
+                .filter(id -> id != null).distinct().sorted().toList();
+        return new Pending(manifest.sources().stream().filter(source -> !proof.containsKey(source.name())).toList(), attestationIds);
     }
 
     private void requireBoundLegacyHistory(UUID project, String target, Map<String, String> proof) {
@@ -207,7 +218,9 @@ public class SupabaseMigrationLedger {
     private void complete(Operation owner) {
         Operation current = operation(owner.id(), true);
         if (!ownsLive(owner, current)) return;
-        if (steps(owner.id()).stream().allMatch(step -> step.state().equals("APPLIED"))) updateState(owner, "COMPLETED", null, null);
+        if (steps(owner.id()).stream().allMatch(step -> step.state().equals("APPLIED"))) {
+            updateState(owner, completionState(attestationIds(owner.id())), null, null);
+        }
     }
 
     private void stop(Operation owner) {
@@ -226,7 +239,8 @@ public class SupabaseMigrationLedger {
         jdbc.update("update supabase_migration_attempts set state='UNKNOWN',failure_code='MIGRATION_OUTCOME_UNKNOWN',updated_at=? "
                 + "where operation_id=? and state='SENDING'", at(now()), owner.id());
         jdbc.update("update supabase_apply_operations set state='RECOVERY_REQUIRED',failure_code='MIGRATION_OUTCOME_UNKNOWN',"
-                        + "fence=fence+1,next_reconcile_at=?,updated_at=? where id=? and owner_id=? and fence=? and state in " + ACTIVE,
+                        + "fence=fence+case when state='RECOVERY_REQUIRED' then 0 else 1 end,next_reconcile_at=?,updated_at=? "
+                        + "where id=? and owner_id=? and fence=? and state in " + ACTIVE,
                 at(now().plusSeconds(300)), at(now()), owner.id(), owner.owner(), owner.fence());
     }
 
@@ -258,7 +272,7 @@ public class SupabaseMigrationLedger {
                 if (uncertain(operation.id()) || operation.state().equals("RECOVERY_REQUIRED")) {
                     quarantine(operation);
                 } else if (steps(operation.id()).stream().allMatch(step -> step.state().equals("APPLIED"))) {
-                    updateState(operation, "COMPLETED", null, null);
+                    updateState(operation, completionState(attestationIds(operation.id())), null, null);
                 } else {
                     // Only an authenticated, still-approved retry may resume proved-unsent work.
                     jdbc.update("update supabase_apply_operations set owner_id=?,fence=fence+1,next_reconcile_at=?,updated_at=? "
@@ -296,8 +310,10 @@ public class SupabaseMigrationLedger {
         if (active != null && active > 0) throw problem("MIGRATION_TARGET_BUSY");
         Integer unbound = jdbc.queryForObject("select count(*) from project_supabase_migrations m where m.project_id=? and not exists "
                         + "(select 1 from supabase_migration_attempts a join supabase_apply_operations o on o.id=a.operation_id "
-                        + "where o.target_key=? and a.name=m.name and a.checksum=m.checksum and a.state='APPLIED')",
-                Integer.class, project, targets.isEmpty() ? "disconnected" : targets.getFirst());
+                        + "where o.target_key=? and a.name=m.name and a.checksum=m.checksum and a.state='APPLIED') and not exists "
+                        + "(select 1 from supabase_owner_attested_files f join supabase_owner_attestations r on r.id=f.attestation_id "
+                        + "where r.target_key=? and f.name=m.name and f.checksum=m.checksum and f.decision='APPLIED')",
+                Integer.class, project, targets.isEmpty() ? "disconnected" : targets.getFirst(), targets.isEmpty() ? "disconnected" : targets.getFirst());
         if (unbound != null && unbound > 0) throw problem("MIGRATION_LEGACY_UNBOUND");
     }
 
@@ -326,15 +342,58 @@ public class SupabaseMigrationLedger {
             Operation operation = operation(id, true);
             var applied = new ArrayList<String>();
             var remaining = new ArrayList<String>();
+            List<SupabaseOwnerAttestations.AttestedFile> declared = declaredFiles(id);
+            var ownerApplied = declared.stream().filter(file -> file.decision().equals("APPLIED")).map(SupabaseOwnerAttestations.AttestedFile::name).distinct().sorted().toList();
+            var ownerNotApplied = declared.stream().filter(file -> file.decision().equals("NOT_APPLIED"))
+                    .map(SupabaseOwnerAttestations.AttestedFile::name).distinct().sorted().toList();
             String failed = null;
             for (Step step : steps(id)) {
                 if (step.state().equals("APPLIED")) applied.add(step.name());
+                else if (operation.state().equals("RESOLVED_ATTESTED") && ownerApplied.contains(step.name())) continue;
+                else if (operation.state().equals("RESOLVED_ATTESTED") && ownerNotApplied.contains(step.name())) remaining.add(step.name());
                 else if (failed == null && (step.state().equals("UNKNOWN") || step.state().equals("SENDING") || step.state().equals("NOT_SENT"))) failed = step.name();
                 else remaining.add(step.name());
             }
-            return new Outcome(id, operation.state(), List.copyOf(applied), failed, operation.code(), List.copyOf(remaining));
+            return new Outcome(id, operation.state(), List.copyOf(applied), failed, operation.code(), List.copyOf(remaining), ownerApplied, ownerNotApplied);
         });
     }
+
+    public SupabaseOwnerAttestations.LegacyReview legacyReview(Long actor, UUID project, Runnable authorize) {
+        return attestations.legacyReview(actor, project, authorize);
+    }
+
+    public SupabaseOwnerAttestations.Receipt adoptLegacy(Long actor, UUID project, String reviewHash, String key, boolean confirmed, Runnable authorize) {
+        return attestations.adoptLegacy(actor, project, reviewHash, key, confirmed, authorize);
+    }
+
+    public SupabaseOwnerAttestations.RecoveryReview recoveryReview(Long actor, UUID project, UUID operation, Runnable authorize) {
+        return attestations.recoveryReview(actor, project, operation, authorize);
+    }
+
+    public SupabaseOwnerAttestations.Receipt resolveRecovery(Long actor, UUID project, UUID operation, String reviewHash, String key,
+                                                           List<SupabaseOwnerAttestations.ResolutionDecision> choices, boolean senderQuiescent, Runnable authorize) {
+        return attestations.resolveRecovery(actor, project, operation, reviewHash, key, choices, senderQuiescent, authorize);
+    }
+
+    Map<String, SupabaseMigrationEvidence.Applied> migrationEvidence(String target) {
+        return SupabaseMigrationEvidence.applied(jdbc, target);
+    }
+
+    private List<UUID> attestationIds(UUID operation) {
+        return jdbc.queryForObject("select owner_attestation_ids from supabase_apply_operations where id=?", (rs, row) ->
+                Arrays.asList((UUID[]) rs.getArray(1).getArray()), operation);
+    }
+
+    private List<SupabaseOwnerAttestations.AttestedFile> declaredFiles(UUID operation) {
+        return jdbc.query("select f.name,f.checksum,f.decision,f.attempt_id from supabase_owner_attested_files f "
+                        + "join supabase_owner_attestations r on r.id=f.attestation_id join supabase_apply_operations o on o.id=? "
+                        + "where (r.id=any(o.owner_attestation_ids) and f.decision='APPLIED') or r.operation_id=o.id order by r.attested_at,r.id,f.ordinal",
+                (rs, row) -> new SupabaseOwnerAttestations.AttestedFile(rs.getString("name"), rs.getString("checksum"), rs.getString("decision"),
+                        rs.getObject("attempt_id", UUID.class)), operation);
+    }
+
+    private static String completionState(List<UUID> declarations) { return declarations.isEmpty() ? "COMPLETED" : "COMPLETED_ATTESTED"; }
+    private static String uuidArray(List<UUID> values) { return "{" + String.join(",", values.stream().map(UUID::toString).toList()) + "}"; }
 
     private void requireConnection(SupabaseMigrationManifest manifest) {
         List<String> actual = jdbc.query("select mode,project_ref,url,connection_epoch from project_supabase_connections where project_id=? for update",

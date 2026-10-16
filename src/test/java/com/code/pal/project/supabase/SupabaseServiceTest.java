@@ -43,6 +43,7 @@ import static org.mockito.Mockito.when;
 /** Against a fake Supabase (management API + project API) on loopback. */
 class SupabaseServiceTest {
     private static final String REF = "abcdefghijklmnopqrst";
+    private static final String OTHER_REF = "bbbbbbbbbbbbbbbbbbbb";
     private static final String ANON = "anon-key-123";
     private static final String TOKEN = "sbp_secret_token";
 
@@ -303,6 +304,17 @@ class SupabaseServiceTest {
     }
 
     @Test
+    void switchingProjectsWithoutANewTokenDropsTheOldTokenButAReconnectKeepsIt() {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        assertTrue(service.connect(7L, projectId, base + "/" + REF, ANON, null).migrationsEnabled(), "same project keeps its token");
+
+        var switched = service.connect(7L, projectId, base + "/" + OTHER_REF, ANON, null);
+
+        assertFalse(switched.migrationsEnabled(), "the old project's token gives no SQL authority on the new one");
+        assertNull(connectionStore.get(projectId).getAccessTokenCipher());
+    }
+
+    @Test
     void disconnectingRemovesTheConnectionAndItsVariables() {
         service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
 
@@ -311,6 +323,56 @@ class SupabaseServiceTest {
         assertTrue(connectionStore.isEmpty());
         assertFalse(variableStore.containsKey("VITE_SUPABASE_URL"));
         assertFalse(service.status(7L, projectId).connected());
+    }
+
+    @Test
+    void ownerExitMetadataDoesNotRequireSqlCredentialsOrAnEnabledOperator() {
+        connectionStore.put(projectId, SupabaseConnection.builder().projectId(projectId).projectRef("self-hosted")
+                .url("https://operator.invalid").anonKey(ANON).mode(SupabaseConnection.Mode.SELF_HOSTED).build());
+        UUID epoch = UUID.randomUUID();
+        var review = new SupabaseOwnerAttestations.LegacyReview(projectId, "operator-target", epoch, "review", List.of());
+        when(ledger.legacyReview(eq(7L), eq(projectId), any())).thenReturn(review);
+        assertEquals(review, service.legacyReview(7L, projectId));
+        assertTrue(executedSql.isEmpty());
+        verify(projects).requireManageable(7L, projectId);
+    }
+
+    @Test
+    void ownerExitRequiresManagePermissionBeforeReadingOrWritingAudit() {
+        doThrow(new WorkflowStageException("revoked")).when(projects).requireManageable(7L, projectId);
+        assertThrows(WorkflowStageException.class, () -> service.legacyReview(7L, projectId));
+        assertThrows(WorkflowStageException.class, () -> service.adoptLegacy(7L, projectId, "review", "one", true));
+        UUID operation = UUID.randomUUID();
+        assertThrows(WorkflowStageException.class, () -> service.recoveryReview(7L, projectId, operation));
+        assertThrows(WorkflowStageException.class, () -> service.resolveRecovery(7L, projectId, operation, "review", "one", List.of(), true));
+        verify(ledger, never()).adoptLegacy(any(), any(), any(), any(), eq(true), any());
+        assertTrue(executedSql.isEmpty());
+    }
+
+    @Test
+    void attestedOutcomesAreNotMappedIntoVerifiedAppliedFiles() {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        installLedger();
+        project.write("supabase/migrations/1_a.sql", "select 1;");
+        UUID operation = UUID.randomUUID();
+        when(ledger.execute(eq(7L), any(), eq("one"), any(), any())).thenReturn(new SupabaseMigrationLedger.Outcome(
+                operation, "COMPLETED_ATTESTED", List.of(), null, null, List.of(), List.of("1_a.sql"), List.of()));
+        var result = service.apply(7L, projectId, service.review(7L, projectId).expectedManifestHash(), "one");
+        assertEquals("COMPLETED_ATTESTED", result.state());
+        assertTrue(result.applied().isEmpty());
+        assertEquals(List.of("1_a.sql"), result.ownerAttestedApplied());
+    }
+
+    @Test
+    void reviewedAttestedFilesAreLabelledWithoutALegacyProjection() {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        installLedger();
+        project.write("supabase/migrations/1_a.sql", "select 1;");
+        var proof = new SupabaseMigrationEvidence.Applied(SupabaseService.checksum("select 1;"), UUID.randomUUID());
+        when(ledger.migrationEvidence("supabase-cloud:" + REF)).thenReturn(Map.of("1_a.sql", proof));
+        assertEquals("OWNER_ATTESTED_APPLIED", service.review(7L, projectId).migrations().getFirst().status());
+        assertEquals(List.of("OWNER_ATTESTED_APPLIED"), statuses());
+        assertTrue(executedSql.isEmpty());
     }
 
     private List<String> statuses() {
@@ -327,7 +389,7 @@ class SupabaseServiceTest {
                 String auth = exchange.getRequestHeaders().getFirst("Authorization");
                 int status;
                 String body = "{}";
-                if (path.equals("/" + REF + "/auth/v1/user")) {
+                if (path.equals("/" + REF + "/auth/v1/user") || path.equals("/" + OTHER_REF + "/auth/v1/user")) {
                     // Like Supabase: the gateway rejects an unknown key (401); auth answers 403 without a session.
                     status = ANON.equals(exchange.getRequestHeaders().getFirst("apikey")) ? 403 : 401;
                 } else if (path.equals("/v1/projects/" + REF)) {

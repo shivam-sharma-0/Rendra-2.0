@@ -69,7 +69,40 @@ public class SupabaseController {
         return supabase.operationByKey(principal.userId(), projectId, idempotencyKey);
     }
 
+    /** Migrations applied before the ledger existed, for the owner to confirm (owner-attested, never verified). */
+    @GetMapping("/migrations/legacy/review")
+    public SupabaseOwnerAttestations.LegacyReview legacyReview(@AuthenticationPrincipal AuthPrincipal principal,
+                                                               @PathVariable UUID projectId) {
+        return supabase.legacyReview(principal.userId(), projectId);
+    }
+
+    @PostMapping("/migrations/legacy/adopt")
+    public SupabaseOwnerAttestations.Receipt adoptLegacy(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId,
+                                                         @RequestBody AdoptRequest request,
+                                                         @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        return supabase.adoptLegacy(principal.userId(), projectId, request.expectedReviewHash(), idempotencyKey, request.confirmed());
+    }
+
+    /** The steps whose outcome is unknown, for the owner to check in their database before resolving. */
+    @GetMapping("/migrations/operations/{operationId}/recovery-review")
+    public SupabaseOwnerAttestations.RecoveryReview recoveryReview(@AuthenticationPrincipal AuthPrincipal principal,
+                                                                   @PathVariable UUID projectId, @PathVariable UUID operationId) {
+        return supabase.recoveryReview(principal.userId(), projectId, operationId);
+    }
+
+    /** Records the owner's per-step decision; never re-runs SQL. A later apply needs a fresh review. */
+    @PostMapping("/migrations/operations/{operationId}/resolve")
+    public SupabaseOwnerAttestations.Receipt resolve(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId,
+                                                     @PathVariable UUID operationId, @RequestBody ResolveRequest request,
+                                                     @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        return supabase.resolveRecovery(principal.userId(), projectId, operationId, request.expectedReviewHash(), idempotencyKey,
+                request.decisions() == null ? List.of() : request.decisions(), request.senderQuiescentConfirmed());
+    }
+
     public record ApplyRequest(String expectedManifestHash) {}
+    public record AdoptRequest(String expectedReviewHash, boolean confirmed) {}
+    public record ResolveRequest(String expectedReviewHash, List<SupabaseOwnerAttestations.ResolutionDecision> decisions,
+                                 boolean senderQuiescentConfirmed) {}
 
     /** {@code accessToken}: optional personal access token, needed only to apply migrations from here. */
     public record ConnectRequest(String url, String anonKey, String accessToken) {}
