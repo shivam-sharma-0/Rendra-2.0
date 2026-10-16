@@ -80,6 +80,22 @@ class RunBehaviorCriteriaIT {
         jdbc.update("update agent_runs set status='DONE' where id=?",edit);
         assertEquals(List.of("menu"),store.regression(context(f,later)).browser().stream().map(BehaviorCriteria.BrowserAction::id).toList());
     }
+    @Test
+    void modelProvenanceSurvivesRestartAndFollowUpRetirement() {
+        var f = fixture();
+        var original = two();
+        var model = new BehaviorCriteria(1, original.browser(), List.of(), false, false, BehaviorCriteria.Provenance.MODEL_SPEC);
+        store.install(f.run(), f.project(), f.projection(), 2, model);
+        var restarted = new RunBehaviorCriteria(jdbc, mapper, app.getBean(ApprovedProjectMemory.class));
+        assertEquals(model, restarted.current(f.context()));
+        jdbc.update("update agent_runs set status='DONE' where id=?", f.run());
+        var edit = context(f, followUp(f, "RUNNING"));
+        assertTrue(restarted.regression(edit).modelSpec());
+        store.retire(edit, List.of("heading"), "User removed the heading");
+        assertTrue(restarted.regression(edit).modelSpec());
+        assertEquals(List.of("menu"), restarted.regression(edit).browser().stream().map(BehaviorCriteria.BrowserAction::id).toList());
+    }
+
     @Configuration @Import({ApprovedProjectMemory.class,RunBehaviorCriteria.class})
     static class Services {
         @Bean ObjectMapper mapper(){return new ObjectMapper();}

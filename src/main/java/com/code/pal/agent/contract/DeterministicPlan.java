@@ -111,7 +111,7 @@ public final class DeterministicPlan {
         var criteria = SpecPlanValues.acceptance(approved);
         var actions = criteria.browser();
         if (actions.stream().noneMatch(action -> Set.of(BrowserKind.ASSERT_TEXT,
-                BrowserKind.ASSERT_COUNT, BrowserKind.ASSERT_ROUTE).contains(action.kind()))) {
+                BrowserKind.ASSERT_COUNT, BrowserKind.ASSERT_EXISTS, BrowserKind.ASSERT_ROUTE).contains(action.kind()))) {
             return Optional.empty();
         }
         var pageFiles = SpecPlanValues.pages(approved);

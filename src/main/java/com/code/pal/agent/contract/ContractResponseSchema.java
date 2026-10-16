@@ -131,6 +131,9 @@ final class ContractResponseSchema {
         var fields = new LinkedHashMap<String, Object>();
         var required = new ArrayList<String>();
         for (var component : clazz.getRecordComponents()) {
+            if (clazz == BehaviorCriteria.class && component.getName().equals("provenance")) {
+                continue;
+            }
             var field = type(component.getGenericType());
             String name = component.getName();
             if (component.getType() == String.class) {

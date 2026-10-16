@@ -2,6 +2,7 @@ package com.code.pal.agent.validation;
 
 import com.code.pal.agent.change.ChangeSetService;
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.preview.BuildVariables;
 import com.code.pal.agent.stack.DependencyService;
 import com.code.pal.agent.stack.StackPack;
 import com.code.pal.agent.stack.StackPacks;
@@ -10,19 +11,19 @@ import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.SandboxPort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
-import com.code.pal.agent.preview.BuildVariables;
-import java.util.Map;
-import java.util.Objects;
-import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Loads the staged site in a headless browser and reports what breaks at runtime: uncaught exceptions,
@@ -60,9 +61,18 @@ public class RuntimeCheckService {
         this.candidateBrowser = Objects.requireNonNull(browser);
     }
 
-    public record Result(ValidationCheck check, List<ProjectDiagnostic> diagnostics) {
+    public record Result(ValidationCheck check, List<ProjectDiagnostic> diagnostics, ValidationCheck approvedBehaviour) {
+        public Result(ValidationCheck check, List<ProjectDiagnostic> diagnostics) {
+            this(check, diagnostics, null);
+        }
+
         public Result {
             diagnostics = List.copyOf(diagnostics);
+        }
+
+        /** Keep advisory checks in the report even when the required runtime check passes. */
+        public List<ValidationCheck> checks() {
+            return approvedBehaviour == null ? List.of(check) : List.of(check, approvedBehaviour);
         }
     }
 
@@ -82,6 +92,27 @@ public class RuntimeCheckService {
         if (staged == null)
             return new Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED, true,
                     "Candidate runtime probe was unavailable or unreadable"), List.of());
+        var runtime = runtimeResult(context, staged);
+        if (!staged.modelSpec()) {
+            return runtime;
+        }
+        var warnings = new ArrayList<>(runtime.diagnostics());
+        for (String id : staged.failedActions()) {
+            warnings.add(modelDiagnostic(id, false));
+        }
+        for (String id : staged.blockedActions()) {
+            warnings.add(modelDiagnostic(id, true));
+        }
+        boolean passed = staged.failedActions().isEmpty() && staged.blockedActions().isEmpty();
+        String reason = "MODEL_SPEC; failed_scenarios=" + scenarios(staged.failedActions())
+                + "; blocked_scenarios=" + scenarios(staged.blockedActions());
+        var advisory = new ValidationCheck("APPROVED_BEHAVIOUR",
+                passed ? ValidationCheck.Outcome.PASS : ValidationCheck.Outcome.FAIL, false, reason);
+        log.info("approved_behaviour runId={} outcome={} reason={}", context.runId(), advisory.outcome(), reason);
+        return new Result(runtime.check(), warnings, advisory);
+    }
+
+    private Result runtimeResult(AgentContext context, Probe staged) {
         if (staged.issues().stream().anyMatch(issue -> issue.kind().equals("api-unavailable")))
             return new Result(
                     new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED, true,
@@ -118,7 +149,10 @@ public class RuntimeCheckService {
     }
 
     /** {@code interactions}: how many controls the probe exercised after the page loaded. */
-    private record Probe(List<Issue> issues, int interactions) {
+    private record Probe(List<Issue> issues, int interactions, boolean modelSpec, List<String> failedActions, List<String> blockedActions) {
+        Probe(List<Issue> issues, int interactions) {
+            this(issues, interactions, false, List.of(), List.of());
+        }
     }
 
     /** Builds (if the stack needs it) a copy of the staged or live project and loads it; null if skipped. */
@@ -140,15 +174,20 @@ public class RuntimeCheckService {
             var actions = criteria == null ? List.<BehaviorCriteria.BrowserAction>of() : criteria.browser();
             String acceptance = objectMapper.writeValueAsString(Map.of("schema", 1, "actions", actions));
             boolean mern = "mern".equals(stacks.detect(files, projectId, copy).id());
-            SandboxPort.CommandResult result = mern
-                    ? candidateBrowser == null
-                            ? new SandboxPort.CommandResult(false, -1, "",
-                                    SandboxPort.CommandResult.NOT_STARTED + ": candidate API browser not wired")
-                            : candidateBrowser.browse(context, copy, site, acceptance)
-                    : actions.isEmpty() ? sandbox.browse(projectId, site) : sandbox.browse(projectId, site, acceptance);
-            if (!result.started() || !result.success()) {
-                log.warn("runtime_check_skipped runId={} reason={}", context.runId(),
-                        result.error().isBlank() ? result.stdout() : result.error());
+            Probe smoke = null;
+            if (!actions.isEmpty()) {
+                // A separate fresh browser keeps generic control smoke mandatory without dirtying the spec recipe's state.
+                // Both passes use this same built site; do not rebuild the candidate between them.
+                var smokeResult = browse(context, copy, site, null, mern);
+                smoke = readable(smokeResult) ? parse(smokeResult.stdout()) : null;
+                if (smoke == null) {
+                    log.warn("runtime_check_skipped runId={} phase=smoke reason=unavailable_or_unreadable", context.runId());
+                    return null;
+                }
+            }
+            var result = browse(context, copy, site, actions.isEmpty() ? null : acceptance, mern);
+            if (!readable(result)) {
+                log.warn("runtime_check_skipped runId={} phase=recipe reason=unavailable", context.runId());
                 return null;
             }
             Probe probe = parse(result.stdout());
@@ -159,6 +198,10 @@ public class RuntimeCheckService {
                 if (!actual.isArray() || actual.size() != actions.size())
                     return null;
                 List<Issue> checked = new ArrayList<>(probe.issues());
+                checked.addAll(smoke.issues());
+                var failedActions = new ArrayList<String>();
+                var blockedActions = new ArrayList<String>();
+                boolean modelSpec = criteria.modelSpec();
                 boolean prerequisiteFailed = false;
                 for (int i = 0; i < actions.size(); i++) {
                     var a = actual.get(i);
@@ -167,17 +210,25 @@ public class RuntimeCheckService {
                     if (a.path("prerequisiteFailed").asBoolean(false)) {
                         if (!prerequisiteFailed || a.path("passed").asBoolean())
                             return null;
+                        if (modelSpec) {
+                            blockedActions.add(actions.get(i).id());
+                        }
                         continue;
                     }
                     if (!a.path("passed").asBoolean()) {
                         prerequisiteFailed = true;
-                        checked.add(new Issue("acceptance", inherited
-                                ? "Earlier approved check " + actions.get(i).id() + " no longer passes: keep that feature "
-                                        + "working, or call retireAcceptanceCheck with this id if the user asked to change it"
-                                : "Required interaction " + actions.get(i).id() + " did not pass", null));
+                        if (modelSpec) {
+                            failedActions.add(actions.get(i).id());
+                        } else {
+                            checked.add(new Issue("acceptance", inherited
+                                    ? "Earlier approved check " + actions.get(i).id() + " no longer passes: keep that feature "
+                                            + "working, or call retireAcceptanceCheck with this id if the user asked to change it"
+                                    : "Required interaction " + actions.get(i).id() + " did not pass", null));
+                        }
                     }
                 }
-                probe = new Probe(List.copyOf(checked), probe.interactions());
+                probe = new Probe(List.copyOf(checked), probe.interactions() + smoke.interactions(), modelSpec,
+                        List.copyOf(failedActions), List.copyOf(blockedActions));
             }
             log.info("runtime_check runId={} target={} issues={} interactions={} elapsedMs={}", context.runId(),
                     staged ? "staged" : "live",
@@ -190,6 +241,33 @@ public class RuntimeCheckService {
             } catch (RuntimeException ignored) {
             }
         }
+    }
+
+    private SandboxPort.CommandResult browse(AgentContext context, String copy, String site, String acceptance, boolean mern) {
+        if (mern) {
+            return candidateBrowser == null
+                    ? new SandboxPort.CommandResult(false, -1, "", SandboxPort.CommandResult.NOT_STARTED + ": candidate API browser not wired")
+                    : candidateBrowser.browse(context, copy, site,
+                            acceptance == null ? objectMapper.writeValueAsString(Map.of("schema", 1, "actions", List.of())) : acceptance);
+        }
+        return acceptance == null ? sandbox.browse(context.projectId(), site) : sandbox.browse(context.projectId(), site, acceptance);
+    }
+
+    private static boolean readable(SandboxPort.CommandResult result) {
+        return result != null && result.started() && result.success();
+    }
+
+    private static String scenarios(List<String> actions) {
+        var ids = new LinkedHashSet<String>();
+        actions.forEach(id -> ids.add(id.replaceFirst("_[0-9]+$", "")));
+        return String.join(",", ids);
+    }
+
+    private static ProjectDiagnostic modelDiagnostic(String id, boolean blocked) {
+        String message = blocked ? "Approved behaviour check " + id + " was not run because an earlier step failed"
+                : "Approved behaviour check " + id + " did not pass; the requested behaviour could not be confirmed";
+        return new ProjectDiagnostic(null, null, null, DiagnosticSeverity.WARNING, message, "approved-behaviour",
+                blocked ? "MODEL_SPEC_ASSERTION_BLOCKED" : "MODEL_SPEC_ASSERTION_FAILED");
     }
 
     /** The folder to load: the readable build output, or the files themselves for a static site. */
@@ -231,6 +309,9 @@ public class RuntimeCheckService {
                 issues.add(new Issue(issue.path("kind").asText("console"), issue.path("message").asText(""),
                         issue.path("source").isNull() ? null : issue.path("source").asText(null),
                         issue.path("action").isNull() ? null : issue.path("action").asText(null)));
+            }
+            if (report.path("blank").asBoolean(false) && issues.stream().noneMatch(issue -> issue.kind().equals("blank"))) {
+                issues.add(new Issue("blank", "Candidate page was blank", null));
             }
             return new Probe(List.copyOf(issues), report.path("interactions").size());
         } catch (RuntimeException unreadable) {

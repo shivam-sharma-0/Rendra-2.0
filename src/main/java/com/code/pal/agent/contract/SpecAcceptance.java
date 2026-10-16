@@ -35,7 +35,20 @@ public final class SpecAcceptance {
                 + "The compiled acceptance is authoritative when an original selector suggests a different destination.";
     }
 
+    /** The structured-contract form: strict link counts and the historical (blocking, unlabelled) provenance. */
     static Compiled compile(ApprovedSpec approved) {
+        return compile(approved, false);
+    }
+
+    /**
+     * The production tool-loop form: these checks were drafted by the same model that builds the app, so they are
+     * labelled MODEL_SPEC (advisory) and a link only has to exist; the first match is used.
+     */
+    static Compiled compileForToolLoop(ApprovedSpec approved) {
+        return compile(approved, true);
+    }
+
+    private static Compiled compile(ApprovedSpec approved, boolean toolLoop) {
         var actions = new ArrayList<BrowserAction>();
         var targets = new LinkedHashMap<String, Target>();
         var routes = approved.spec().pages().stream().map(ApprovedSpec.Page::path).toList();
@@ -116,16 +129,24 @@ public final class SpecAcceptance {
                     }
                 }
                 String linkSelector = "a" + selector + predicate;
-                actions.add(new BrowserAction(id, BrowserKind.ASSERT_COUNT, linkSelector, "1"));
+                actions.add(linkCheck(id, linkSelector, toolLoop));
                 if (followingRoute != null) {
                     // The model invented a route after a mailto/external/fragment link. Prove its href instead.
                     // Keep the action id/ownership; do not pretend that an unapproved page was visited.
                     index++;
-                    actions.add(new BrowserAction(scenario.id() + "_" + index, BrowserKind.ASSERT_COUNT, linkSelector, "1"));
+                    actions.add(linkCheck(scenario.id() + "_" + index, linkSelector, toolLoop));
                 }
             }
         }
-        return new Compiled(new BehaviorCriteria(1, actions, List.of(), false, false), List.copyOf(targets.values()));
+        var criteria = new BehaviorCriteria(1, actions, List.of(), false, false,
+                toolLoop ? BehaviorCriteria.Provenance.MODEL_SPEC : null);
+        return new Compiled(criteria, List.copyOf(targets.values()));
+    }
+
+    /** A link must exist; the contract form also requires exactly one, the tool loop accepts the first of several. */
+    private static BrowserAction linkCheck(String id, String selector, boolean toolLoop) {
+        return toolLoop ? new BrowserAction(id, BrowserKind.ASSERT_EXISTS, selector, null)
+                : new BrowserAction(id, BrowserKind.ASSERT_COUNT, selector, "1");
     }
 
     public static List<Target> targets(BuildContract contract, ApprovedSpec spec, Set<String> actionIds) {

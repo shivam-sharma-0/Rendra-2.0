@@ -222,11 +222,13 @@ public class ProjectValidationService {
                 revisionResults(context).runtime = runtimeResult;
                 revisionResults(context).runtimeCriteria = criteriaKey;
             }
-            checks.add(runtimeResult.check());
+            // RUNTIME decides blocking; APPROVED_BEHAVIOUR (checks drafted from the model's spec) is advisory and its
+            // WARNING diagnostics are recorded even when RUNTIME passes.
+            checks.addAll(runtimeResult.checks());
+            introduced.addAll(runtimeResult.diagnostics());
             if (runtimeResult.check().outcome() == ValidationCheck.Outcome.PASS)
                 executed.add("RUNTIME");
             if (runtimeResult.check().blocksSuccess()) {
-                introduced.addAll(runtimeResult.diagnostics());
                 if (runtimeResult.diagnostics().stream().anyMatch(d -> "PRE_EXISTING_RUNTIME_FAILURE".equals(d.code())))
                     terminal = true;
                 passed = false;

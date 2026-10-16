@@ -72,9 +72,10 @@ public final class RunBehaviorCriteria {
         var retired = new HashSet<>(jdbc.queryForList("select t.action_id from agent_acceptance_retirements t "
                 + "join agent_runs r on r.id=t.run_id where t.project_id=? and t.created_at>? and (t.run_id=? or r.status='DONE')",
                 String.class, ctx.projectId(), source.created(), ctx.runId()));
-        var browser = mapper.readValue(source.json(), BehaviorCriteria.class).browser().stream()
+        var criteria = mapper.readValue(source.json(), BehaviorCriteria.class);
+        var browser = criteria.browser().stream()
                 .filter(action -> !retired.contains(action.id())).toList();
-        return browser.isEmpty() ? null : new BehaviorCriteria(1, browser, List.of(), false, false);
+        return browser.isEmpty() ? null : new BehaviorCriteria(1, browser, List.of(), false, false, criteria.provenance());
     }
 
     /** Retires inherited checks the user's request intentionally changes or removes; returns what remains. */

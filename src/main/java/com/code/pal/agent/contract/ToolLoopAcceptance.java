@@ -16,7 +16,8 @@ import java.util.Set;
 public final class ToolLoopAcceptance {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final int MAX_GUIDANCE_BYTES = 24_000;
-    private static final Set<BrowserKind> ASSERTIONS = Set.of(BrowserKind.ASSERT_TEXT, BrowserKind.ASSERT_COUNT, BrowserKind.ASSERT_ROUTE);
+    private static final Set<BrowserKind> ASSERTIONS = Set.of(
+            BrowserKind.ASSERT_TEXT, BrowserKind.ASSERT_COUNT, BrowserKind.ASSERT_EXISTS, BrowserKind.ASSERT_ROUTE);
     private static final String POLICY = """
             <tool_loop_acceptance>
             Implement the approved behavior below. checks is the complete ordered browser recipe, including fixture values and expected results.
@@ -55,7 +56,7 @@ public final class ToolLoopAcceptance {
         if (approved.desired().storage() == ApprovedSpec.Storage.SUPABASE || approved.desired().auth() != ApprovedSpec.Auth.NONE) {
             throw new IllegalArgumentException("Tool-loop connector acceptance requires its dedicated adapter; browser checks cannot certify cloud data or accounts");
         }
-        var source = SpecAcceptance.compile(approved);
+        var source = SpecAcceptance.compileForToolLoop(approved);
         if (source.criteria().browser().stream().noneMatch(action -> ASSERTIONS.contains(action.kind()))) {
             return Optional.empty();
         }

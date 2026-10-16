@@ -28,6 +28,19 @@ class ToolLoopAcceptanceTest {
     }
 
     @Test
+    void aCompilerDerivedLinkExistenceCheckDoesNotWeakenAnExplicitCount() {
+        var spec = scenario("mail", step("CLICK", "a[href='mailto:hello@example.invalid']", null),
+                step("ASSERT_COUNT", "a[href='mailto:hello@example.invalid']", "1"));
+        var actions = ToolLoopAcceptance.from(spec).orElseThrow().criteria().browser();
+        assertEquals(BrowserKind.ASSERT_EXISTS, actions.getFirst().kind(), "a link only has to exist");
+        assertNull(actions.getFirst().value());
+        assertEquals(BrowserKind.ASSERT_COUNT, actions.getLast().kind(), "an explicit count stays exact");
+        assertEquals("1", actions.getLast().value());
+        assertEquals(BrowserKind.ASSERT_COUNT, SpecAcceptance.compile(spec).criteria().browser().getFirst().kind(),
+                "the structured-contract form keeps its strict link count");
+    }
+
+    @Test
     void todoChecksAddCompleteAndReloadWithMatchingNativeStateHooks() {
         var original = scenario("tasks", step("FILL", "#task-title", "Bake bread"), step("CLICK", "#add-task", null),
                 step("ASSERT_TEXT", "[data-task]", "Bake bread"), step("CLICK", "[data-task] input", null),
@@ -44,7 +57,8 @@ class ToolLoopAcceptanceTest {
         assertEquals(actions.get(4).selector(), actions.get(7).selector());
         assertEquals("Bake bread", actions.get(6).value());
         assertEquals(4, compiled.requiredHooks().size());
-        assertEquals(SpecAcceptance.compile(spec).criteria(), compiled.criteria());
+        assertEquals(SpecAcceptance.compileForToolLoop(spec).criteria(), compiled.criteria());
+        assertTrue(compiled.criteria().modelSpec());
         assertTrue(compiled.criteria().api().isEmpty());
     }
 

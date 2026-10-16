@@ -281,6 +281,7 @@ for (const expected of acceptanceActions) {
     // A hash router ("#/classes", which works under any hosting prefix) and a path router both count.
     if (a.kind === 'ASSERT_ROUTE') return (location.hash.startsWith('#/') ? location.hash.slice(1).split('?')[0] : location.pathname) === a.value;
     if (a.kind === 'ASSERT_COUNT') return document.querySelectorAll(a.selector).length === Number(a.value);
+    if (a.kind === 'ASSERT_EXISTS') return document.querySelectorAll(a.selector).length >= 1;
     const el = document.querySelector(a.selector); if (!el) return false;
     if (a.kind === 'ASSERT_TEXT') return (el.textContent ?? '').includes(a.value);
     if (a.kind === 'CLICK') { if (typeof el.click !== 'function') return false; el.click(); return true; }
@@ -308,6 +309,8 @@ for (const expected of acceptanceActions) {
   }
   await new Promise(r => setTimeout(r, 150));
 }
+// A failed model assertion is advisory, but a page that disappeared during any recipe is a runtime failure.
+if (loaded && !await visibleNow()) add("blank", "The page went blank after browser interactions", null);
 if (loaded && !blank && acceptance.length > 0 && acceptance.every((a) => a.passed)) await measureMobile("after the required steps");
 clearTimeout(timer);
 chrome.kill("SIGKILL");

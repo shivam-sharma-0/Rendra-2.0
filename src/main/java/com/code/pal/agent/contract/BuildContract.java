@@ -136,6 +136,9 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         Objects.requireNonNull(auth);
         Objects.requireNonNull(limits);
         Objects.requireNonNull(acceptance);
+        if (schemaVersion == 1 && acceptance.modelSpec()) {
+            bad("Contract acceptance cannot opt into server-owned model-spec advisory provenance");
+        }
         theme = Map.copyOf(theme);
         routes = bounded(routes, 20);
         types = bounded(types, 16);
@@ -173,7 +176,8 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         if (acceptance.browser().isEmpty()
                 || acceptance.browser().stream()
                         .noneMatch(a -> Set.of(BehaviorCriteria.BrowserKind.ASSERT_TEXT,
-                                BehaviorCriteria.BrowserKind.ASSERT_COUNT, BehaviorCriteria.BrowserKind.ASSERT_ROUTE)
+                                BehaviorCriteria.BrowserKind.ASSERT_COUNT, BehaviorCriteria.BrowserKind.ASSERT_EXISTS,
+                                BehaviorCriteria.BrowserKind.ASSERT_ROUTE)
                                 .contains(a.kind())))
             bad("Frontend assertions missing");
         if (storage != BuildDecisions.Storage.SUPABASE

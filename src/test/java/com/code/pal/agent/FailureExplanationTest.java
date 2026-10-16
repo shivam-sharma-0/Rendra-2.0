@@ -52,6 +52,19 @@ class FailureExplanationTest {
     }
 
     @Test
+    void aSavedBuildSaysWhenRequestedBehaviourCouldNotBeConfirmed() {
+        var advisory = new ValidationCheck(FailureExplanation.APPROVED_BEHAVIOUR, ValidationCheck.Outcome.FAIL, false,
+                "add_task_scenario_0, complete_task_scenario_0");
+        String note = FailureExplanation.unconfirmedBehaviour(report(true, List.of(), advisory));
+        assertTrue(note.contains("Build saved; some requested behaviour could not be confirmed"), note);
+        assertTrue(note.contains("add_task_scenario_0"), note);
+
+        var passed = new ValidationCheck(FailureExplanation.APPROVED_BEHAVIOUR, ValidationCheck.Outcome.PASS, false, "");
+        assertEquals("", FailureExplanation.unconfirmedBehaviour(report(true, List.of(), passed)));
+        assertEquals("", FailureExplanation.unconfirmedBehaviour(null));
+    }
+
+    @Test
     void otherFailuresSayWhatToDoAndNeverClaimASave() {
         assertTrue(FailureExplanation.failure(AgentFailureReason.RUN_LIMIT_REACHED, false, "x").contains("ran out of steps"));
         assertTrue(FailureExplanation.failure(AgentFailureReason.PROVIDER_REQUEST_REJECTED, false, "x").contains("rejected"));

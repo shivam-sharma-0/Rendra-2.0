@@ -16,6 +16,7 @@ final class FailureExplanation {
     static final String NOTHING_SAVED = "Nothing was saved; your previous version is unchanged.";
     static final String RETRY = "Retry to let me continue from this draft, or ask for a smaller first step.";
     private static final int MAX_DETAIL = 200;
+    static final String APPROVED_BEHAVIOUR = "APPROVED_BEHAVIOUR";
     private static final Map<String, String> CHECKS = Map.of(
             "STRUCTURE", "the project files were incomplete",
             "TYPE_CHECK", "the code still had type errors after my repair attempts",
@@ -52,6 +53,28 @@ final class FailureExplanation {
                     + " Try again; a shorter request or fewer attachments usually helps.";
             default -> "Something went wrong on our side before this build finished. " + NOTHING_SAVED + " Please try again.";
         };
+    }
+
+    /**
+     * The note a saved build carries when advisory checks drafted from the approved spec did not pass: the app was
+     * saved because every platform check passed, but it is not claimed to do everything that was asked.
+     */
+    static String unconfirmedBehaviour(ValidationReport report) {
+        if (report == null) {
+            return "";
+        }
+        return report.checks().stream()
+                .filter(check -> APPROVED_BEHAVIOUR.equals(check.id()) && check.outcome() == ValidationCheck.Outcome.FAIL)
+                .findFirst()
+                .map(check -> "\n\nBuild saved; some requested behaviour could not be confirmed"
+                        + (check.reason().isBlank() ? "" : " (" + bounded(check.reason()) + ")")
+                        + ". Open Details to see which checks did not pass.")
+                .orElse("");
+    }
+
+    private static String bounded(String text) {
+        String clean = text.replaceAll("\\s+", " ").strip();
+        return clean.length() > MAX_DETAIL ? clean.substring(0, MAX_DETAIL) + "…" : clean;
     }
 
     private static String detail(ProjectDiagnostic diagnostic) {

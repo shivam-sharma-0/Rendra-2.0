@@ -1140,7 +1140,9 @@ public class AgentRunner implements AgentRuntime {
         }
         buildSite(run);
         moveProject(run, ProjectStage.REVIEW);
-        stream.append(BuildReplyText.success(summary, run));
+        stream.append(BuildReplyText.success(summary, run)
+                + FailureExplanation.unconfirmedBehaviour(validation == null ? null
+                        : validation.lastReport(run.getId())));
     }
 
     private AgentRunResult completeRun(RunState state) {

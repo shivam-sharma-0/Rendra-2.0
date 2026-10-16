@@ -1,13 +1,28 @@
 package com.code.pal.agent.validation;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.*;
 import java.util.regex.Pattern;
 
 /** Bounded acceptance data, never executable model-written JavaScript or external URLs. */
 public record BehaviorCriteria(int schema, List<BrowserAction> browser, List<ApiStep> api, boolean authRequired,
-        boolean crudRequired) {
+        boolean crudRequired, @JsonInclude(JsonInclude.Include.NON_NULL) Provenance provenance) {
+    /** Null is the historical, blocking default; omit it to preserve persisted contract identities. */
+    public enum Provenance {
+        PLATFORM, MODEL_SPEC
+    }
+
+    public BehaviorCriteria(int schema, List<BrowserAction> browser, List<ApiStep> api, boolean authRequired,
+            boolean crudRequired) {
+        this(schema, browser, api, authRequired, crudRequired, null);
+    }
+
+    public boolean modelSpec() {
+        return provenance == Provenance.MODEL_SPEC;
+    }
+
     public enum BrowserKind {
-        CLICK, FILL, SELECT, ASSERT_TEXT, ASSERT_COUNT, ASSERT_ROUTE, RELOAD
+        CLICK, FILL, SELECT, ASSERT_TEXT, ASSERT_COUNT, ASSERT_EXISTS, ASSERT_ROUTE, RELOAD
     }
 
     public record BrowserAction(String id, BrowserKind kind, String selector, String value) {
@@ -25,6 +40,9 @@ public record BehaviorCriteria(int schema, List<BrowserAction> browser, List<Api
     public BehaviorCriteria {
         browser = browser == null ? List.of() : List.copyOf(browser);
         api = api == null ? List.of() : List.copyOf(api);
+        if (provenance == Provenance.MODEL_SPEC && (!api.isEmpty() || authRequired || crudRequired)) {
+            throw new IllegalArgumentException("Model-spec advisory scope is browser-only; API, auth and CRUD checks remain blocking");
+        }
         if (schema != 1 || browser.size() > 24 || api.size() > 24 || (browser.isEmpty() && api.isEmpty()))
             throw new IllegalArgumentException("Invalid acceptance schema/size");
         Set<String> ids = new HashSet<>();
@@ -36,7 +54,7 @@ public record BehaviorCriteria(int schema, List<BrowserAction> browser, List<Api
             if (a.kind() != BrowserKind.ASSERT_ROUTE && a.kind() != BrowserKind.RELOAD
                     && (a.selector() == null || a.selector().isBlank()))
                 throw new IllegalArgumentException("Acceptance selector missing");
-            if (a.kind() != BrowserKind.CLICK && a.kind() != BrowserKind.RELOAD && a.value() == null)
+            if (a.kind() != BrowserKind.CLICK && a.kind() != BrowserKind.RELOAD && a.kind() != BrowserKind.ASSERT_EXISTS && a.value() == null)
                 throw new IllegalArgumentException("Acceptance value missing");
             if (a.kind() == BrowserKind.ASSERT_COUNT && !a.value().matches("[0-9]{1,4}"))
                 throw new IllegalArgumentException("Invalid expected count");
