@@ -47,7 +47,7 @@ export function Button({ variant = 'primary', size = 'md', type = 'button', clas
 }
 
 interface FieldProps {
-  label: string
+  label?: string
   hint?: string
   error?: string
 }
@@ -59,9 +59,11 @@ const CONTROL =
 function Field({ id, label, hint, error, children }: FieldProps & { id: string; children: ReactNode }) {
   return (
     <div className="grid gap-1">
-      <label htmlFor={id} className="text-sm font-medium">
-        {label}
-      </label>
+      {label ? (
+        <label htmlFor={id} className="text-sm font-medium">
+          {label}
+        </label>
+      ) : null}
       {children}
       {error ? (
         <p id={`${id}-message`} className="text-sm text-red-600">
@@ -205,7 +207,7 @@ export function EmptyState({ title, description, action, className, ...props }: 
 }
 
 export interface PageShellProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
-  title: string
+  title?: string
   nav?: ReactNode
   actions?: ReactNode
   children: ReactNode
@@ -217,7 +219,7 @@ export function PageShell({ title, nav, actions, children, className, ...props }
     <div {...props} className={cx('min-h-screen bg-background text-foreground', className)}>
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
-          <p className="text-lg font-semibold">{title}</p>
+          {title ? <p className="text-lg font-semibold">{title}</p> : null}
           {nav ? <nav className="flex min-w-0 flex-wrap gap-4 text-sm">{nav}</nav> : null}
           {actions ? <div className="ml-auto flex flex-wrap gap-2">{actions}</div> : null}
         </div>

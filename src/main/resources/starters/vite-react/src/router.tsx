@@ -1,4 +1,4 @@
-import { Children, isValidElement, useEffect, useState, type ReactNode } from 'react'
+import { Children, isValidElement, useEffect, useState, type AnchorHTMLAttributes, type ReactNode } from 'react'
 
 // A small hash router so an app can have several pages without another package.
 // Paths look like "/about"; links point to "#/about", which also works on static hosting.
@@ -29,9 +29,13 @@ export function Router({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 
-export function Link({ to, className, children }: { to: string; className?: string; children: ReactNode }) {
+export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> {
+  to: string
+}
+
+export function Link({ to, children, ...props }: LinkProps) {
   return (
-    <a href={'#' + to} className={className}>
+    <a {...props} href={'#' + to}>
       {children}
     </a>
   )
@@ -42,9 +46,9 @@ export function Route(props: RouteProps): ReactNode {
   return props.element
 }
 
-export function Routes({ children }: { children: ReactNode }) {
-  const path = useRoute()
-  let fallback: ReactNode = (
+/** The built-in page for unknown addresses; use it in <Route path="*" element={<NotFound />} /> or restyle it. */
+export function NotFound() {
+  return (
     <main className="mx-auto max-w-xl p-8 text-center">
       <h1 className="text-2xl font-semibold">Page not found</h1>
       <a href="#/" className="mt-4 inline-block underline">
@@ -52,6 +56,11 @@ export function Routes({ children }: { children: ReactNode }) {
       </a>
     </main>
   )
+}
+
+export function Routes({ children }: { children: ReactNode }) {
+  const path = useRoute()
+  let fallback: ReactNode = <NotFound />
   for (const child of Children.toArray(children)) {
     if (!isValidElement<RouteProps>(child) || child.type !== Route) continue
     if (child.props.path === path) return <>{child.props.element}</>
