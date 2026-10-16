@@ -183,14 +183,6 @@ public class DraftPreviewService {
         // Local absence cannot prove a different backend instance has abandoned a run.
     }
 
-    private static UUID parse(String name) {
-        try {
-            return UUID.fromString(name);
-        } catch (IllegalArgumentException notARun) {
-            return new UUID(0, 0);
-        }
-    }
-
     private void removeQuietly(UUID projectId, String path) {
         try {
             sandbox.removeTree(projectId, path);

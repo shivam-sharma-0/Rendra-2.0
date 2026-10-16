@@ -6,7 +6,6 @@ import com.code.pal.identity.dto.AuthResponse;
 import com.code.pal.identity.dto.LoginRequest;
 import com.code.pal.identity.dto.OAuthLoginResult;
 import com.code.pal.identity.dto.SignUpRequest;
-import com.code.pal.identity.dto.UserResponse;
 import com.code.pal.identity.exception.EmailAlreadyExistsException;
 import com.code.pal.identity.exception.InvalidCredentialsException;
 import com.code.pal.identity.repository.UserRepository;

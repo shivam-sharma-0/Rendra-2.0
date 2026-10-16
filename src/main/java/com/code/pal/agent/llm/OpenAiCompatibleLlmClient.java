@@ -507,10 +507,6 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         }
     }
 
-    private static String readAtMost(InputStream stream, int maximum) throws IOException {
-        try (stream) { return new String(stream.readNBytes(maximum), StandardCharsets.UTF_8); }
-    }
-
     private static void closeQuietly(InputStream stream) {
         try { stream.close(); } catch (IOException ignored) { }
     }
