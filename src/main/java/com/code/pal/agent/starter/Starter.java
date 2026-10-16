@@ -21,10 +21,10 @@ public enum Starter {
     MERN("mern");
 
     private static final String BASE = "starters/";
-    public static final String TEMPLATE_VERSION = "2026-10-16.1";
+    public static final String TEMPLATE_VERSION = "2026-10-16.2";
     public static final String RUNTIME_IMAGE = "node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c";
     private static final List<String> VITE_FILES = List.of("package.json", "package-lock.json", "tsconfig.json", "vite.config.ts",
-            "index.html", "src/main.tsx", "src/index.css", "src/router.tsx");
+            "index.html", "src/main.tsx", "src/index.css", "src/router.tsx", "src/ui.tsx");
     private static final List<String> SERVER_FILES = List.of("server/package.json", "server/package-lock.json", "server/tsconfig.json", "server/src/index.ts");
     private static final int MAX_TITLE = 60;
 
@@ -65,7 +65,8 @@ public enum Starter {
         return this == MERN
                 ? "Write client/src/App.tsx (export default function App) and the client's components, then the API: "
                         + "add routes under /api in server/src (register them in server/src/index.ts) and mongoose models."
-                : "Write src/App.tsx (export default function App) and your components under src/. Style with Tailwind classes.";
+                : "Write src/App.tsx (export default function App) and your components under src/, built from the tested kit in "
+                        + "src/ui.tsx (PageShell, Card, Button, Input, TextArea, Select, Badge, EmptyState) and Tailwind classes.";
     }
 
     private static String title(String title) {

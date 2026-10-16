@@ -1,1 +1,20 @@
 @import "tailwindcss";
+
+/* Theme tokens: change these to restyle every component in src/ui.tsx (bg-accent, text-muted, rounded-ui, ...). */
+@theme {
+  --color-background: #ffffff;
+  --color-foreground: #111827;
+  --color-surface: #f9fafb;
+  --color-border: #e5e7eb;
+  --color-muted: #6b7280;
+  --color-accent: #4f46e5;
+  --color-accent-foreground: #ffffff;
+  --radius-ui: 0.5rem;
+}
+
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
