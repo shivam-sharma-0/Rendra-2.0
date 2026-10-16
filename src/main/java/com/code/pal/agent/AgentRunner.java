@@ -95,6 +95,7 @@ import com.code.pal.agent.contract.ContractModelCalls;
 import com.code.pal.agent.llm.LlmLogicalCall;
 import com.code.pal.agent.contract.StaticAssets;
 import com.code.pal.agent.contract.ToolLoopAcceptance;
+import com.code.pal.agent.validation.BehaviorCriteria;
 import com.code.pal.agent.validation.RunBehaviorCriteria;
 import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.lease.TrustedOperationPendingException;
@@ -104,6 +105,7 @@ import com.code.pal.agent.validation.ValidationCheck;
 import com.code.pal.message.domain.MessageRole;
 import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.exception.WorkflowStageException;
+import com.code.pal.project.spec.ApprovedSpec;
 import com.code.pal.project.spec.ApprovedSpecs;
 import java.time.Duration;
 import java.util.Comparator;
@@ -483,6 +485,12 @@ public class AgentRunner implements AgentRuntime {
             }
         }
         prepareStarter(state, project, setup, userRequest);
+        if (run.getMode() == ProjectType.BUILD && !state.ctx.plan().exists()) {
+            // An approved build may edit straight away; the backend records a minimal plan the model can revise,
+            // instead of spending a turn on setPlan. Read-only runs never get one.
+            state.ctx.plan().revise(List.of("Apply the requested change", "Validate the result"),
+                    "Backend plan for a direct change");
+        }
         return runToolLoop(state, setup, userRequest);
     }
 
@@ -580,22 +588,47 @@ public class AgentRunner implements AgentRuntime {
     /**
      * A new app's first tool-loop build is checked against what the user approved, not only "the page loads":
      * the approved spec's scenarios become this run's required browser acceptance, and the model is told the
-     * exact hooks and expected results. A missing or unusable spec keeps the generic smoke checks.
+     * exact hooks and expected results. A missing spec keeps the generic smoke checks. A run resumed after a
+     * checkpoint gets the same guidance back for the checks it already installed, never different ones.
      */
     private void requireApprovedBehaviour(RunState state, List<LlmMessage> convo) {
         AgentRun run = state.run;
-        if (approvedSpecs == null || behaviorCriteria == null || !props.getSandbox().isRuntimeCheck()
-                || !projectShape(run.getProjectId(), state.ctx.root()).equals(BuildPrompt.ProjectShape.EMPTY)) {
+        if (approvedSpecs == null || behaviorCriteria == null || !props.getSandbox().isRuntimeCheck()) {
+            return;
+        }
+        BehaviorCriteria installed = behaviorCriteria.current(state.ctx);
+        if (installed == null && !projectShape(run.getProjectId(), state.ctx.root()).equals(BuildPrompt.ProjectShape.EMPTY)) {
             return;
         }
         var approved = approvedSpecs.current(run.getProjectId());
-        var compiled = approved.flatMap(ToolLoopAcceptance::from);
+        if (approved.isEmpty()) {
+            return;
+        }
+        if (!browserVerifiable(approved.get())) {
+            // Cloud data and accounts need their own adapter; browser checks must not pretend to certify them.
+            log.info("approved_behaviour_unverified runId={} storage={} auth={} readiness={}", run.getId(),
+                    approved.get().desired().storage(), approved.get().desired().auth(), approved.get().readiness());
+            events.emit(run, AgentStepType.STATUS, "Approved behaviour is not verified for cloud data or accounts yet",
+                    Map.of("verified", false, "reason", "CONNECTOR_ADAPTER_PENDING"));
+            return;
+        }
+        var compiled = ToolLoopAcceptance.from(approved.get());
         if (compiled.isEmpty()) {
             return;
         }
-        behaviorCriteria.install(run.getId(), run.getProjectId(), approved.get().requirementsProjection(),
-                approved.get().requirementsRevision(), compiled.get().criteria());
+        if (installed == null) {
+            behaviorCriteria.install(run.getId(), run.getProjectId(), approved.get().requirementsProjection(),
+                    approved.get().requirementsRevision(), compiled.get().criteria());
+        } else if (!installed.equals(compiled.get().criteria())) {
+            throw new WorkflowStageException("Required acceptance changed during this run; start a new run");
+        }
         convo.add(LlmMessage.user(ToolLoopAcceptance.promptSection(compiled.get())));
+    }
+
+    private static boolean browserVerifiable(ApprovedSpec approved) {
+        return approved.readiness() == ApprovedSpec.Readiness.READY
+                && approved.desired().storage() != ApprovedSpec.Storage.SUPABASE
+                && approved.desired().auth() == ApprovedSpec.Auth.NONE;
     }
 
     /**
@@ -978,10 +1011,6 @@ public class AgentRunner implements AgentRuntime {
         AgentRun run = state.run;
         AgentRuntimeContext runtime = state.runtime;
         AgentContext ctx = state.ctx;
-        if (!ctx.plan().exists()) {
-            // A direct change needs no extra model turn just to write a plan; the backend records a minimal one.
-            ctx.plan().revise(List.of("Apply the requested change", "Validate the result"), "Backend plan for a direct change");
-        }
         if (changeSets.view(ctx).touchedPaths().isEmpty()) {
             if (gates.implementationReminders++ > 0) {
                 throw new AgentValidationFailedException("The agent did not create or modify any project files");

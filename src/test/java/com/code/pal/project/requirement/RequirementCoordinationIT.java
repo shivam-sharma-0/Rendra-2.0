@@ -221,19 +221,23 @@ class RequirementCoordinationIT {
         assertEquals("READY", service.get(7L, project).artifactStatus());
     }
 
+    private static final String TASKS = """
+            {"title":"Tasks","pages":[{"id":"home","path":"/","featureIds":["tasks"]}],"features":[{"id":"tasks","description":"Add tasks"}],
+             "acceptance":[{"id":"adds","featureId":"tasks","steps":[{"kind":"ASSERT_TEXT","selector":"h1","value":"Tasks"}]}]}""";
+
     @Test void theSpecDraftedWithTheQuestionsIsApprovedWhenTheRecommendedAnswersAreKept() {
-        model.answer("{\"questions\":[],\"spec\":{\"title\":\"Tasks\"}}");
+        model.answer("{\"questions\":[],\"spec\":" + TASKS + "}");
         var started = service.start(7L, project);
         assertEquals(RequirementStatus.APPROVAL_REQUIRED, started.status());
         service.approve(7L, project, started.revision());
-        assertEquals("{\"title\":\"Tasks\"}", approvedSpecJson());
+        assertTrue(approvedSpecJson().contains("\"adds\""), approvedSpecJson());
         assertEquals(1, model.calls.get(), "questions and spec come from one call");
     }
 
     @Test void aChangedAnswerLeavesTheStaleDraftSpecOutOfTheApproval() {
         model.answer("{\"questions\":[{\"key\":\"purpose\",\"prompt\":\"Who?\",\"required\":true,\"recommended\":\"me\",\"options\":["
                 + "{\"id\":\"me\",\"label\":\"Me\"},{\"id\":\"team\",\"label\":\"Team\"},{\"id\":\"other\",\"label\":\"Other\"}]}],"
-                + "\"spec\":{\"title\":\"Tasks\"}}");
+                + "\"spec\":" + TASKS + "}");
         var started = service.start(7L, project);
         var answered = service.answer(7L, project, question("purpose").getId(), new RequirementDtos.AnswerRequest("team", null, started.revision()));
         assertEquals(RequirementStatus.APPROVAL_REQUIRED, answered.status());
