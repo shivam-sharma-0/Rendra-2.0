@@ -287,10 +287,12 @@ public class ProjectValidationService {
             var blocking = missing.stream().filter(issue -> issue.severity() == DiagnosticSeverity.ERROR).toList();
             checks.add(new ValidationCheck("BASELINE", blocking.isEmpty() ? ValidationCheck.Outcome.PASS
                     : ValidationCheck.Outcome.FAIL, true, blocking.isEmpty()
-                            ? missing.isEmpty() ? "Production checklist met" : "Production checklist met; polish items remain"
+                            ? missing.isEmpty() ? "Production checklist met" : "No blocking issues; " + missing.size()
+                                    + " recommended polish item(s) missing"
                             : "Client code exposes a secret or could not be checked"));
+            // Polish items stay visible as warnings; only errors block success.
+            introduced.addAll(missing);
             if (!blocking.isEmpty()) {
-                introduced.addAll(blocking);
                 passed = false;
             }
         }

@@ -61,10 +61,10 @@ public class StartProjectTool implements AgentTool {
         Object stack = args.get("stack");
         Starter requested = Starter.of(stack == null ? "" : stack.toString())
                 .orElseThrow(() -> new IllegalArgumentException("stack must be \"vite-react\" or \"mern\""));
-        // The approved storage decides the stack: without approved MERN storage a "mern" request is a web app.
+        // The approved storage decides the stack: a new MERN scaffold needs explicitly approved MERN storage.
         var state = buildDecisions == null ? null : buildDecisions.state(context.projectId());
         var choice = state == null ? null : state.choice();
-        Starter starter = requested == Starter.MERN && choice != null && choice.storage() != BuildDecisions.Storage.MERN
+        Starter starter = requested == Starter.MERN && (choice == null || choice.storage() != BuildDecisions.Storage.MERN)
                 ? Starter.VITE_REACT : requested;
         if (buildDecisions != null) buildDecisions.requireStarter(context.projectId(), starter.id());
         for (String manifest : MANIFESTS) {

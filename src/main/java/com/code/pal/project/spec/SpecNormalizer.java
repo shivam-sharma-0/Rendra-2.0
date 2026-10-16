@@ -11,10 +11,11 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * Turns a model-drafted spec into a valid {@link ApprovedSpec.Spec} without a second model call: identifiers are
- * made safe and consistent, page/feature links agree, unknown references and invalid steps are dropped, unsafe theme
- * values fall back to defaults and every feature gets at least a route check. Nothing here grants capabilities;
- * persistence comes from the server's storage decision.
+ * Turns a model-drafted spec into a valid {@link ApprovedSpec.Spec} without a second model call, with cosmetic repairs
+ * only: identifiers are made safe and consistent, page/feature links agree, unknown references are dropped and unsafe
+ * theme values fall back to defaults. Behaviour is never weakened: an invalid step, a scenario without an assertion, a
+ * feature without its own check or an empty draft rejects the spec, so the build plans from the answers instead.
+ * Nothing here grants capabilities; persistence comes from the server's storage decision.
  */
 public final class SpecNormalizer {
     private static final Set<String> STEP_KINDS = Set.of("CLICK", "FILL", "SELECT", "ASSERT_TEXT", "ASSERT_COUNT",
@@ -48,7 +49,7 @@ public final class SpecNormalizer {
             pages.put(id, new MutablePage(id, path, text(page.path("title").asString(""), 120, id), ids(page.path("featureIds"))));
         }
         if (pages.isEmpty()) {
-            pages.put("home", new MutablePage("home", "/", title, new LinkedHashSet<>()));
+            throw new IllegalArgumentException("Spec draft has no usable page");
         }
 
         var entities = new LinkedHashMap<String, ApprovedSpec.Entity>();
@@ -87,8 +88,7 @@ public final class SpecNormalizer {
                     text(feature.path("description").asString(""), 1_400, id), pageIds, entityIds));
         }
         if (features.isEmpty()) {
-            features.put("content", new MutableFeature("content", "CONTENT", goal.length() > 1_400 ? title : goal,
-                    new LinkedHashSet<>(), new LinkedHashSet<>()));
+            throw new IllegalArgumentException("Spec draft has no usable feature");
         }
         // Links agree in both directions; a feature without a page lives on the first page.
         for (var page : pages.values()) {
@@ -114,24 +114,23 @@ public final class SpecNormalizer {
             var steps = new ArrayList<ApprovedSpec.Step>();
             for (JsonNode step : limit(scenario.path("steps"), 24)) {
                 var valid = step(step);
-                if (valid != null) {
-                    steps.add(valid);
+                if (valid == null) {
+                    throw new IllegalArgumentException("Acceptance " + id + " has an invalid step");
                 }
+                steps.add(valid);
             }
-            if (!steps.isEmpty()) {
-                scenarioIds.add(id);
-                acceptance.add(new ApprovedSpec.Acceptance(id, feature, "BROWSER", steps,
-                        text(scenario.path("expected").asString(""), 512, features.get(feature).description())));
+            if (steps.stream().noneMatch(step -> step.kind().startsWith("ASSERT_"))) {
+                throw new IllegalArgumentException("Acceptance " + id + " has no assertion");
             }
+            scenarioIds.add(id);
+            acceptance.add(new ApprovedSpec.Acceptance(id, feature, "BROWSER", steps,
+                    text(scenario.path("expected").asString(""), 512, features.get(feature).description())));
         }
         var covered = new HashSet<String>();
         acceptance.forEach(scenario -> covered.add(scenario.featureId()));
         for (var feature : features.values()) {
-            String id = feature.id().length() > 40 ? feature.id().substring(0, 40) + "_ok" : feature.id() + "_ok";
-            if (!covered.contains(feature.id()) && acceptance.size() < 24 && scenarioIds.add(id)) {
-                String path = pages.get(feature.pageIds().iterator().next()).path();
-                acceptance.add(new ApprovedSpec.Acceptance(id, feature.id(), "BROWSER",
-                        List.of(new ApprovedSpec.Step("ASSERT_ROUTE", null, path)), "The page for " + feature.id() + " loads"));
+            if (!covered.contains(feature.id())) {
+                throw new IllegalArgumentException("Feature " + feature.id() + " has no acceptance check");
             }
         }
 

@@ -6,26 +6,28 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SpecNormalizerTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
-    @Test
-    void aMessyModelDraftBecomesAValidSpecWithoutAnotherCall() {
-        var draft = mapper.readTree("""
-                {"title":"Tasks","goal":"","pages":[{"id":"home page","path":"home","title":"Home","featureIds":["add-task","ghost"]},
-                  {"id":"stats","path":"/stats","featureIds":[]}],
-                 "entities":[{"id":"task","fields":[{"name":"title","kind":"string","required":true}],"ownership":""},
-                  {"id":"empty","fields":[]}],
-                 "features":[{"id":"add-task","kind":"local_crud","description":"Add tasks","pageIds":[],"entityIds":["task","empty"]},
-                  {"id":"chart","kind":"CHART","description":"Show stats","pageIds":["stats"]}],
-                 "theme":{"background":"white","foreground":"#111","accent":"#4f46e5","muted":"#888","radius":"99px","font":"comic"},
-                 "acceptance":[{"id":"adds","featureId":"add-task","steps":[{"kind":"fill","selector":"input","value":"Milk"},
-                  {"kind":"ASSERT_COUNT","selector":"li","value":"one"},{"kind":"HOVER","selector":"li"}],"expected":"A task appears"}]}
-                """);
+    private static final String VALID = """
+            {"title":"Tasks","goal":"","pages":[{"id":"home page","path":"home","title":"Home","featureIds":["add-task","ghost"]},
+              {"id":"stats","path":"/stats","featureIds":[]}],
+             "entities":[{"id":"task","fields":[{"name":"title","kind":"string","required":true}],"ownership":""},
+              {"id":"empty","fields":[]}],
+             "features":[{"id":"add-task","kind":"local_crud","description":"Add tasks","pageIds":[],"entityIds":["task","empty"]},
+              {"id":"chart","kind":"CHART","description":"Show stats","pageIds":["stats"]}],
+             "theme":{"background":"white","foreground":"#111","accent":"#4f46e5","muted":"#888","radius":"99px","font":"comic"},
+             "acceptance":[{"id":"adds","featureId":"add-task","steps":[{"kind":"fill","selector":"input","value":"Milk"},
+              {"kind":"ASSERT_COUNT","selector":"li","value":"1"}],"expected":"A task appears"},
+              {"id":"chart-shows","featureId":"chart","steps":[{"kind":"ASSERT_TEXT","selector":"h1","value":"Stats"}]}]}
+            """;
 
-        var spec = SpecNormalizer.normalize(draft, ApprovedSpec.Storage.BROWSER);
+    @Test
+    void cosmeticProblemsAreRepairedWithoutTouchingBehaviour() {
+        var spec = SpecNormalizer.normalize(mapper.readTree(VALID), ApprovedSpec.Storage.BROWSER);
 
         assertEquals(List.of("home_page", "stats"), spec.pages().stream().map(ApprovedSpec.Page::id).toList());
         assertEquals("/", spec.pages().getFirst().path(), "an invalid first route becomes the root");
@@ -37,18 +39,35 @@ class SpecNormalizerTest {
         assertEquals("#ffffff", spec.theme().background(), "unsafe colors fall back");
         assertEquals("8px", spec.theme().radius());
         assertEquals("system", spec.theme().font());
-        assertEquals(List.of("FILL"), spec.acceptance().getFirst().steps().stream().map(ApprovedSpec.Step::kind).toList(),
-                "invalid steps are dropped");
-        assertTrue(spec.acceptance().stream().anyMatch(scenario -> scenario.featureId().equals("chart")
-                && scenario.steps().getFirst().kind().equals("ASSERT_ROUTE")), "every feature keeps a check");
+        assertEquals(List.of("FILL", "ASSERT_COUNT"), spec.acceptance().getFirst().steps().stream().map(ApprovedSpec.Step::kind).toList(),
+                "every approved step is kept");
         assertEquals("Tasks", spec.goal(), "a blank goal falls back to the title");
     }
 
     @Test
-    void anEmptyDraftStillGivesAOnePageSpec() {
-        var spec = SpecNormalizer.normalize(mapper.readTree("{}"), ApprovedSpec.Storage.NONE);
-        assertEquals(1, spec.pages().size());
-        assertEquals(1, spec.features().size());
-        assertEquals(1, spec.acceptance().size());
+    void anInvalidStepRejectsTheSpecInsteadOfWeakeningIt() {
+        String draft = VALID.replace("{\"kind\":\"ASSERT_COUNT\",\"selector\":\"li\",\"value\":\"1\"}",
+                "{\"kind\":\"ASSERT_COUNT\",\"selector\":\"li\",\"value\":\"one\"}");
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> SpecNormalizer.normalize(mapper.readTree(draft), ApprovedSpec.Storage.BROWSER));
+        assertTrue(error.getMessage().contains("invalid step"), error.getMessage());
+    }
+
+    @Test
+    void aScenarioWithoutAnAssertionOrAFeatureWithoutACheckRejectsTheSpec() {
+        String noAssertion = VALID.replace(",\n  {\"kind\":\"ASSERT_COUNT\",\"selector\":\"li\",\"value\":\"1\"}", "")
+                .replace(",{\"kind\":\"ASSERT_COUNT\",\"selector\":\"li\",\"value\":\"1\"}", "");
+        assertThrows(IllegalArgumentException.class,
+                () -> SpecNormalizer.normalize(mapper.readTree(noAssertion), ApprovedSpec.Storage.BROWSER));
+
+        String uncovered = VALID.replace("\"featureId\":\"chart\"", "\"featureId\":\"ghost\"");
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> SpecNormalizer.normalize(mapper.readTree(uncovered), ApprovedSpec.Storage.BROWSER));
+        assertTrue(error.getMessage().contains("no acceptance check"), error.getMessage());
+    }
+
+    @Test
+    void anEmptyDraftIsRejectedRatherThanInvented() {
+        assertThrows(IllegalArgumentException.class, () -> SpecNormalizer.normalize(mapper.readTree("{}"), ApprovedSpec.Storage.NONE));
     }
 }
