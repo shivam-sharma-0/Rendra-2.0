@@ -91,6 +91,13 @@ class SpecNormalizerTest {
     }
 
     @Test
+    void twoPagesOnTheSameRouteAreRejectedNotRenamed() {
+        String draft = VALID.replace("\"path\":\"home\"", "\"path\":\"/\"").replace("\"path\":\"/stats\"", "\"path\":\"/\"");
+        assertThrows(IllegalArgumentException.class,
+                () -> SpecNormalizer.normalize(mapper.readTree(draft), ApprovedSpec.Storage.BROWSER));
+    }
+
+    @Test
     void anEmptyDraftIsRejectedRatherThanInvented() {
         assertThrows(IllegalArgumentException.class, () -> SpecNormalizer.normalize(mapper.readTree("{}"), ApprovedSpec.Storage.NONE));
     }

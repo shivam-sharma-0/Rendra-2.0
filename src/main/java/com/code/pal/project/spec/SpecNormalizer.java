@@ -38,7 +38,11 @@ public final class SpecNormalizer {
         for (JsonNode page : strict(node.path("pages"), 20, "pages")) {
             String id = unique(id(page.path("id").asString("")), pages.keySet(), "page");
             String path = page.path("path").asString("");
-            if (!path.matches("/[A-Za-z0-9_/:.-]{0,120}") || path.contains("..") || path.contains("//") || paths.contains(path)) {
+            boolean valid = path.matches("/[A-Za-z0-9_/:.-]{0,120}") && !path.contains("..") && !path.contains("//");
+            if (valid && paths.contains(path)) {
+                throw new IllegalArgumentException("Spec pages collide on route " + path);
+            }
+            if (!valid) {
                 path = pages.isEmpty() ? "/" : "/" + id.toLowerCase(Locale.ROOT);
             }
             if (!paths.add(path)) {
