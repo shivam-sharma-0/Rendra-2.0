@@ -3,6 +3,7 @@ package com.code.pal.project.spec;
 import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -34,17 +35,14 @@ public final class SpecNormalizer {
 
         var pages = new LinkedHashMap<String, MutablePage>();
         var paths = new HashSet<String>();
-        for (JsonNode page : limit(node.path("pages"), 20)) {
-            String id = id(page.path("id").asString(""));
-            if (id == null || pages.containsKey(id)) {
-                continue;
-            }
+        for (JsonNode page : strict(node.path("pages"), 20, "pages")) {
+            String id = unique(id(page.path("id").asString("")), pages.keySet(), "page");
             String path = page.path("path").asString("");
             if (!path.matches("/[A-Za-z0-9_/:.-]{0,120}") || path.contains("..") || path.contains("//") || paths.contains(path)) {
                 path = pages.isEmpty() ? "/" : "/" + id.toLowerCase(Locale.ROOT);
             }
             if (!paths.add(path)) {
-                continue;
+                throw new IllegalArgumentException("Spec pages collide on route " + path);
             }
             pages.put(id, new MutablePage(id, path, text(page.path("title").asString(""), 120, id), ids(page.path("featureIds"))));
         }
@@ -53,14 +51,14 @@ public final class SpecNormalizer {
         }
 
         var entities = new LinkedHashMap<String, ApprovedSpec.Entity>();
-        for (JsonNode entity : limit(node.path("entities"), 12)) {
+        for (JsonNode entity : strict(node.path("entities"), 12, "entities")) {
             String id = id(entity.path("id").asString(""));
             if (id == null || entities.containsKey(id)) {
                 continue;
             }
             var fields = new ArrayList<ApprovedSpec.Field>();
             var names = new HashSet<String>();
-            for (JsonNode field : limit(entity.path("fields"), 24)) {
+            for (JsonNode field : strict(entity.path("fields"), 24, "fields")) {
                 String name = id(field.path("name").asString(""));
                 String kind = id(field.path("kind").asString("STRING").toUpperCase(Locale.ROOT));
                 if (name != null && names.add(name)) {
@@ -74,11 +72,8 @@ public final class SpecNormalizer {
         }
 
         var features = new LinkedHashMap<String, MutableFeature>();
-        for (JsonNode feature : limit(node.path("features"), 24)) {
-            String id = id(feature.path("id").asString(""));
-            if (id == null || features.containsKey(id)) {
-                continue;
-            }
+        for (JsonNode feature : strict(node.path("features"), 24, "features")) {
+            String id = unique(id(feature.path("id").asString("")), features.keySet(), "feature");
             String kind = id(feature.path("kind").asString("CONTENT").toUpperCase(Locale.ROOT));
             var pageIds = ids(feature.path("pageIds"));
             pageIds.retainAll(pages.keySet());
@@ -105,14 +100,18 @@ public final class SpecNormalizer {
 
         var acceptance = new ArrayList<ApprovedSpec.Acceptance>();
         var scenarioIds = new HashSet<String>();
-        for (JsonNode scenario : limit(node.path("acceptance"), 24)) {
-            String id = id(scenario.path("id").asString(""));
+        for (JsonNode scenario : strict(node.path("acceptance"), 24, "acceptance")) {
+            String id = unique(id(scenario.path("id").asString("")), scenarioIds, "acceptance");
             String feature = id(scenario.path("featureId").asString(""));
-            if (id == null || feature == null || !features.containsKey(feature) || scenarioIds.contains(id)) {
-                continue;
+            if (feature == null || !features.containsKey(feature)) {
+                throw new IllegalArgumentException("Acceptance " + id + " checks an unknown feature");
+            }
+            String kind = scenario.path("kind").asString("BROWSER");
+            if (!"BROWSER".equalsIgnoreCase(kind)) {
+                throw new IllegalArgumentException("Acceptance " + id + " has an unsupported kind");
             }
             var steps = new ArrayList<ApprovedSpec.Step>();
-            for (JsonNode step : limit(scenario.path("steps"), 24)) {
+            for (JsonNode step : strict(scenario.path("steps"), 24, "steps")) {
                 var valid = step(step);
                 if (valid == null) {
                     throw new IllegalArgumentException("Acceptance " + id + " has an invalid step");
@@ -210,6 +209,32 @@ public final class SpecNormalizer {
             clean = fallback;
         }
         return clean.length() > max ? clean.substring(0, max) : clean;
+    }
+
+    /** A behaviour collection: missing means empty, but overflow, nulls or non-objects reject the draft. */
+    private static List<JsonNode> strict(JsonNode array, int max, String what) {
+        if (array == null || array.isMissingNode() || array.isNull()) {
+            return List.of();
+        }
+        if (!array.isArray() || array.size() > max) {
+            throw new IllegalArgumentException("Spec " + what + " are missing or exceed " + max);
+        }
+        var result = new ArrayList<JsonNode>();
+        for (JsonNode value : array) {
+            if (value == null || !value.isObject()) {
+                throw new IllegalArgumentException("Spec " + what + " contain an invalid entry");
+            }
+            result.add(value);
+        }
+        return result;
+    }
+
+    /** Distinct identities only: a missing or colliding id could hide later behaviour. */
+    private static String unique(String id, Collection<String> seen, String what) {
+        if (id == null || seen.contains(id)) {
+            throw new IllegalArgumentException("Spec has a missing or duplicate " + what + " id");
+        }
+        return id;
     }
 
     private static List<JsonNode> limit(JsonNode array, int max) {

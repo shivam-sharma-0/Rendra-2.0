@@ -12,6 +12,20 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ProjectMutationLocksTest {
     @TempDir Path directory;
+    @Test void aStoppedRunStopsWaitingForABusyLock() throws Exception {
+        var p=new AgentProperties();p.setWorkspaceBasePath(directory.resolve("workspace").toString());p.setMutationLockPath(directory.resolve("stop-locks").toString());
+        var locks=new ProjectMutationLocks(new WorkspaceStorage(p),p);var project=UUID.randomUUID();
+        var held=new java.util.concurrent.CompletableFuture<Void>();var release=new java.util.concurrent.CountDownLatch(1);
+        var owner=new Thread(()->{try(var scope=locks.acquire(project)){held.complete(null);release.await();}catch(Exception e){held.completeExceptionally(e);}});
+        owner.start();held.get(5,TimeUnit.SECONDS);
+        var cancellation=new com.code.pal.agent.runtime.RunCancellation(UUID.randomUUID());
+        long started=System.nanoTime();
+        var waiter=java.util.concurrent.CompletableFuture.supplyAsync(()->{try(var bound=com.code.pal.agent.runtime.RunCancellation.bind(cancellation)){locks.acquire(project).close();return "acquired";}
+            catch(com.code.pal.agent.llm.LlmCancelledException stopped){return "stopped";}});
+        Thread.sleep(300);cancellation.cancel();
+        try{assertEquals("stopped",waiter.get(5,TimeUnit.SECONDS));assertTrue(System.nanoTime()-started<TimeUnit.SECONDS.toNanos(5),"Stop must not wait out the lock timeout");}
+        finally{release.countDown();owner.join(5_000);}
+    }
     @Test void configuredLocalLocksAreIndependentOfTheWorkspaceStorage() throws Exception {
         var p=new AgentProperties();p.setWorkspaceBasePath(directory.resolve("workspace").toString());p.setMutationLockPath(directory.resolve("local-locks").toString());var project=UUID.randomUUID();
         try(var held=new ProjectMutationLocks(new WorkspaceStorage(p),p).acquire(project)){assertTrue(Files.isRegularFile(directory.resolve("local-locks").resolve(project+".lock")));assertFalse(Files.exists(directory.resolve("workspace")));}

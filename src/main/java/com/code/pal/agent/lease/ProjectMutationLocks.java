@@ -1,6 +1,8 @@
 package com.code.pal.agent.lease;
 
 import com.code.pal.agent.workspace.WorkspaceStorage;
+import com.code.pal.agent.llm.LlmCancelledException;
+import com.code.pal.agent.runtime.RunCancellation;
 import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.nio.channels.*;
@@ -39,14 +41,23 @@ public class ProjectMutationLocks {
         ReentrantLock local=LOCAL.computeIfAbsent(path,key->new ReentrantLock(true));
         FileChannel channel=null;
         try {
-            if(!local.tryLock(WAIT_SECONDS,TimeUnit.SECONDS)) throw new IllegalStateException("Project mutation is busy");
+            // One deadline for both waits, polled in short slices so a user's Stop ends the wait at once.
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
+            boolean locked=false;
+            while(!locked) {
+                if(RunCancellation.current().isCancelled()) throw new LlmCancelledException();
+                if(System.nanoTime()>=deadline) throw new IllegalStateException("Project mutation is busy");
+                locked=local.tryLock(100,TimeUnit.MILLISECONDS);
+            }
             try {
                 Files.createDirectories(directory);
                 if(!Files.isDirectory(directory,LinkOption.NOFOLLOW_LINKS)) throw new IOException("Unsafe mutation lock directory");
                 channel=FileChannel.open(path,StandardOpenOption.CREATE,StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS);
-                long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
                 FileLock lock=null;
-                while(lock==null && System.nanoTime()<end) {lock=channel.tryLock();if(lock==null) Thread.sleep(10);}
+                while(lock==null && System.nanoTime()<deadline) {
+                    if(RunCancellation.current().isCancelled()) throw new LlmCancelledException();
+                    lock=channel.tryLock();if(lock==null) Thread.sleep(10);
+                }
                 if(lock==null) throw new IOException("Shared project mutation lock is busy");
                 FileChannel owned=channel;FileLock held=lock;
                 return ()->{try{held.release();}catch(IOException ignored){}finally{try{owned.close();}catch(IOException ignored){}local.unlock();}};

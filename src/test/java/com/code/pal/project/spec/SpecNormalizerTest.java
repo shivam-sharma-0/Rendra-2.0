@@ -60,10 +60,34 @@ class SpecNormalizerTest {
         assertThrows(IllegalArgumentException.class,
                 () -> SpecNormalizer.normalize(mapper.readTree(noAssertion), ApprovedSpec.Storage.BROWSER));
 
-        String uncovered = VALID.replace("\"featureId\":\"chart\"", "\"featureId\":\"ghost\"");
+        String uncovered = VALID.replace(",\n  {\"id\":\"chart-shows\",\"featureId\":\"chart\",\"steps\":[{\"kind\":\"ASSERT_TEXT\",\"selector\":\"h1\",\"value\":\"Stats\"}]}", "");
         var error = assertThrows(IllegalArgumentException.class,
                 () -> SpecNormalizer.normalize(mapper.readTree(uncovered), ApprovedSpec.Storage.BROWSER));
         assertTrue(error.getMessage().contains("no acceptance check"), error.getMessage());
+
+        String unknownFeature = VALID.replace("\"featureId\":\"chart\"", "\"featureId\":\"ghost\"");
+        assertThrows(IllegalArgumentException.class,
+                () -> SpecNormalizer.normalize(mapper.readTree(unknownFeature), ApprovedSpec.Storage.BROWSER));
+    }
+
+    @Test
+    void overflowDuplicateIdsAndUnsupportedKindsRejectInsteadOfDroppingChecks() {
+        var draft = (tools.jackson.databind.node.ObjectNode) mapper.readTree(VALID);
+        var scenarios = (tools.jackson.databind.node.ArrayNode) draft.path("acceptance");
+        for (int index = 0; index < 23; index++) {
+            scenarios.add(scenarios.get(0).deepCopy());
+            ((tools.jackson.databind.node.ObjectNode) scenarios.get(scenarios.size() - 1)).put("id", "extra" + index);
+        }
+        assertThrows(IllegalArgumentException.class, () -> SpecNormalizer.normalize(draft, ApprovedSpec.Storage.BROWSER),
+                "a 25th scenario is never silently dropped");
+
+        String duplicate = VALID.replace("\"id\":\"chart-shows\"", "\"id\":\"adds\"");
+        assertThrows(IllegalArgumentException.class,
+                () -> SpecNormalizer.normalize(mapper.readTree(duplicate), ApprovedSpec.Storage.BROWSER));
+
+        String apiKind = VALID.replace("\"id\":\"chart-shows\",", "\"id\":\"chart-shows\",\"kind\":\"API\",");
+        assertThrows(IllegalArgumentException.class,
+                () -> SpecNormalizer.normalize(mapper.readTree(apiKind), ApprovedSpec.Storage.BROWSER));
     }
 
     @Test
