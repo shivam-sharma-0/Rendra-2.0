@@ -44,6 +44,10 @@ class RequestRouterTest {
             haan | SMALL_TALK
             yes | SMALL_TALK
             continue | SMALL_TALK
+            ok make it. | SMALL_TALK
+            ok make a todo app | CHANGE
+            yes, add dark mode | CHANGE
+            haan banao | SMALL_TALK
             hmm | UNCLEAR
             what about that? | QUESTION
             src/App.tsx | UNCLEAR
@@ -72,7 +76,8 @@ class RequestRouterTest {
 
     @Test
     void onlyAnExistingProposalMakesAnAcknowledgementAContinuation() {
-        for (String reply : List.of("haan", "yes", "go ahead", "continue", "shuru karo", "aage badho")) {
+        for (String reply : List.of("haan", "yes", "go ahead", "continue", "shuru karo", "aage badho", "ok make it.",
+                "make it", "okay, build this", "go for it", "let's do it", "bana do")) {
             assertEquals(RequestRouter.Route.CONTINUE, RequestRouter.route(reply, List.of(), true));
             assertEquals(RequestRouter.Route.SMALL_TALK, RequestRouter.route(reply, List.of(), false));
         }

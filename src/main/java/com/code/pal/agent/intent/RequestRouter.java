@@ -43,13 +43,15 @@ public final class RequestRouter {
                     + "(?:(?:please|now)\\s+)*" + ACTION.pattern()
                     + "(?!\\s+(?:is|are|looks|seems|was|works|failed|failure|great|slow)\\b)");
     private static final Pattern DIRECT_CHANGE = Pattern.compile(
-            "^(?:(?:please|can you|can u|could you|could u|would you|will you|let's|lets|"
+            "^(?:(?:ok(?:ay)?|yes|sure|alright|haan|han)[,!.]? )?"
+                    + "(?:(?:please|can you|can u|could you|could u|would you|will you|let's|lets|"
                     + "i want to|i want you to|i would like to) )?" + ACTION.pattern()
                     + "(?!\\s+(?:is|are|looks|seems|was|works|failed|failure|great|slow)\\b)");
     private static final Pattern QUESTION_START = Pattern.compile("^(?:is|are|do|does|did|should|could|can|would|will|kya)\\b");
     private static final Pattern RESUME = Pattern.compile(
-            "^(?:(?:ok(?:ay)?|yes|sure|haan|han|h[a]+n)[, ]+)?"
-                    + "(?:yes|sure|go ahead(?: and build it)?|do it|build it|build karo|bana do|karo|kar do|continue|"
+            "^(?:(?:ok(?:ay)?|yes|sure|alright|haan|han|h[a]+n)[, ]+)?"
+                    + "(?:yes|sure|go ahead(?: and build it)?|do it|build it|make it|create it|build this|make this|"
+                    + "go for it|let's do it|lets do it|proceed|build karo|bana do|banao|karo|kar do|continue|"
                     + "start|start karo|shuru karo|aage badho|agla step|next step|next|haan|han|h[a]+n)"
                     + "(?:[, ]+(?:please|now))*[,.!? ]*$");
     private static final Pattern SMALL_TALK = Pattern.compile(
@@ -160,6 +162,11 @@ public final class RequestRouter {
     public static String normalize(String text) {
         return Normalizer.normalize(text == null ? "" : text, Normalizer.Form.NFKC)
                 .replace('\u2019', '\'').toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").strip();
+    }
+
+    /** A bare go-ahead ("ok make it", "yes", "haan") that names no new task of its own. */
+    public static boolean confirmation(String request) {
+        return RESUME.matcher(normalize(instructions(request))).matches();
     }
 
     public static boolean buildApprovedPlan(String request) {

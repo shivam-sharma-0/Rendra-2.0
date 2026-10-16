@@ -21,8 +21,8 @@ export function BuildSuggestion({ action, onBuild }: {
     }
   }
 
-  return <div>
-    <button type="button" className="ws-flat-btn" disabled={busy || !onBuild} onClick={() => void build()}>
+  return <div className="msg-suggestion">
+    <button type="button" className="msg-suggestion__build" disabled={busy || !onBuild} onClick={() => void build()}>
       {busy ? 'Starting…' : action.label}
     </button>
     {error && <p role="alert">{error}</p>}

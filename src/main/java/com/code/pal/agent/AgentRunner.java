@@ -445,6 +445,16 @@ public class AgentRunner implements AgentRuntime {
                 ? accepted.request().getContent()
                 : accepted.request().getResolvedRequestText();
         List<String> attachments = accepted.request().executionAttachmentPaths();
+        if (run.getMode() == ProjectType.BUILD && accepted.request().getSourceProposalId() == null && attachments.isEmpty()
+                && RequestRouter.confirmation(userRequest)) {
+            // "ok make it" with no open offer: the user means their last request, if it never got a finished build
+            // (for example a restart interrupted it). Never reaches past that one turn.
+            String unfinished = unfinishedBuildRequest(history, accepted.request());
+            if (unfinished != null) {
+                log.info("confirmation_resumes_request runId={}", run.getId());
+                userRequest = unfinished;
+            }
+        }
         RequestRouter.Route route = RequestRouter.route(run.getMode(), userRequest, attachments, false);
         ProjectType effectiveMode = RequestRouter.mode(run.getMode(), userRequest, attachments);
         if (effectiveMode != run.getMode()) {
@@ -492,6 +502,25 @@ public class AgentRunner implements AgentRuntime {
                     "Backend plan for a direct change");
         }
         return runToolLoop(state, setup, userRequest);
+    }
+
+    /** The same author's previous request when it asked for a change and no build of it completed; else null. */
+    static String unfinishedBuildRequest(List<Message> history, Message request) {
+        for (int i = history.size() - 1; i >= 0; i--) {
+            Message earlier = history.get(i);
+            if (earlier.getRole() != MessageRole.USER || earlier.getId().equals(request.getId())) {
+                continue;
+            }
+            if (!Objects.equals(earlier.getAuthorId(), request.getAuthorId())
+                    || RequestRouter.route(earlier.getContent()) != RequestRouter.Route.CHANGE) {
+                return null;
+            }
+            boolean built = history.stream().anyMatch(reply -> reply.getRole() == MessageRole.ASSISTANT
+                    && earlier.getId().equals(reply.getReplyToId()) && reply.getMode() == ProjectType.BUILD
+                    && reply.getStatus() == MessageStatus.COMPLETE);
+            return built ? null : earlier.getContent();
+        }
+        return null;
     }
 
     private void requireBuildAllowed(AgentRun run) {

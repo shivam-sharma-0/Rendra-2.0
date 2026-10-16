@@ -131,3 +131,8 @@
 .msg-build-card__actions > button:hover:not(:disabled) { box-shadow: var(--neu-raised-sm); }
 .msg-build-card__actions > button:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 3px; }
 .msg-build-card__actions > button:disabled { opacity: .5; cursor: not-allowed; }
+.msg-suggestion { margin-top: 8px; }
+.msg-suggestion__build { min-height: 36px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--neu-accent, #ff5b2e); color: #fff; font: inherit; font-size: 13.5px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.msg-suggestion__build:hover:not(:disabled) { box-shadow: var(--neu-raised-sm); }
+.msg-suggestion__build:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 3px; }
+.msg-suggestion__build:disabled { opacity: .6; cursor: default; }
