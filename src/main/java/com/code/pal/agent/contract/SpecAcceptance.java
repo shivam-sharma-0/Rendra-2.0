@@ -70,8 +70,10 @@ public final class SpecAcceptance {
                 }
                 String followingRoute = next != null && next.kind().equals("ASSERT_ROUTE") ? next.value() : null;
                 String internal = null;
-                if (destination != null && operator.equals("=") && routes.contains(destination)) {
-                    internal = destination;
+                String logical = approved.desired().renderStack() == ApprovedSpec.RenderStack.VITE
+                        && destination != null && destination.startsWith("#/") ? destination.substring(1) : destination;
+                if (logical != null && operator.equals("=") && routes.contains(logical)) {
+                    internal = logical;
                 } else if (destination == null && followingRoute != null && routes.contains(followingRoute)) {
                     internal = followingRoute;
                 }
@@ -79,7 +81,8 @@ public final class SpecAcceptance {
                         .anyMatch(later -> !later.kind().equals("ASSERT_ROUTE"));
                 if (internal != null && needsDestination) {
                     // Destination UI steps need a real same-project navigation, not a link-presence substitute.
-                    actions.add(new BrowserAction(id, BrowserKind.CLICK, "a" + selector + "[href=" + quoted(internal) + "]", null));
+                    actions.add(new BrowserAction(id, BrowserKind.CLICK,
+                            "a" + selector + "[href=" + quoted(internalHref(approved, internal)) + "]", null));
                     continue;
                 }
                 if (destination == null && internal != null) {
@@ -92,10 +95,18 @@ public final class SpecAcceptance {
                             || target.matches("(?is)^(?:javascript|data|vbscript):.*") || target.startsWith("//")) {
                         throw new IllegalArgumentException("Navigation acceptance has an unsafe or empty link destination");
                     }
-                    if (operator.equals("=") && target.startsWith("/") && !target.contains("#") && !routes.contains(target)) {
+                    String routeTarget = approved.desired().renderStack() == ApprovedSpec.RenderStack.VITE && target.startsWith("#/")
+                            ? target.substring(1) : target;
+                    if (operator.equals("=") && routeTarget.startsWith("/") && !routeTarget.contains("#") && !routes.contains(routeTarget)) {
                         throw new IllegalArgumentException("Internal navigation acceptance needs an approved page destination");
                     }
-                    predicate = "[href" + operator + quoted(target) + "]";
+                    String hrefTarget = target;
+                    if (internal != null) {
+                        hrefTarget = internalHref(approved, internal);
+                    } else if (target.startsWith("/")) {
+                        hrefTarget = internalHref(approved, target);
+                    }
+                    predicate = "[href" + operator + quoted(hrefTarget) + "]";
                     boolean relative = !target.matches("(?is)^[a-z][a-z0-9+.-]*:.*") && !target.startsWith("#");
                     if (!operator.equals("=") && relative && needsDestination) {
                         throw new IllegalArgumentException("Partial internal navigation needs an exact approved destination before UI interactions");
@@ -192,6 +203,10 @@ public final class SpecAcceptance {
         String key = base.contains("#") || base.contains("[") ? base : scenario + ":" + base;
         var target = targets.computeIfAbsent(key, value -> new Target("rendra_" + id, base));
         return "[data-testid~=" + quoted(target.testId()) + "]" + suffix;
+    }
+
+    private static String internalHref(ApprovedSpec spec, String path) {
+        return spec.desired().renderStack() == ApprovedSpec.RenderStack.VITE ? "#" + path : path;
     }
 
     private static String quoted(String text) {

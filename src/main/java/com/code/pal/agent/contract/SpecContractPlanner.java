@@ -40,7 +40,8 @@ final class SpecContractPlanner {
             A unit must fit supplied unitLimits; split it before proposing a large indivisible implementation.
             Projected file sizes: App.tsx 4000 characters, HTML 3000, CSS/local-state.ts 1000, other files 2000.
             Keep units within 6000 total source characters and 6 source files; the output cap also includes JSON and reasoning.
-            Navigation uses the supplied path router and plain anchor links; do not plan a router package.
+            Vite navigation uses the supplied hash router and plain #/path anchor links; route values stay /path.
+            Static pages keep their declared page links. Do not plan a router package.
             Static uses local compiled CSS, Vite uses the pinned starter, Supabase uses the approved connector only.
             No fake backend/accounts or browser-data substitution. Models/APIs remain on the existing MERN path.
             Model size estimates are hints; the server checks and may repartition oversized batches before persistence.

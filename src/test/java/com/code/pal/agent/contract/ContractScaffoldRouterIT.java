@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "codepal.router.it", matches = "true")
 class ContractScaffoldRouterIT {
     @Test
-    void unknownPathsRenderNotFoundAndKnownPathsRenderTheirDeclaredPage(@TempDir Path scratch) throws Exception {
+    void prefixedHashUrlsRenderTheirDeclaredPageOrNotFound(@TempDir Path scratch) throws Exception {
         var mapper = new ObjectMapper();
         var contract = ContractScaffoldRouterTest.routed();
         var output = new ContractScaffold(mapper).render(contract, "Fixture", path -> null);
@@ -36,6 +36,31 @@ class ContractScaffoldRouterIT {
         if (!process.waitFor(30, TimeUnit.SECONDS)) {
             process.destroyForcibly();
             fail("Generated router did not finish within 30 seconds");
+        }
+        assertEquals(0, process.exitValue(), Files.readString(log));
+    }
+
+    @Test
+    @EnabledIfSystemProperty(named = "codepal.router.browser.it", matches = "true")
+    void mountedHashRouterHandlesLinksReloadBackAndNotFoundUnderBothPrefixes(@TempDir Path scratch) throws Exception {
+        var mapper = new ObjectMapper();
+        var contract = ContractScaffoldRouterTest.routed();
+        var files = new ContractScaffold(mapper).render(contract, "Fixture", path -> null);
+        Path fixture = scratch.resolve("fixture.json");
+        Files.writeString(fixture, mapper.writeValueAsString(Map.of("files", files)));
+        Path driver = scratch.resolve("router-browser.mjs");
+        try (var resource = getClass().getClassLoader().getResourceAsStream("contract/router-browser.mjs")) {
+            assertNotNull(resource);
+            Files.copy(resource, driver);
+        }
+        Path modules = Path.of(System.getProperty("codepal.router.node-modules", "frontend/node_modules")).toAbsolutePath().normalize();
+        Path probe = Path.of("src/main/resources/sandbox/browser/probe.mjs").toAbsolutePath().normalize();
+        Path log = scratch.resolve("router-browser.log");
+        var process = new ProcessBuilder("node", driver.toString(), modules.toString(), fixture.toString(), probe.toString())
+                .redirectErrorStream(true).redirectOutput(log.toFile()).start();
+        if (!process.waitFor(150, TimeUnit.SECONDS)) {
+            process.destroyForcibly();
+            fail("Generated hash router browser verification timed out");
         }
         assertEquals(0, process.exitValue(), Files.readString(log));
     }

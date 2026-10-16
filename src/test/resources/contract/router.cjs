@@ -28,15 +28,27 @@ for (const match of source.routes.matchAll(/import Route(\d+) from "([^"]+)"/g))
 }
 const routes = load(source.routes, routeImports);
 
-for (const [pathname, expected] of [['/', 'Known home'], ['/settings', 'Known settings'], ['/missing', 'Page not found']]) {
-  global.window = { location: { pathname } };
+const cases = [
+  ['/', '', 'Known home'],
+  ['/p/fixture/', '', 'Known home'],
+  ['/p/fixture/', '#/settings', 'Known settings'],
+  ['/preview/run/', '#/settings', 'Known settings'],
+  ['/p/fixture/', '#/missing', 'Page not found'],
+  ['/', '#/settings', 'Known settings'],
+  ['/preview/run/', '#/', 'Known home'],
+];
+for (const [pathname, hash, expected] of cases) {
+  global.window = { location: { pathname, hash } };
   const imports = {};
   const match = source.app.match(/import \{ routes \} from "([^"]+)"/);
   assert.ok(match, 'Generated app must use the declared routes module');
   imports[match[1]] = routes;
   const App = load(source.app, imports).default;
   const html = renderToStaticMarkup(React.createElement(App));
-  assert.ok(html.includes(expected), `${pathname}: ${html}`);
-  if (pathname === '/missing') assert.ok(!html.includes('Known home') && !html.includes('Known settings'));
+  assert.ok(html.includes(expected), `${pathname}${hash}: ${html}`);
+  if (hash === '#/missing') {
+    assert.ok(!html.includes('Known home') && !html.includes('Known settings'));
+    assert.ok(html.includes('href="#/"'), 'Home link must retain the hosting prefix');
+  }
 }
-console.log('router behavior: 3/3 paths passed');
+console.log(`router behavior: ${cases.length}/${cases.length} prefixed/hash URLs passed`);

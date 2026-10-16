@@ -24,10 +24,13 @@ public final class ContractImports {
         if (contract.schemaVersion() != 2 || contract.stack() == BuildContract.Stack.MERN) {
             return "";
         }
+        String navigation = contract.stack() == BuildContract.Stack.VITE
+                ? ". Use plain <a href=\"#/path\"> links with the existing hash router; logical contract routes stay /path. "
+                : ". Use plain <a href=\"/path\"> navigation with the existing path router. ";
         return "\nAllowed bare imports: " + (contract.stack() == BuildContract.Stack.VITE ? String.join(", ", REACT.stream().sorted().toList()) : "none")
                 + ". Relative imports may read owned files in the same or an earlier batch, or these coordinator modules: "
                 + String.join(", ", coordinatorPaths(contract))
-                + ". Use plain <a href=\"/path\"> navigation with the existing path router. No react-router-dom, lucide-react, "
+                + navigation + "No react-router-dom, lucide-react, "
                 + "new packages, Router/Routes/Link wrappers or computed imports. For TS2307 on a disallowed package, remove the import "
                 + "and replace its uses with existing React/HTML behavior, not a package install.";
     }
