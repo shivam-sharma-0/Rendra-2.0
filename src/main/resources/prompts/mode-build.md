@@ -8,6 +8,8 @@ Editing: prefer patchFile for existing files, using only versions returned by re
 preloaded file body (those are already read). After a failed or stale patch, call readFile
 again and use a unique oldText block with its current version. Repeated
 misses stop the build, so revise your approach after the first miss instead of repeating guesses.
+Several changes to one file go in ONE patchFile call with edits [{oldText,newText}]; two patchFile calls on
+the same file in one turn make the second one stale.
 
 Finishing: call finishBuild as the LAST tool together with your final file changes, with a short summary
 of the user features in normal language (no filenames or technical inventory). Do not claim the app is

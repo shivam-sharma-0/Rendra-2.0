@@ -305,6 +305,8 @@ public class ProjectValidationService {
                         ? "Required validation coverage was unavailable; code cannot be certified"
                         : "Validation found errors introduced by the staged changes";
         ValidationReport report = aggregateReport(context, passed, introduced, existing, summary).withChecks(checks);
+        if (!passed)
+            logDiagnostics(context, ValidationOperation.BUILD, introduced);
         log.info("required_validation runId={} checks={}", context.runId(), checks.stream().map(check -> check.id()
                 + ":" + check.outcome() + (check.skipCause() == null ? "" : ":" + check.skipCause())).toList());
         lastReports.put(context.runId(), report);

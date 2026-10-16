@@ -27,6 +27,23 @@ class PatchFileRecoveryTest {
     private Map<String,Object> args(AgentContext ctx, String old, String next) {
         return Map.of("path", "a.txt", "expectedVersion", version(ctx), "oldText", old, "newText", next);
     }
+    @Test void severalBlocksOfOneFileChangeInOneVersionCheckedCall() {
+        var ctx = context("title: Old\nbody: draft\nfooter: 2025\n");
+        String before = version(ctx);
+        patch.execute(Map.of("path", "a.txt", "expectedVersion", before, "edits", List.of(
+                Map.of("oldText", "Old", "newText", "New"), Map.of("oldText", "draft", "newText", "final"),
+                Map.of("oldText", "2025", "newText", "2026"))), ctx);
+        assertEquals("title: New\nbody: final\nfooter: 2026\n", project.files.readText(project.projectId, ctx.root(), "a.txt"));
+        assertEquals(1, changes.view(ctx).revision(), "one write for all edits");
+    }
+    @Test void aMissingEditTargetChangesNothing() {
+        var ctx = context("alpha beta");
+        var error = assertThrows(AgentToolException.class, () -> patch.execute(Map.of("path", "a.txt", "expectedVersion", version(ctx),
+                "edits", List.of(Map.of("oldText", "alpha", "newText", "A"), Map.of("oldText", "gamma", "newText", "G"))), ctx));
+        assertEquals("PATCH_TARGET_NOT_FOUND", error.code());
+        assertEquals("alpha beta", project.files.readText(project.projectId, ctx.root(), "a.txt"));
+        assertEquals(0, changes.view(ctx).revision());
+    }
     @Test void overlappingTargetsAreAmbiguousAndNeverMutate() {
         var ctx = context("aaa");
         var error = assertThrows(AgentToolException.class, () -> patch.execute(args(ctx, "aa", "x"), ctx));

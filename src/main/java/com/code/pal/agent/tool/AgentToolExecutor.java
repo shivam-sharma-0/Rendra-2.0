@@ -5,6 +5,7 @@ import com.code.pal.project.service.ProjectService;
 import com.code.pal.shared.exception.ApiException;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -26,6 +27,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 /** Bounded executor for independent readonly tool calls from a single model response. */
+@Slf4j
 @Component
 public class AgentToolExecutor {
     private final AgentProperties props;
@@ -88,7 +90,12 @@ public class AgentToolExecutor {
             return ToolExecutionResult.failure(e.code(), safeMessage(e), e.details());
         } catch (IllegalArgumentException e) {
             return ToolExecutionResult.failure("INVALID_INPUT", safeMessage(e));
+        } catch (ApiException e) {
+            // Workflow/permission decisions carry user-safe messages the model can act on.
+            return ToolExecutionResult.failure("WORKFLOW_BLOCKED", safeMessage(e));
         } catch (Exception e) {
+            log.warn("tool_execution_failed tool={} errorType={} message={}", tool.name(), e.getClass().getSimpleName(),
+                    e.getMessage() == null ? "" : e.getMessage().lines().findFirst().orElse(""));
             return ToolExecutionResult.failure("EXECUTION_FAILED", "Tool execution failed");
         }
     }
