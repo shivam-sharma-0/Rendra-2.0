@@ -98,6 +98,31 @@ class SpecNormalizerTest {
     }
 
     @Test
+    void aDraftIsShapedToItsCheckableBehaviourBeforeApproval() {
+        String uncovered = VALID.replace("\"featureIds\":[]}", "\"featureIds\":[\"chart\",\"loading_state\"]}")
+                .replace("\"pageIds\":[\"stats\"]}", "\"pageIds\":[\"stats\"]},{\"id\":\"loading_state\",\"description\":\"Show a spinner\"}")
+                .replace("{\"kind\":\"ASSERT_TEXT\",\"selector\":\"h1\",\"value\":\"Stats\"}",
+                        "{\"kind\":\"HOVER\",\"selector\":\"h1\"},{\"kind\":\"ASSERT_TEXT\",\"selector\":\"h1\",\"value\":\"Stats\"}");
+
+        var shaped = SpecNormalizer.draft(mapper.readTree(uncovered));
+        var spec = SpecNormalizer.normalize(shaped, ApprovedSpec.Storage.BROWSER);
+
+        assertEquals(List.of("add_task"), spec.features().stream().map(ApprovedSpec.Feature::id).toList(),
+                "a feature without a runnable check leaves the draft instead of rejecting every other check");
+        assertEquals(List.of("adds"), spec.acceptance().stream().map(ApprovedSpec.Acceptance::id).toList());
+        assertEquals(2, spec.acceptance().getFirst().steps().size(), "kept scenarios are untouched");
+        assertEquals(List.of(), spec.pages().get(1).featureIds(), "dropped features leave the page links too");
+    }
+
+    @Test
+    void aDraftWithNothingCheckableIsNoSpec() {
+        String noChecks = VALID.replaceAll("\"kind\":\"ASSERT_[A-Z]+\"", "\"kind\":\"CLICK\"");
+        assertEquals(null, SpecNormalizer.draft(mapper.readTree(noChecks)));
+        assertEquals(null, SpecNormalizer.draft(mapper.readTree("{}")));
+        assertEquals(null, SpecNormalizer.draft(null));
+    }
+
+    @Test
     void anEmptyDraftIsRejectedRatherThanInvented() {
         assertThrows(IllegalArgumentException.class, () -> SpecNormalizer.normalize(mapper.readTree("{}"), ApprovedSpec.Storage.NONE));
     }

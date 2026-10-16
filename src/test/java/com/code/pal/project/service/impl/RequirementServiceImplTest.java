@@ -144,26 +144,41 @@ class RequirementServiceImplTest {
         assertEquals(List.of("purpose", "features"), view.questions().stream().map(RequirementDtos.Question::key).toList());
     }
 
+    private static final String COFFEE = """
+            {"title":"Coffee","pages":[{"id":"home","path":"/","featureIds":["brews","loading_state"]}],
+             "features":[{"id":"brews","description":"List brews"},{"id":"loading_state","description":"Spinner"}],
+             "acceptance":[{"id":"lists","featureId":"brews","steps":[{"kind":"ASSERT_TEXT","selector":"h1","value":"Coffee"}]}]}""";
+
+    @Test
+    void anUncheckableFeatureLeavesTheDraftInsteadOfVoidingEveryCheck() {
+        modelReply = () -> "{\"questions\":[],\"spec\":" + COFFEE + "}";
+
+        service.start(7L, projectId);
+
+        assertTrue(session.getSpecDraftJson().contains("\"lists\""), session.getSpecDraftJson());
+        assertFalse(session.getSpecDraftJson().contains("loading_state"), session.getSpecDraftJson());
+    }
+
     @Test
     void oneCallReturnsTheQuestionsAndASpecDraft() {
         properties.setStructuredContracts(true);
-        modelReply = () -> "```json\n{\"questions\":[" + question("purpose") + "],\"spec\":{\"title\":\"Coffee\"}}\n```";
+        modelReply = () -> "```json\n{\"questions\":[" + question("purpose") + "],\"spec\":" + COFFEE + "}\n```";
 
         RequirementDtos.Session view = service.start(7L, projectId);
 
         assertEquals(List.of("purpose"), view.questions().stream().map(RequirementDtos.Question::key).toList());
-        assertEquals("{\"title\":\"Coffee\"}", session.getSpecDraftJson());
+        assertTrue(session.getSpecDraftJson().contains("\"brews\""), session.getSpecDraftJson());
         assertEquals(1, modelCalls.get());
         assertTrue(prompts.stream().anyMatch(prompt -> prompt.contains("acceptance")), "the spec is requested");
     }
 
     @Test
     void theSpecIsDraftedOnTheDefaultPathTooForBehaviourChecks() {
-        modelReply = () -> "{\"questions\":[" + question("purpose") + "],\"spec\":{\"title\":\"Coffee\"}}";
+        modelReply = () -> "{\"questions\":[" + question("purpose") + "],\"spec\":" + COFFEE + "}";
 
         service.start(7L, projectId);
 
-        assertEquals("{\"title\":\"Coffee\"}", session.getSpecDraftJson());
+        assertTrue(session.getSpecDraftJson().contains("\"brews\""), session.getSpecDraftJson());
         assertTrue(prompts.stream().anyMatch(prompt -> prompt.contains("acceptance")));
     }
 

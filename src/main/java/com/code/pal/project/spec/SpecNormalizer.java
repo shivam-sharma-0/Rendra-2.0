@@ -1,6 +1,8 @@
 package com.code.pal.project.spec;
 
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -26,6 +28,76 @@ public final class SpecNormalizer {
     private static final String SIZE = "(?:[0-9]|[12][0-9]|3[0-2])px";
 
     private SpecNormalizer() {
+    }
+
+    /**
+     * Shapes a model draft before anyone approves it: scenarios that cannot run are dropped, then features left without
+     * a check. Approval later sees only checkable behaviour, so {@link #normalize} stays strict. Returns null when
+     * nothing checkable remains; the user's own request still carries every requirement into the build.
+     */
+    public static JsonNode draft(JsonNode spec) {
+        if (spec == null || !spec.isObject() || !spec.path("features").isArray()) {
+            return null;
+        }
+        ObjectNode copy = (ObjectNode) spec.deepCopy();
+        var known = new HashSet<String>();
+        copy.path("features").forEach(feature -> {
+            String id = id(feature.path("id").asString(""));
+            if (id != null) {
+                known.add(id);
+            }
+        });
+        var covered = new HashSet<String>();
+        ArrayNode acceptance = copy.arrayNode();
+        for (JsonNode scenario : limit(copy.path("acceptance"), 24)) {
+            String feature = id(scenario.path("featureId").asString(""));
+            if (scenario.isObject() && feature != null && known.contains(feature) && runnable(scenario)) {
+                acceptance.add(scenario);
+                covered.add(feature);
+            }
+        }
+        ArrayNode features = copy.arrayNode();
+        copy.path("features").forEach(feature -> {
+            if (covered.contains(id(feature.path("id").asString("")))) {
+                features.add(feature);
+            }
+        });
+        copy.set("acceptance", acceptance);
+        copy.set("features", features);
+        copy.path("pages").forEach(page -> {
+            if (page.isObject() && page.path("featureIds").isArray()) {
+                ArrayNode kept = copy.arrayNode();
+                page.path("featureIds").forEach(value -> {
+                    if (covered.contains(id(value.asString("")))) {
+                        kept.add(value);
+                    }
+                });
+                ((ObjectNode) page).set("featureIds", kept);
+            }
+        });
+        try {
+            normalize(copy, ApprovedSpec.Storage.NONE);
+            return copy;
+        } catch (IllegalArgumentException unusable) {
+            return null;
+        }
+    }
+
+    private static boolean runnable(JsonNode scenario) {
+        JsonNode steps = scenario.path("steps");
+        if (!"BROWSER".equalsIgnoreCase(scenario.path("kind").asString("BROWSER")) || !steps.isArray()
+                || steps.isEmpty() || steps.size() > 24) {
+            return false;
+        }
+        boolean asserts = false;
+        for (JsonNode value : steps) {
+            var step = value != null && value.isObject() ? step(value) : null;
+            if (step == null) {
+                return false;
+            }
+            asserts |= step.kind().startsWith("ASSERT_");
+        }
+        return asserts;
     }
 
     public static ApprovedSpec.Spec normalize(JsonNode node, ApprovedSpec.Storage storage) {

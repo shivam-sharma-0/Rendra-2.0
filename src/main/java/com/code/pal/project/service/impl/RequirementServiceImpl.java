@@ -27,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import com.code.pal.project.spec.SpecNormalizer;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -524,10 +525,14 @@ public class RequirementServiceImpl implements RequirementService {
         return parsed.stream().filter(draft -> !isAboutTheLook(draft)).limit(MAX_QUESTIONS).toList();
     }
 
-    /** Kept as data only; the approved spec envelope validates every field before anything uses it. */
+    /**
+     * Shaped to checkable behaviour before the user approves it; the approved spec envelope still validates every
+     * field before anything uses it.
+     */
     private String specDraft(JsonNode spec) {
-        if (spec == null || !spec.isObject()) return null;
-        String json = write(spec);
+        JsonNode shaped = SpecNormalizer.draft(spec);
+        if (shaped == null) return null;
+        String json = write(shaped);
         return json.length() > MAX_SPEC_DRAFT_CHARS ? null : json;
     }
 
