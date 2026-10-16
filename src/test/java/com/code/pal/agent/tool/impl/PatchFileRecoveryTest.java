@@ -36,6 +36,14 @@ class PatchFileRecoveryTest {
         assertEquals("title: New\nbody: final\nfooter: 2026\n", project.files.readText(project.projectId, ctx.root(), "a.txt"));
         assertEquals(1, changes.view(ctx).revision(), "one write for all edits");
     }
+    @Test void editsSentAsAJsonStringAreAcceptedToo() {
+        var ctx = context("a=1\nb=2\n");
+        Map<String, Object> args = Map.of("path", "a.txt", "expectedVersion", version(ctx),
+                "edits", "[{\"oldText\":\"a=1\",\"newText\":\"a=10\"},{\"oldText\":\"b=2\",\"newText\":\"b=20\"}]");
+        assertTrue(patch.validate(args).isEmpty());
+        patch.execute(args, ctx);
+        assertEquals("a=10\nb=20\n", project.files.readText(project.projectId, ctx.root(), "a.txt"));
+    }
     @Test void aMissingEditTargetChangesNothing() {
         var ctx = context("alpha beta");
         var error = assertThrows(AgentToolException.class, () -> patch.execute(Map.of("path", "a.txt", "expectedVersion", version(ctx),

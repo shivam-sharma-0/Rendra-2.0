@@ -5,11 +5,14 @@ import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.tool.AgentTool;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import com.code.pal.agent.tool.AgentToolException;
+import com.code.pal.agent.tool.ToolValidationError;
 import java.nio.file.Path;
 import java.util.Set;
+import tools.jackson.databind.ObjectMapper;
 
 @Component
 @RequiredArgsConstructor
@@ -44,6 +47,17 @@ public class PatchFileTool implements AgentTool {
                 "required", List.of("path", "expectedVersion"));
     }
 
+    /** An edits array sent as a JSON string is parsed in execute instead of failing the type check. */
+    @Override
+    public List<ToolValidationError> validate(Map<String, Object> args) {
+        if (args.get("edits") instanceof String text && text.strip().startsWith("[")) {
+            var rest = new HashMap<>(args);
+            rest.remove("edits");
+            return AgentTool.super.validate(rest);
+        }
+        return AgentTool.super.validate(args);
+    }
+
     @Override
     public Object execute(Map<String, Object> args, AgentContext context) {
         String path = Path.of(context.resolvePath(CreateFileTool.text(args, "path"))).normalize().toString()
@@ -58,7 +72,14 @@ public class PatchFileTool implements AgentTool {
                                 "Call readFile, then use its version and a unique target"));
             String expected = args.get("expectedVersion") instanceof String value ? value : null;
             Object result;
-            if (args.get("edits") instanceof List<?> edits) {
+            Object rawEdits = args.get("edits");
+            if (rawEdits instanceof String text && text.strip().startsWith("[")) {
+                rawEdits = JSON.readValue(text, List.class); // some models send the array as a JSON string
+            }
+            if (rawEdits != null && !(rawEdits instanceof List<?>)) {
+                throw new IllegalArgumentException("edits must be an array of {oldText, newText}");
+            }
+            if (rawEdits instanceof List<?> edits) {
                 result = patchAll(context, path, expected, edits);
             } else {
                 Object replacement = args.get("newText");
@@ -75,6 +96,7 @@ public class PatchFileTool implements AgentTool {
     }
 
     private static final int MAX_EDITS = 20;
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     /** Several blocks of one file in one version-checked write; every target must match exactly once, in order. */
     private Object patchAll(AgentContext context, String path, String expected, List<?> edits) {
