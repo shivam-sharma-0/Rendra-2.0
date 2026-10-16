@@ -92,8 +92,26 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleUnexpected(Exception ex, HttpServletRequest request) {
+        if (clientDisconnected(ex)) {
+            // The browser cancelled the request (poll, refresh, navigation); nothing failed and nothing can be sent.
+            log.debug("Client disconnected during {}", request.getRequestURI());
+            return null;
+        }
         log.error("Unhandled exception on {}", request.getRequestURI(), ex); // full stack in logs, generic to client
         return build(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong", request);
+    }
+
+    private static boolean clientDisconnected(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            String type = cause.getClass().getSimpleName();
+            if (type.equals("ClientAbortException") || type.equals("AsyncRequestNotUsableException")) {
+                return true;
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return false;
     }
 
     private ResponseEntity<ApiError> build(HttpStatus status, String message, HttpServletRequest request) {
