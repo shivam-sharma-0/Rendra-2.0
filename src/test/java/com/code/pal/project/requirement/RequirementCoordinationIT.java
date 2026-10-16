@@ -231,11 +231,11 @@ class RequirementCoordinationIT {
     }
 
     @Test void aChangedAnswerLeavesTheStaleDraftSpecOutOfTheApproval() {
-        model.answer("{\"questions\":[{\"key\":\"audience\",\"prompt\":\"Who?\",\"required\":true,\"recommended\":\"me\",\"options\":["
+        model.answer("{\"questions\":[{\"key\":\"purpose\",\"prompt\":\"Who?\",\"required\":true,\"recommended\":\"me\",\"options\":["
                 + "{\"id\":\"me\",\"label\":\"Me\"},{\"id\":\"team\",\"label\":\"Team\"},{\"id\":\"other\",\"label\":\"Other\"}]}],"
                 + "\"spec\":{\"title\":\"Tasks\"}}");
         var started = service.start(7L, project);
-        var answered = service.answer(7L, project, question("audience").getId(), new RequirementDtos.AnswerRequest("team", null, started.revision()));
+        var answered = service.answer(7L, project, question("purpose").getId(), new RequirementDtos.AnswerRequest("team", null, started.revision()));
         assertEquals(RequirementStatus.APPROVAL_REQUIRED, answered.status());
         service.approve(7L, project, answered.revision());
         assertNull(approvedSpecJson());

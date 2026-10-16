@@ -104,7 +104,8 @@ async function requirements(record, definition) {
     Math.max(1, Math.min(record.deadline - Date.now(), 240000)));
   let current = await interview('/start');
   for (let answered = 0; answered < 16 && current.status !== 'APPROVED';) {
-    (current.questions || []).forEach(value => question(record, value.prompt));
+    // A preselected default (an editable chip) is not a question the user had to answer.
+    (current.questions || []).filter(value => !value.selectedOption && !value.otherText).forEach(value => question(record, value.prompt));
     if (current.processing || current.artifactStatus === 'PENDING') {
       if (Date.now() >= record.deadline) throw Error('Requirements time budget exhausted');
       await pause(700); current = await interview('/start'); continue;
@@ -126,7 +127,6 @@ async function requirements(record, definition) {
     current = await interview('/questions/' + next.id, 'PUT', { ...answer, revision: current.revision });
     answered++;
   }
-  (current.questions || []).forEach(value => question(record, value.prompt));
   if (current.status !== 'APPROVED') {
     if (!current.complete) throw Error('Requirements did not complete within the benchmark answer bound');
     current = await interview('/approve', 'POST', { revision: current.revision });

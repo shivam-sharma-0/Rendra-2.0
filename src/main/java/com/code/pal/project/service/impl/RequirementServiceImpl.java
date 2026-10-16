@@ -458,9 +458,16 @@ public class RequirementServiceImpl implements RequirementService {
                 + "follow for layout and visual style: do not ask about visual style or layout, ask about what images cannot show.";
     }
 
+    /**
+     * Questions a sensible default always answers, so they never block a build: the look (a modern default or the
+     * attached images), the audience, and open-ended "anything else / additional features" prompts.
+     */
     private static boolean isAboutTheLook(QuestionDraft draft) {
         String text = (draft.key() + " " + draft.prompt()).toLowerCase(java.util.Locale.ROOT).replaceAll("[_-]", " ");
-        return text.matches(".*\\b(visual|style|look|theme|colou?rs?|layout)\\b.*");
+        return text.matches(".*\\b(visual|style|look|theme|colou?rs?|layout)\\b.*")
+                || text.matches(".*\\b(audience|target (users?|customers?|market)|primary users?|who (will|is going to) use)\\b.*")
+                || text.matches(".*\\b(additional|extra|other|more) (features?|sections?|pages?|functionality)\\b.*")
+                || text.matches(".*\\banything else\\b.*");
     }
 
     /**
@@ -471,7 +478,8 @@ public class RequirementServiceImpl implements RequirementService {
         try {
             // The first listed (fast) PLAN model: a round-robin pick of a slow reasoning model misses the request budget.
             AgentProperties.ModelSelection selection = properties.preferredModel(ProjectType.PLAN);
-            boolean withSpec = properties.isStructuredContracts();
+            // The spec drives the build's behaviour checks on every path, not only the structured one.
+            boolean withSpec = true;
             String prompt = """
                     Return only one JSON object {"questions": [...]%s} for this software project.
                     questions: 0 to 2 blocking questions, only what a sensible production default cannot decide (the

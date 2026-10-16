@@ -76,7 +76,7 @@ class RequirementServiceImplTest {
 
     @Test
     void questionsAreGeneratedOutsideAnyTransaction() {
-        modelReply = () -> "[" + question("audience") + "," + question("features") + "]";
+        modelReply = () -> "[" + question("purpose") + "," + question("features") + "]";
 
         RequirementDtos.Session view = service.start(7L, projectId);
 
@@ -90,15 +90,15 @@ class RequirementServiceImplTest {
     void imagesAttachedToTheOpeningPromptShapeTheQuestionsAndGoWithTheApprovedBuild() {
         List<String> images = List.of("uploads/1-design.png");
         when(messages.openingAttachments(projectId)).thenReturn(images);
-        modelReply = () -> "[" + question("audience") + "," + question("visual_style") + "]";
+        modelReply = () -> "[" + question("purpose") + "," + question("visual_style") + "]";
 
         RequirementDtos.Session view = service.start(7L, projectId);
         assertTrue(prompts.stream().anyMatch(prompt -> prompt.contains("attached 1 image(s)")), "the questions know about the images");
-        assertEquals(List.of("audience"), view.questions().stream().map(RequirementDtos.Question::key).toList(),
+        assertEquals(List.of("purpose"), view.questions().stream().map(RequirementDtos.Question::key).toList(),
                 "the images decide the look, so it is not asked");
 
-        RequirementQuestion audience = stored.getFirst();
-        audience.setSelectedOption("a");
+        RequirementQuestion purpose = stored.getFirst();
+        purpose.setSelectedOption("a");
         service.approve(7L, projectId);
 
         var posted = org.mockito.ArgumentCaptor.forClass(com.code.pal.message.dto.CreateMessageRequest.class);
@@ -112,7 +112,7 @@ class RequirementServiceImplTest {
 
     @Test
     void completeAnswersGoStraightToApprovalWithoutAModelCall() {
-        RequirementQuestion only = save("audience");
+        RequirementQuestion only = save("purpose");
 
         RequirementDtos.Session view = service.answer(7L, projectId, only.getId(), new RequirementDtos.AnswerRequest("a", null));
 
@@ -136,35 +136,35 @@ class RequirementServiceImplTest {
 
     @Test
     void atMostTwoQuestionsAndNeverOneAboutTheLook() {
-        modelReply = () -> "[" + question("visual_style") + "," + question("audience") + "," + question("features") + ","
+        modelReply = () -> "[" + question("visual_style") + "," + question("purpose") + "," + question("features") + ","
                 + question("data") + "," + question("pages") + "]";
 
         RequirementDtos.Session view = service.start(7L, projectId);
 
-        assertEquals(List.of("audience", "features"), view.questions().stream().map(RequirementDtos.Question::key).toList());
+        assertEquals(List.of("purpose", "features"), view.questions().stream().map(RequirementDtos.Question::key).toList());
     }
 
     @Test
     void oneCallReturnsTheQuestionsAndASpecDraft() {
         properties.setStructuredContracts(true);
-        modelReply = () -> "```json\n{\"questions\":[" + question("audience") + "],\"spec\":{\"title\":\"Coffee\"}}\n```";
+        modelReply = () -> "```json\n{\"questions\":[" + question("purpose") + "],\"spec\":{\"title\":\"Coffee\"}}\n```";
 
         RequirementDtos.Session view = service.start(7L, projectId);
 
-        assertEquals(List.of("audience"), view.questions().stream().map(RequirementDtos.Question::key).toList());
+        assertEquals(List.of("purpose"), view.questions().stream().map(RequirementDtos.Question::key).toList());
         assertEquals("{\"title\":\"Coffee\"}", session.getSpecDraftJson());
         assertEquals(1, modelCalls.get());
         assertTrue(prompts.stream().anyMatch(prompt -> prompt.contains("acceptance")), "the spec is requested");
     }
 
     @Test
-    void withoutTheSpecDrivenPathNoSpecIsRequestedOrKept() {
-        modelReply = () -> "{\"questions\":[" + question("audience") + "],\"spec\":{\"title\":\"Coffee\"}}";
+    void theSpecIsDraftedOnTheDefaultPathTooForBehaviourChecks() {
+        modelReply = () -> "{\"questions\":[" + question("purpose") + "],\"spec\":{\"title\":\"Coffee\"}}";
 
         service.start(7L, projectId);
 
-        assertNull(session.getSpecDraftJson());
-        assertFalse(prompts.stream().anyMatch(prompt -> prompt.contains("acceptance")));
+        assertEquals("{\"title\":\"Coffee\"}", session.getSpecDraftJson());
+        assertTrue(prompts.stream().anyMatch(prompt -> prompt.contains("acceptance")));
     }
 
     @Test
@@ -175,6 +175,16 @@ class RequirementServiceImplTest {
 
         assertTrue(view.questions().isEmpty());
         assertNull(session.getSpecDraftJson());
+    }
+
+    @Test
+    void audienceAndOpenEndedFeatureQuestionsAreNeverAsked() {
+        modelReply = () -> "[{\"key\":\"target\",\"prompt\":\"Who is the primary audience for the site?\",\"required\":true,\"recommended\":\"a\","
+                + "\"options\":[{\"id\":\"a\",\"label\":\"A\"},{\"id\":\"other\",\"label\":\"Other\"}]}," + question("extras").replace("extras?", "Any additional features you would like?") + "]";
+
+        RequirementDtos.Session view = service.start(7L, projectId);
+
+        assertTrue(view.questions().isEmpty(), "a sensible default answers both, so nothing blocks the build");
     }
 
     @Test
@@ -207,7 +217,7 @@ class RequirementServiceImplTest {
 
     @Test
     void anUnansweredQuestionLeftOpenSkipsTheModel() {
-        RequirementQuestion first = save("audience");
+        RequirementQuestion first = save("purpose");
         save("style");
 
         service.answer(7L, projectId, first.getId(), new RequirementDtos.AnswerRequest("a", null));
@@ -218,7 +228,7 @@ class RequirementServiceImplTest {
 
     @Test
     void userMistakesAreClientErrorsNotServerErrors() {
-        RequirementQuestion only = save("audience");
+        RequirementQuestion only = save("purpose");
 
         var empty = assertThrows(com.code.pal.project.exception.InvalidRequirementAnswerException.class,
                 () -> service.answer(7L, projectId, only.getId(), new RequirementDtos.AnswerRequest(" ", null)));
@@ -240,12 +250,12 @@ class RequirementServiceImplTest {
                 mock(com.code.pal.project.supabase.SupabaseConnectionRepository.class),
                 new AgentProperties(), new ObjectMapper());
         service.setBuildDecisions(decisions);
-        modelReply = () -> "[" + question("storage") + "," + question("audience") + "]";
+        modelReply = () -> "[" + question("storage") + "," + question("purpose") + "]";
         var view = service.start(7L, projectId);
-        assertEquals(List.of("audience", "platform_storage", "platform_auth"), view.questions().stream().map(RequirementDtos.Question::key).toList());
+        assertEquals(List.of("purpose", "platform_storage", "platform_auth"), view.questions().stream().map(RequirementDtos.Question::key).toList());
         var storage = stored.stream().filter(q -> q.getQuestionKey().equals("platform_storage")).findFirst().orElseThrow();
         assertFalse(storage.getOptionsJson().contains("SUPABASE") || storage.getOptionsJson().contains("MERN") || storage.getOptionsJson().contains("saved_database"));
-        stored.forEach(q -> q.setSelectedOption(q.getQuestionKey().equals("audience") ? "a" : q.getQuestionKey().equals("platform_storage") ? "BROWSER" : "NONE"));
+        stored.forEach(q -> q.setSelectedOption(q.getQuestionKey().equals("purpose") ? "a" : q.getQuestionKey().equals("platform_storage") ? "BROWSER" : "NONE"));
         service.approve(7L, projectId);
         assertTrue(session.getBuildDecisionJson().contains("BROWSER"));
     }
@@ -276,10 +286,10 @@ class RequirementServiceImplTest {
     }
 
     @Test void malformedModelQuestionsCannotOverflowPersistentKeysOrCreateAmbiguousOptions() {
-        modelReply = () -> "[" + question("x".repeat(81)) + "," + question("audience") + "," + question("AUDIENCE") + "]";
+        modelReply = () -> "[" + question("x".repeat(81)) + "," + question("purpose") + "," + question("PURPOSE") + "]";
         var view = service.start(7L, projectId);
         assertEquals(1, view.questions().size());
-        assertEquals("audience", view.questions().getFirst().key());
+        assertEquals("purpose", view.questions().getFirst().key());
         assertEquals(1, modelCalls.get());
     }
 

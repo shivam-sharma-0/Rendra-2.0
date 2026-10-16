@@ -94,6 +94,8 @@ import com.code.pal.agent.contract.ContractCoordinator;
 import com.code.pal.agent.contract.ContractModelCalls;
 import com.code.pal.agent.llm.LlmLogicalCall;
 import com.code.pal.agent.contract.StaticAssets;
+import com.code.pal.agent.contract.ToolLoopAcceptance;
+import com.code.pal.agent.validation.RunBehaviorCriteria;
 import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.lease.TrustedOperationPendingException;
 import com.code.pal.agent.llm.RetryableLlmException;
@@ -188,6 +190,12 @@ public class AgentRunner implements AgentRuntime {
     }
 
     private ApprovedSpecs approvedSpecs;
+    private RunBehaviorCriteria behaviorCriteria;
+
+    @Autowired
+    void useBehaviorCriteria(RunBehaviorCriteria criteria) {
+        this.behaviorCriteria = criteria;
+    }
 
     @Autowired
     void useApprovedSpecs(ApprovedSpecs specs) {
@@ -563,7 +571,31 @@ public class AgentRunner implements AgentRuntime {
         } else if (run.getMode() == ProjectType.BUILD && attachments.isEmpty()) {
             preloadEditFiles(state, userRequest, convo);
         }
+        if (run.getMode() == ProjectType.BUILD) {
+            requireApprovedBehaviour(state, convo);
+        }
         return convo;
+    }
+
+    /**
+     * A new app's first tool-loop build is checked against what the user approved, not only "the page loads":
+     * the approved spec's scenarios become this run's required browser acceptance, and the model is told the
+     * exact hooks and expected results. A missing or unusable spec keeps the generic smoke checks.
+     */
+    private void requireApprovedBehaviour(RunState state, List<LlmMessage> convo) {
+        AgentRun run = state.run;
+        if (approvedSpecs == null || behaviorCriteria == null || !props.getSandbox().isRuntimeCheck()
+                || !projectShape(run.getProjectId(), state.ctx.root()).equals(BuildPrompt.ProjectShape.EMPTY)) {
+            return;
+        }
+        var approved = approvedSpecs.current(run.getProjectId());
+        var compiled = approved.flatMap(ToolLoopAcceptance::from);
+        if (compiled.isEmpty()) {
+            return;
+        }
+        behaviorCriteria.install(run.getId(), run.getProjectId(), approved.get().requirementsProjection(),
+                approved.get().requirementsRevision(), compiled.get().criteria());
+        convo.add(LlmMessage.user(ToolLoopAcceptance.promptSection(compiled.get())));
     }
 
     /**
