@@ -9,12 +9,15 @@ import type { Quote } from '../workspaceTypes'
 
 /** Import and skills are not built yet; their menu items just close the menu, as before. */
 const notYet = () => {}
+const STOP_ICON = 'M7 7h10v10H7z'
 
 type ComposerProps = {
   project: Pick<Project, 'id' | 'type'> | null
   onSend: (prompt: string, mode: ProjectType, files: File[]) => void
   quote: Quote | null; onClearQuote: () => void
   editRequest: { text: string; nonce: number } | null
+  /** While a run is active the send button becomes Stop. */
+  running?: boolean; stopping?: boolean; onStop?: () => void
 }
 
 const modeKey = (projectId: string) => `rendra:project-mode:${projectId}`
@@ -33,7 +36,7 @@ export function Composer({ project, ...props }: ComposerProps) {
 }
 
 /** Enter sends, Shift+Enter adds a line. */
-function LoadedComposer({ project, onSend, quote, onClearQuote, editRequest }: Omit<ComposerProps, 'project'> & {
+function LoadedComposer({ project, onSend, quote, onClearQuote, editRequest, running = false, stopping = false, onStop }: Omit<ComposerProps, 'project'> & {
   project: Pick<Project, 'id' | 'type'>
 }) {
   const [draft, setDraft] = useState('')
@@ -103,9 +106,16 @@ function LoadedComposer({ project, onSend, quote, onClearQuote, editRequest }: O
         <AttachMenu size="sm" side="above" onUpload={() => fileInputRef.current?.click()} onImport={notYet} onUseSkill={notYet} />
         <ModeSwitch mode={mode} onChange={chooseMode} />
         <span className="ws-grow" />
-        <NeuIconButton type="submit" variant="accent" className="ws-composer__send" aria-label="Send" disabled={!draft.trim()}>
-          <Ico d={ICON.arrowUp} size={16} sw={2.4} />
-        </NeuIconButton>
+        {running && onStop ? (
+          <NeuIconButton type="button" variant="accent" className="ws-composer__send" aria-label="Stop" title="Stop"
+            onClick={onStop} disabled={stopping}>
+            <Ico d={STOP_ICON} size={14} sw={2.4} />
+          </NeuIconButton>
+        ) : (
+          <NeuIconButton type="submit" variant="accent" className="ws-composer__send" aria-label="Send" disabled={!draft.trim()}>
+            <Ico d={ICON.arrowUp} size={16} sw={2.4} />
+          </NeuIconButton>
+        )}
       </div>
     </form>
   )

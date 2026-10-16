@@ -130,8 +130,4 @@
 .msg-build-card__actions > button { flex: 1; min-height: 36px; border: 1px solid var(--neu-dashed); border-radius: 999px; background: var(--neu-surface); color: var(--neu-ink); font: inherit; font-size: 13px; cursor: pointer; }
 .msg-build-card__actions > button:hover:not(:disabled) { box-shadow: var(--neu-raised-sm); }
 .msg-build-card__actions > button:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 3px; }
-.msg-stop { align-self: flex-start; margin-top: 8px; min-height: 32px; padding: 0 16px; border: 1px solid var(--neu-dashed); border-radius: 999px; background: var(--neu-surface); color: var(--neu-ink); font: inherit; font-size: 13px; cursor: pointer; }
-.msg-stop:hover:not(:disabled) { box-shadow: var(--neu-raised-sm); }
-.msg-stop:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 3px; }
-.msg-stop:disabled { opacity: .6; cursor: default; }
 .msg-build-card__actions > button:disabled { opacity: .5; cursor: not-allowed; }

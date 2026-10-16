@@ -11,6 +11,8 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -33,6 +35,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 public class AgentWorker {
 
     private static final Duration POLL_TIMEOUT = Duration.ofSeconds(5);
+    private static final long FIRST_BACKOFF_MS = 1_000;
+    private static final long MAX_BACKOFF_MS = 30_000;
 
     private final AgentProperties props;
     private final AgentJobQueue queue;
@@ -62,6 +66,15 @@ public class AgentWorker {
         log.info("Agent worker started with {} thread(s)", threads);
     }
 
+    /**
+     * Stops taking work as soon as the context starts closing, before lifecycle beans such as the Redis
+     * connection factory stop; otherwise every poll fails instantly and the loop spins until destruction.
+     */
+    @EventListener(ContextClosedEvent.class)
+    void onContextClosed() {
+        stop();
+    }
+
     @PreDestroy
     void stop() {
         running = false;
@@ -69,13 +82,29 @@ public class AgentWorker {
     }
 
     private void loop() {
+        long backoff = FIRST_BACKOFF_MS;
         while (running) {
             try {
                 UUID runId = queue.dequeue(POLL_TIMEOUT);
+                backoff = FIRST_BACKOFF_MS;
                 if (runId != null) process(runId);
             } catch (Exception e) {
-                if (running) log.warn("Agent worker loop error: {}", e.getMessage());
+                if (!running) return;
+                // A failing queue (Redis down or restarting) must not spin and flood the log.
+                log.warn("Agent worker loop error (retrying in {} ms): {}", backoff, e.getMessage());
+                if (!pause(backoff)) return;
+                backoff = Math.min(MAX_BACKOFF_MS, backoff * 2);
             }
+        }
+    }
+
+    private boolean pause(long millis) {
+        try {
+            Thread.sleep(millis);
+            return true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

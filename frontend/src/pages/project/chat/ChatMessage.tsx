@@ -12,11 +12,9 @@ import { BuildSuggestion } from './BuildSuggestion'
 import { buildReply, readableBuildText } from './buildReply'
 
 /** One turn of the conversation: an assistant reply (thinking / build progress while pending) or a user message. */
-export function ChatMessage({ message, run, projectId, currentPreview = true, onOpenDetails, onOpenPreview, onRetried, onStop, stopping = false, onFeedback, onEdit, onBuild }: {
+export function ChatMessage({ message, run, projectId, currentPreview = true, onOpenDetails, onOpenPreview, onRetried, onFeedback, onEdit, onBuild }: {
   message: Message; run?: AgentRun; steps: AgentStep[]; projectId?: string
   onRetried?: (run: AgentRun) => void
-  /** Stops the running reply or build; shown only while it is running. */
-  onStop?: () => void; stopping?: boolean
   currentPreview?: boolean
   onOpenDetails: () => void; onOpenPreview: () => void
   onOpenThinking: (reasoning: string, seconds: number) => void
@@ -46,9 +44,6 @@ export function ChatMessage({ message, run, projectId, currentPreview = true, on
               onOpenPreview={onOpenPreview} onFeedback={onFeedback} />
           </>
         )}
-      {active && onStop && run?.status !== 'COMMITTING' && (
-        <button type="button" className="msg-stop" onClick={onStop} disabled={stopping}>{stopping ? 'Stopping…' : 'Stop'}</button>
-      )}
     </article>
   )
 }

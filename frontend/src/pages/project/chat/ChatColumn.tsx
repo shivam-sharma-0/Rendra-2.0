@@ -3,7 +3,7 @@ import { type AgentRun, type AgentStep, type Message, type MessageFeedback, type
 import { AppIcon } from '../../../components/icons'
 import { useShellMenu } from '../../../rendra/shell/ShellMenu'
 import { RequirementAnswerCard, RequirementWaiting } from '../dialogs/RequirementDialog'
-import { needsRequirementInterview } from '../runUtils'
+import { isActive, needsRequirementInterview } from '../runUtils'
 import type { LayoutMode, Quote } from '../workspaceTypes'
 import { BuildStatus } from './BuildStatus'
 import { ChatMessage } from './ChatMessage'
@@ -101,7 +101,7 @@ export function ChatColumn({
                 const msgSteps = msgRun ? stepsByRun[msgRun.id] ?? [] : []
                 return (
                   <ChatMessage key={m.id} message={m} run={msgRun} steps={msgSteps} currentPreview={msgRun?.id === latestSavedRun}
-                    projectId={project?.id} onRetried={onRetried} onStop={onStop} stopping={stopping}
+                    projectId={project?.id} onRetried={onRetried}
                     onOpenDetails={() => onOpenDetails(msgRun?.id)} onOpenPreview={onOpenPreview} onOpenThinking={onOpenThinking}
                     onFeedback={(feedback) => onFeedback(m.id, feedback)} onEdit={onEdit}
                     onBuild={(action) => onSend(action.message, action.mode, [], action.attachments, action.proposalId)} />
@@ -115,6 +115,7 @@ export function ChatColumn({
         </div>
       </div>
       <Composer project={project} onSend={onSend} quote={quote} onClearQuote={() => setQuote(null)}
+        running={runs.some((run) => isActive(run) && run.status !== 'COMMITTING')} stopping={stopping} onStop={onStop}
         editRequest={editRequest} />
     </section>
   )
