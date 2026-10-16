@@ -16,15 +16,27 @@ import org.springframework.transaction.support.AbstractPlatformTransactionManage
 import org.springframework.transaction.support.DefaultTransactionStatus;
 import tools.jackson.databind.ObjectMapper;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -47,8 +59,9 @@ class SupabaseServiceTest {
     private final ProjectService projects = mock(ProjectService.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final DataCipher cipher = new DataCipher("test-data-key-0123456789");
+    private final SupabaseMigrationLedger ledger = mock(SupabaseMigrationLedger.class);
     private final SupabaseService service = new SupabaseService(projects, connections(), migrations(), variables(),
-            new SupabaseClient(new ObjectMapper(), base), new SelfHostedSupabase("", "", "postgres", ""), cipher, project.files, events, new FakeTransactions(),
+            new SupabaseClient(new ObjectMapper(), base), new SelfHostedSupabase("", "", "postgres", ""), cipher, project.files, events, new FakeTransactions(), ledger,
             "^http://127\\.0\\.0\\.1:\\d+/([a-z0-9]{20})$");
 
     @AfterEach
@@ -67,7 +80,7 @@ class SupabaseServiceTest {
         assertEquals(TOKEN, cipher.decrypt(stored.getAccessTokenCipher()));
         assertEquals(base + "/" + REF, variableStore.get("VITE_SUPABASE_URL").getValue());
         assertEquals(ANON, variableStore.get("VITE_SUPABASE_ANON_KEY").getValue());
-        verify(projects).requireManageable(7L, projectId);
+        verify(projects, org.mockito.Mockito.times(2)).requireManageable(7L, projectId);   // again inside the write transaction
         verify(events).publishEvent(new BuildVariables.Changed(projectId));
     }
 
@@ -80,37 +93,155 @@ class SupabaseServiceTest {
     }
 
     @Test
-    void migrationsRunInNameOrderOnlyOnceAndChangesAfterApplyAreReported() {
+    void reviewBindsSortedExactSourcesWithoutDispatch() {
         service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
         project.write("supabase/migrations/20260101000002_policies.sql", "alter table todos enable row level security;")
                 .write("supabase/migrations/20260101000001_todos.sql", "create table todos (id bigint primary key);")
                 .write("supabase/migrations/notes.txt", "not a migration");
 
         assertEquals(List.of("PENDING", "PENDING"), statuses());
-        SupabaseService.ApplyResult result = service.apply(7L, projectId);
-
-        assertEquals(List.of("20260101000001_todos.sql", "20260101000002_policies.sql"), result.applied());
-        assertEquals(List.of("create table todos (id bigint primary key);", "alter table todos enable row level security;"), executedSql);
-        assertTrue(service.apply(7L, projectId).applied().isEmpty(), "applied migrations never run twice");
+        installLedger();
+        var review = service.review(7L, projectId);
+        assertEquals(List.of("20260101000001_todos.sql", "20260101000002_policies.sql"), review.migrations().stream().map(SupabaseService.Migration::name).toList());
         project.write("supabase/migrations/20260101000001_todos.sql", "create table todos (id bigint primary key, title text);");
-        assertEquals(List.of("CHANGED_AFTER_APPLY", "APPLIED"), statuses());
-        assertEquals(2, executedSql.size());
+        assertNotEquals(review.expectedManifestHash(), service.review(7L, projectId).expectedManifestHash());
+        assertTrue(executedSql.isEmpty());
     }
 
     @Test
-    void aFailingMigrationStopsTheRestAndIsReported() {
+    void legacyApplyRefusesWithoutDispatch() {
         service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
         project.write("supabase/migrations/1_a.sql", "select 1;").write("supabase/migrations/2_b.sql", "broken sql")
                 .write("supabase/migrations/3_c.sql", "select 3;");
         failingSql = "broken sql";
 
-        SupabaseService.ApplyResult result = service.apply(7L, projectId);
+        var failure = assertThrows(SupabaseMigrationException.class, () -> service.apply(7L, projectId));
+        assertEquals("MIGRATION_MANIFEST_REQUIRED", failure.code());
+        assertTrue(executedSql.isEmpty());
+    }
 
+    @Test
+    void sourceOrConnectionChangeRejectsTheApprovedManifest() {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        var ledger = installLedger();
+        project.write("supabase/migrations/1_a.sql", "select 1;");
+        var reviewed = service.review(7L, projectId);
+        project.write("supabase/migrations/1_a.sql", "select 2;");
+        assertEquals("MIGRATION_MANIFEST_CHANGED", assertThrows(SupabaseMigrationException.class,
+                () -> service.apply(7L, projectId, reviewed.expectedManifestHash(), "one")).code());
+        project.write("supabase/migrations/1_a.sql", "select 1;");
+        when(ledger.connectionEpoch(projectId)).thenReturn(UUID.randomUUID());
+        assertEquals("MIGRATION_MANIFEST_CHANGED", assertThrows(SupabaseMigrationException.class,
+                () -> service.apply(7L, projectId, reviewed.expectedManifestHash(), "two")).code());
+        assertTrue(executedSql.isEmpty());
+    }
+
+    @Test
+    void reconnectDisconnectAndRevokedPermissionPreventFurtherDispatch() {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        var ledger = installLedger();
+        project.write("supabase/migrations/1_a.sql", "select 1;");
+        var reviewed = service.review(7L, projectId);
+        doAnswer(call -> {
+            Runnable check = call.getArgument(3);
+            UUID changedEpoch = UUID.randomUUID();
+            when(ledger.connectionEpoch(projectId)).thenReturn(changedEpoch);
+            assertThrows(SupabaseMigrationException.class, check::run);
+            connectionStore.clear();
+            assertThrows(WorkflowStageException.class, check::run);
+            doThrow(new WorkflowStageException("revoked")).when(projects).requireManageable(7L, projectId);
+            assertThrows(WorkflowStageException.class, check::run);
+            return new SupabaseMigrationLedger.Outcome(UUID.randomUUID(), "ABORTED", List.of(), "1_a.sql", "MIGRATION_DISPATCH_STOPPED", List.of());
+        }).when(ledger).execute(eq(7L), any(), eq("one"), any(), any());
+        assertEquals("ABORTED", service.apply(7L, projectId, reviewed.expectedManifestHash(), "one").state());
+        assertTrue(executedSql.isEmpty());
+    }
+
+    @Test
+    void partialSuccessRetainsEveryOutcomeAndStopsRemainingFiles() {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        var ledger = installLedger();
+        project.write("supabase/migrations/1_a.sql", "select 1;").write("supabase/migrations/2_b.sql", "select 2;")
+                .write("supabase/migrations/3_c.sql", "select 3;");
+        UUID operation = UUID.randomUUID();
+        when(ledger.execute(eq(7L), any(), eq("one"), any(), any())).thenReturn(new SupabaseMigrationLedger.Outcome(
+                operation, "RECOVERY_REQUIRED", List.of("1_a.sql"), "2_b.sql", "MIGRATION_OUTCOME_UNKNOWN", List.of("3_c.sql")));
+        var result = service.apply(7L, projectId, service.review(7L, projectId).expectedManifestHash(), "one");
+        assertEquals(operation, result.operationId());
+        assertEquals("RECOVERY_REQUIRED", result.state());
         assertEquals(List.of("1_a.sql"), result.applied());
         assertEquals("2_b.sql", result.failed());
-        assertTrue(result.error().contains("syntax error"), result.error());
+        assertEquals("MIGRATION_OUTCOME_UNKNOWN", result.error());
         assertEquals(List.of("3_c.sql"), result.remaining());
-        assertEquals(List.of("APPLIED", "PENDING", "PENDING"), statuses());
+    }
+
+    @Test
+    void changedAppliedChecksumBlocksLaterMigrations() { assertProofRefusal("MIGRATION_APPLIED_SOURCE_CHANGED"); }
+
+    @Test
+    void legacyUnboundHistoryNeedsExplicitAdoption() { assertProofRefusal("MIGRATION_LEGACY_UNBOUND"); }
+
+    @Test
+    void invalidApprovalNeverFallsBackToLegacySql() {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        installLedger();
+        assertThrows(SupabaseMigrationException.class, () -> service.apply(7L, projectId, null, "one"));
+        assertThrows(SupabaseMigrationException.class, () -> service.apply(7L, projectId, "not-a-digest", "one"));
+        assertTrue(executedSql.isEmpty());
+    }
+
+    @Test
+    void newApplyDispatchesOnlyTheLedgerSnapshot() {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        var ledger = installLedger();
+        project.write("supabase/migrations/1_a.sql", "select 'approved';");
+        doAnswer(call -> {
+            Runnable check = call.getArgument(3);
+            check.run();
+            Consumer<SupabaseMigrationManifest.Source> send = call.getArgument(4);
+            var snapshot = call.<SupabaseMigrationManifest>getArgument(1).sources().getFirst();
+            send.accept(snapshot);
+            return new SupabaseMigrationLedger.Outcome(UUID.randomUUID(), "COMPLETED", List.of(snapshot.name()), null, null, List.of());
+        }).when(ledger).execute(eq(7L), any(), eq("one"), any(), any());
+        assertEquals("COMPLETED", service.apply(7L, projectId, service.review(7L, projectId).expectedManifestHash(), "one").state());
+        assertEquals(List.of("select 'approved';"), executedSql);
+    }
+
+    @Test
+    void malformedUtf8CannotBeSilentlyReencodedForApproval() {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        installLedger();
+        project.files.writeBytes(projectId, "supabase/migrations/1_a.sql", new byte[] {(byte) 0xc3, (byte) 0x28});
+        assertEquals("MIGRATION_INVALID_UTF8", assertThrows(SupabaseMigrationException.class, () -> service.review(7L, projectId)).code());
+        assertTrue(executedSql.isEmpty());
+    }
+
+    @Test
+    void lostResponseCanBePolledByRequestKeyWithoutRereadingChangedSources() {
+        var ledger = installLedger();
+        UUID operation = UUID.randomUUID();
+        when(ledger.outcomeByKey(7L, projectId, "lost-response")).thenReturn(new SupabaseMigrationLedger.Outcome(
+                operation, "RECOVERY_REQUIRED", List.of(), "1_a.sql", "MIGRATION_OUTCOME_UNKNOWN", List.of("2_b.sql")));
+        project.files.writeBytes(projectId, "supabase/migrations/1_a.sql", new byte[] {(byte) 0xff});
+        assertEquals(operation, service.operationByKey(7L, projectId, "lost-response").operationId());
+        assertTrue(executedSql.isEmpty());
+        verify(projects).requireManageable(7L, projectId);
+    }
+
+    private SupabaseMigrationLedger installLedger() {
+        UUID epoch = UUID.randomUUID();
+        when(ledger.connectionEpoch(projectId)).thenReturn(epoch);
+        return ledger;
+    }
+
+    private void assertProofRefusal(String code) {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        var ledger = installLedger();
+        project.write("supabase/migrations/1_a.sql", "select 1;");
+        when(ledger.execute(eq(7L), any(), eq("one"), any(), any())).thenThrow(new SupabaseMigrationException(code));
+        assertEquals(code, assertThrows(SupabaseMigrationException.class,
+                () -> service.apply(7L, projectId, service.review(7L, projectId).expectedManifestHash(), "one")).code());
+        assertTrue(executedSql.isEmpty());
     }
 
     @Test
@@ -123,10 +254,32 @@ class SupabaseServiceTest {
     }
 
     @Test
+    void connectingAndDisconnectingFenceTheLedgerAndRotateTheApprovalEpoch() {
+        service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN);
+        service.disconnect(7L, projectId);
+
+        var order = inOrder(ledger);
+        order.verify(ledger).guardConnectionChange(projectId);
+        order.verify(ledger).connectionChanged(projectId);
+        order.verify(ledger).guardConnectionChange(projectId);
+        order.verify(ledger).connectionChanged(projectId);
+    }
+
+    @Test
+    void aReconnectDuringAnActiveApplyStoresNothing() {
+        doThrow(new SupabaseMigrationException("MIGRATION_TARGET_BUSY")).when(ledger).guardConnectionChange(projectId);
+
+        assertThrows(SupabaseMigrationException.class, () -> service.connect(7L, projectId, base + "/" + REF, ANON, TOKEN));
+
+        assertTrue(connectionStore.isEmpty() && variableStore.isEmpty());
+        verify(ledger, never()).connectionChanged(any());
+    }
+
+    @Test
     void theOperatorInstanceCannotBeConnectedWhileItsSqlIsDisabled() {
         var operator = new SelfHostedSupabase(base + "/operator", "", "postgres", "");
         var guarded = new SupabaseService(projects, connections(), migrations(), variables(),
-                new SupabaseClient(new ObjectMapper(), base), operator, cipher, project.files, events, new FakeTransactions(),
+                new SupabaseClient(new ObjectMapper(), base), operator, cipher, project.files, events, new FakeTransactions(), ledger,
                 "^http://127\\.0\\.0\\.1:\\d+/([a-z0-9]{20})$");
 
         var failure = assertThrows(SelfHostedSqlDisabledException.class,
@@ -195,7 +348,7 @@ class SupabaseServiceTest {
             });
             http.start();
             return http;
-        } catch (java.io.IOException error) {
+        } catch (IOException error) {
             throw new IllegalStateException(error);
         }
     }
@@ -205,12 +358,14 @@ class SupabaseServiceTest {
     private SupabaseConnectionRepository connections() {
         SupabaseConnectionRepository repository = mock(SupabaseConnectionRepository.class);
         when(repository.findById(any())).thenAnswer(call -> Optional.ofNullable(connectionStore.get(call.<UUID>getArgument(0))));
-        when(repository.save(any())).thenAnswer(call -> {
+        org.mockito.stubbing.Answer<SupabaseConnection> store = call -> {
             SupabaseConnection connection = call.getArgument(0);
             connectionStore.put(connection.getProjectId(), connection);
             return connection;
-        });
-        org.mockito.Mockito.doAnswer(call -> connectionStore.remove(call.<UUID>getArgument(0))).when(repository).deleteById(any());
+        };
+        when(repository.save(any())).thenAnswer(store);
+        when(repository.saveAndFlush(any())).thenAnswer(store);
+        doAnswer(call -> connectionStore.remove(call.<UUID>getArgument(0))).when(repository).deleteById(any());
         return repository;
     }
 
@@ -221,7 +376,10 @@ class SupabaseServiceTest {
             migrationStore.add(call.getArgument(0));
             return call.getArgument(0);
         });
-        org.mockito.Mockito.doAnswer(call -> { migrationStore.clear(); return null; }).when(repository).deleteByProjectId(any());
+        doAnswer(call -> {
+            migrationStore.clear();
+            return null;
+        }).when(repository).deleteByProjectId(any());
         return repository;
     }
 
@@ -233,7 +391,7 @@ class SupabaseServiceTest {
             variableStore.put(variable.getName(), variable);
             return variable;
         });
-        org.mockito.Mockito.doAnswer(call -> variableStore.remove(call.<ProjectEnvironmentVariable>getArgument(0).getName()))
+        doAnswer(call -> variableStore.remove(call.<ProjectEnvironmentVariable>getArgument(0).getName()))
                 .when(repository).delete(any());
         return repository;
     }

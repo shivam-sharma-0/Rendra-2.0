@@ -13,18 +13,23 @@ import java.util.Set;
  * visitor full database access. Decoding a JWT here is only a reason to reject it, never proof that it is valid:
  * Supabase itself still verifies the key.
  */
-final class SupabaseKeys {
+public final class SupabaseKeys {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> SERVER_ROLES = Set.of("service_role", "supabase_admin", "postgres");
-    static final String SECRET_KEY = "This is a secret server key. Paste the anon (public) key from the Supabase API settings; "
+    public static final String SECRET_KEY = "This is a secret server key. Paste the anon (public) key from the Supabase API settings; "
             + "a secret key would give every visitor full access to your database";
 
     private SupabaseKeys() {
     }
 
-    static void requirePublic(String key) {
+    /** Whether a value is a Supabase secret or server-role key, which must never be published. */
+    public static boolean secret(String key) {
         String value = key == null ? "" : key.strip();
-        if (value.toLowerCase(Locale.ROOT).startsWith("sb_secret_") || isServerRole(role(value))) {
+        return value.toLowerCase(Locale.ROOT).startsWith("sb_secret_") || isServerRole(role(value));
+    }
+
+    static void requirePublic(String key) {
+        if (secret(key)) {
             throw new SupabaseException(SECRET_KEY);
         }
     }

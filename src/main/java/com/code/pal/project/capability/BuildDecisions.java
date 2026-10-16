@@ -80,8 +80,7 @@ public class BuildDecisions {
         // The projection excludes URLs and both public/private key values.
         // A connection to the operator's own instance is usable only where the operator enabled its SQL path.
         String revision = connections.capability(projectId)
-                .filter(connection -> connection.getMode() != com.code.pal.project.supabase.SupabaseConnection.Mode.SELF_HOSTED
-                        || selfHosted != null && selfHosted.operatorSqlEnabled())
+                .filter(connection -> com.code.pal.project.supabase.SupabaseAdmission.usable(connection.getMode(), selfHosted))
                 .map(connection -> digest(
                         connection.getProjectRef() + "/" + connection.getMode() + "/" + connection.getUpdatedAt())).orElse(null);
         return new Available(mern, revision);

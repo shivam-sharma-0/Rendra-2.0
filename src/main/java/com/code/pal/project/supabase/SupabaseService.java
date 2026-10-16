@@ -14,13 +14,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Instant;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -41,7 +47,7 @@ public class SupabaseService {
     public static final String URL_VARIABLE = "VITE_SUPABASE_URL";
     public static final String KEY_VARIABLE = "VITE_SUPABASE_ANON_KEY";
     static final String MIGRATIONS = "supabase/migrations";
-    private static final int MAX_MIGRATION_BYTES = 200_000;
+    private static final int MAX_MIGRATION_BYTES = SupabaseMigrationManifest.MAX_FILE_BYTES;
 
     private final ProjectService projects;
     private final SupabaseConnectionRepository connections;
@@ -54,11 +60,11 @@ public class SupabaseService {
     private final ApplicationEventPublisher events;
     private final TransactionTemplate tx;
     private final Pattern projectUrl;
-    private final Map<UUID, ReentrantLock> applying = new ConcurrentHashMap<>();
+    private final SupabaseMigrationLedger ledger;
 
     public SupabaseService(ProjectService projects, SupabaseConnectionRepository connections, SupabaseMigrationRepository migrations,
                            ProjectEnvironmentVariableRepository variables, SupabaseClient supabase, SelfHostedSupabase selfHosted, DataCipher cipher,
-                           ProjectFiles files, ApplicationEventPublisher events, PlatformTransactionManager transactionManager,
+                           ProjectFiles files, ApplicationEventPublisher events, PlatformTransactionManager transactionManager, SupabaseMigrationLedger ledger,
                            @Value("${app.supabase.project-url-pattern:^https://([a-z0-9]{20})\\.supabase\\.co$}") String projectUrlPattern) {
         this.projects = projects;
         this.connections = connections;
@@ -70,6 +76,7 @@ public class SupabaseService {
         this.files = files;
         this.events = events;
         this.tx = new TransactionTemplate(transactionManager);
+        this.ledger = Objects.requireNonNull(ledger);
         this.projectUrl = Pattern.compile(projectUrlPattern);
     }
 
@@ -77,7 +84,9 @@ public class SupabaseService {
 
     public record Migration(String name, String status, String sql) {}
 
-    public record ApplyResult(List<String> applied, String failed, String error, List<String> remaining) {}
+    public record ApplyResult(List<String> applied, String failed, String error, List<String> remaining, UUID operationId, String state) {}
+
+    public record MigrationReview(String expectedManifestHash, UUID connectionEpoch, List<Migration> migrations) {}
 
     public Status status(Long userId, UUID projectId) {
         return tx.execute(state -> {
@@ -113,6 +122,9 @@ public class SupabaseService {
         String tokenCipher = token == null ? null : cipher.encrypt(token);
 
         tx.executeWithoutResult(state -> {
+            // Re-authorize and fence against an apply in flight before touching the connection or its history.
+            projects.requireManageable(userId, projectId);
+            ledger.guardConnectionChange(projectId);
             SupabaseConnection connection = connections.findById(projectId).orElseGet(() -> SupabaseConnection.builder().projectId(projectId).build());
             if (connection.getProjectRef() != null && !connection.getProjectRef().equals(projectRef)) {
                 migrations.deleteByProjectId(projectId);   // a different database: nothing is applied there yet
@@ -124,9 +136,10 @@ public class SupabaseService {
             connection.setMode(onThisServer ? SupabaseConnection.Mode.SELF_HOSTED : SupabaseConnection.Mode.CLOUD);
             if (onThisServer) connection.setAccessTokenCipher(null);
             connection.setConnectedBy(userId);
-            connections.save(connection);
+            connections.saveAndFlush(connection);
             setVariable(projectId, URL_VARIABLE, cleanUrl);
             setVariable(projectId, KEY_VARIABLE, anonKey.trim());
+            ledger.connectionChanged(projectId);   // approvals made against the old connection no longer match
             events.publishEvent(new BuildVariables.Changed(projectId));
         });
         log.info("supabase_connected projectId={} ref={} selfHosted={}", projectId, projectRef, onThisServer);
@@ -136,9 +149,12 @@ public class SupabaseService {
     public void disconnect(Long userId, UUID projectId) {
         tx.executeWithoutResult(state -> {
             projects.requireManageable(userId, projectId);
+            ledger.guardConnectionChange(projectId);
             connections.deleteById(projectId);
             migrations.deleteByProjectId(projectId);
             for (String name : List.of(URL_VARIABLE, KEY_VARIABLE)) variables.findByProjectIdAndName(projectId, name).ifPresent(variables::delete);
+            connections.flush();
+            ledger.connectionChanged(projectId);
             events.publishEvent(new BuildVariables.Changed(projectId));
         });
     }
@@ -159,51 +175,94 @@ public class SupabaseService {
         return result;
     }
 
-    /** Runs the pending migrations in name order; stops at the first failure. One apply per project at a time. */
+    /** Legacy clients must review and submit an exact manifest; never fall back to the former local lock. */
     public ApplyResult apply(Long userId, UUID projectId) {
+        requireApplyConnection(userId, projectId);
+        throw new SupabaseMigrationException("MIGRATION_MANIFEST_REQUIRED");
+    }
+
+    /** Exact approval input; includes SQL for the authorized owner, never access tokens or ledger ciphertext. */
+    public MigrationReview review(Long userId, UUID projectId) {
+        SupabaseConnection connection = requireApplyConnection(userId, projectId);
+        SupabaseMigrationManifest manifest = capture(projectId, connection);
+        Map<String, SupabaseMigration> applied = tx.execute(state -> appliedByName(projectId));
+        List<Migration> reviewed = manifest.sources().stream().map(source -> {
+            SupabaseMigration record = applied.get(source.name());
+            String status = record == null ? "PENDING" : record.getChecksum().equals(source.checksum()) ? "APPLIED" : "CHANGED_AFTER_APPLY";
+            return new Migration(source.name(), status, source.sql());
+        }).toList();
+        return new MigrationReview(manifest.hash(), manifest.connectionEpoch(), reviewed);
+    }
+
+    /** All remote execution is from the encrypted, durably claimed ledger snapshot. No transaction spans HTTP. */
+    public ApplyResult apply(Long userId, UUID projectId, String expectedManifestHash, String idempotencyKey) {
+        SupabaseConnection connection = requireApplyConnection(userId, projectId);
+        if (expectedManifestHash == null || !expectedManifestHash.matches("sha256:[0-9a-f]{64}")) {
+            throw new SupabaseMigrationException("MIGRATION_MANIFEST_REQUIRED");
+        }
+        SupabaseMigrationManifest manifest = capture(projectId, connection);
+        requireApprovedManifest(expectedManifestHash, manifest);
+        String token = connection.getMode() == SupabaseConnection.Mode.CLOUD ? cipher.decrypt(connection.getAccessTokenCipher()) : null;
+        SupabaseMigrationLedger.Outcome outcome = ledger.execute(userId, manifest, idempotencyKey, () -> {
+            SupabaseConnection current = requireApplyConnection(userId, projectId);
+            requireApprovedManifest(expectedManifestHash, capture(projectId, current));
+        }, source -> {
+            if (connection.getMode() == SupabaseConnection.Mode.SELF_HOSTED) selfHosted.runSql(source.sql());
+            else supabase.runSql(connection.getProjectRef(), token, source.sql());
+        });
+        return result(outcome);
+    }
+
+    /** Poll durable status after a response loss; current source files need not still match the old request. */
+    public ApplyResult operation(Long userId, UUID projectId, UUID operationId) {
+        tx.executeWithoutResult(state -> projects.requireManageable(userId, projectId));
+        return result(ledger.outcome(userId, projectId, operationId));
+    }
+
+    public ApplyResult operationByKey(Long userId, UUID projectId, String idempotencyKey) {
+        tx.executeWithoutResult(state -> projects.requireManageable(userId, projectId));
+        return result(ledger.outcomeByKey(userId, projectId, idempotencyKey));
+    }
+
+    private static ApplyResult result(SupabaseMigrationLedger.Outcome outcome) {
+        return new ApplyResult(outcome.applied(), outcome.failed(), outcome.code(), outcome.remaining(), outcome.operationId(), outcome.state());
+    }
+
+    private SupabaseConnection requireApplyConnection(Long userId, UUID projectId) {
         SupabaseConnection connection = tx.execute(state -> {
             projects.requireManageable(userId, projectId);
             return connections.findById(projectId).orElseThrow(() -> new WorkflowStageException("Connect Supabase first"));
         });
         if (connection.getMode() == SupabaseConnection.Mode.SELF_HOSTED) {
             selfHosted.requireOperatorSqlEnabled();
+            if (!selfHosted.matches(connection.getUrl())) throw new SupabaseMigrationException("MIGRATION_CONNECTION_CHANGED");
         }
         if (!migrationsEnabled(connection)) {
             throw new WorkflowStageException(connection.getMode() == SupabaseConnection.Mode.SELF_HOSTED
                     ? "This server has no database configured for its Supabase instance"
                     : "Add a Supabase access token to apply migrations from here");
         }
-        java.util.function.Consumer<String> runner;
-        if (connection.getMode() == SupabaseConnection.Mode.SELF_HOSTED) {
-            runner = selfHosted::runSql;
-        } else {
-            String token = cipher.decrypt(connection.getAccessTokenCipher());
-            runner = sql -> supabase.runSql(connection.getProjectRef(), token, sql);
+        return connection;
+    }
+
+    private SupabaseMigrationManifest capture(UUID projectId, SupabaseConnection connection) {
+        List<String> names = migrationFiles(projectId);
+        if (names.size() > SupabaseMigrationManifest.MAX_FILES) throw new SupabaseMigrationException("MIGRATION_MANIFEST_TOO_LARGE");
+        List<SupabaseMigrationManifest.Source> sources = new ArrayList<>();
+        int bytes = 0;
+        for (String name : names) {
+            var source = SupabaseMigrationManifest.Source.of(name, read(projectId, name));
+            sources.add(source);
+            bytes += source.byteCount();
+            if (bytes > SupabaseMigrationManifest.MAX_TOTAL_BYTES) throw new SupabaseMigrationException("MIGRATION_MANIFEST_TOO_LARGE");
         }
-        ReentrantLock lock = applying.computeIfAbsent(projectId, ignored -> new ReentrantLock());
-        if (!lock.tryLock()) throw new WorkflowStageException("Migrations are already being applied for this project");
-        try {
-            Map<String, SupabaseMigration> applied = tx.execute(state -> appliedByName(projectId));
-            List<String> pending = migrationFiles(projectId).stream().filter(name -> !applied.containsKey(name)).toList();
-            List<String> done = new ArrayList<>();
-            for (int i = 0; i < pending.size(); i++) {
-                String name = pending.get(i);
-                String sql = read(projectId, name);
-                try {
-                    runner.accept(sql);
-                } catch (SupabaseException failure) {
-                    log.warn("supabase_migration_failed projectId={} migration={} reason={}", projectId, name, failure.getMessage());
-                    return new ApplyResult(done, name, failure.getMessage(), pending.subList(i + 1, pending.size()));
-                }
-                tx.executeWithoutResult(state -> migrations.save(SupabaseMigration.builder().projectId(projectId).name(name)
-                        .checksum(checksum(sql)).appliedBy(userId).appliedAt(Instant.now()).build()));
-                done.add(name);
-                log.info("supabase_migration_applied projectId={} migration={}", projectId, name);
-            }
-            return new ApplyResult(done, null, null, List.of());
-        } finally {
-            lock.unlock();
-        }
+        return SupabaseMigrationManifest.create(projectId,
+                SupabaseMigrationLedger.targetKey(connection.getMode().name(), connection.getProjectRef(), connection.getUrl()),
+                ledger.connectionEpoch(projectId), sources);
+    }
+
+    private static void requireApprovedManifest(String expected, SupabaseMigrationManifest actual) {
+        if (!expected.equals(actual.hash())) throw new SupabaseMigrationException("MIGRATION_MANIFEST_CHANGED");
     }
 
     private boolean migrationsEnabled(SupabaseConnection connection) {
@@ -225,7 +284,13 @@ public class SupabaseService {
     }
 
     private String read(UUID projectId, String name) {
-        return new String(files.readBytes(projectId, MIGRATIONS, name, MAX_MIGRATION_BYTES), StandardCharsets.UTF_8);
+        byte[] bytes = files.readBytes(projectId, MIGRATIONS, name, MAX_MIGRATION_BYTES);
+        try {
+            return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (CharacterCodingException malformed) {
+            throw new SupabaseMigrationException("MIGRATION_INVALID_UTF8");
+        }
     }
 
     private void setVariable(UUID projectId, String name, String value) {

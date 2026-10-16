@@ -81,5 +81,9 @@ public class ProjectEnvironmentService {
                 throw new InvalidEnvironmentVariableException("Values cannot contain quotes ('), line breaks or control characters");
             }
         }
+        if (com.code.pal.project.supabase.SupabaseKeys.secret(value)) {
+            // Every VITE_ value is compiled into the public site.
+            throw new InvalidEnvironmentVariableException(com.code.pal.project.supabase.SupabaseKeys.SECRET_KEY);
+        }
     }
 }

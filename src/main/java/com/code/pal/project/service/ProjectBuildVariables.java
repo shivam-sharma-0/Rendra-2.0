@@ -2,6 +2,7 @@ package com.code.pal.project.service;
 
 import com.code.pal.agent.preview.BuildVariables;
 import com.code.pal.project.repository.ProjectEnvironmentVariableRepository;
+import com.code.pal.project.supabase.SupabaseKeys;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,7 +25,14 @@ public class ProjectBuildVariables implements BuildVariables {
     @Transactional(readOnly = true)
     public Map<String, String> variables(UUID projectId) {
         Map<String, String> result = new LinkedHashMap<>();
-        variables.findByProjectIdOrderByNameAsc(projectId).forEach(variable -> result.put(variable.getName(), variable.getValue()));
+        variables.findByProjectIdOrderByNameAsc(projectId).forEach(variable -> {
+            // Values stored before secret keys were refused would still be compiled into the public site.
+            if (SupabaseKeys.secret(variable.getValue())) {
+                throw new IllegalStateException(variable.getName() + " holds a secret Supabase key; replace it with the anon "
+                        + "(public) key before building");
+            }
+            result.put(variable.getName(), variable.getValue());
+        });
         return result;
     }
 }

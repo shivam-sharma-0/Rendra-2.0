@@ -41,7 +41,7 @@ class ProjectEnvironmentServiceTest {
         for (String name : new String[]{"API_URL", "vite_x", "VITE_", "VITE_A-B", "VITE_" + "X".repeat(60)}) {
             assertThrows(InvalidEnvironmentVariableException.class, () -> service.set(7L, projectId, name, "x"), name);
         }
-        for (String value : new String[]{"it's", "line\nbreak", "tab\u0000", "x".repeat(4_001)}) {
+        for (String value : new String[]{"it's", "line\nbreak", "tab\u0000", "x".repeat(4_001), "sb_secret_abc123"}) {
             assertThrows(InvalidEnvironmentVariableException.class, () -> service.set(7L, projectId, "VITE_OK", value), value);
         }
         verify(repository, never()).save(any());

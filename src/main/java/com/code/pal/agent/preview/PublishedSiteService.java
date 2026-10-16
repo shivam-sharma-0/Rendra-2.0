@@ -14,6 +14,9 @@ import java.util.Set;
 import java.util.UUID;
 import com.code.pal.agent.stack.MernPack;
 import com.code.pal.agent.stack.StackPacks;
+import com.code.pal.project.supabase.SelfHostedSupabase;
+import com.code.pal.project.supabase.SupabaseAdmission;
+import com.code.pal.project.supabase.SupabaseConnectionRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 
 /**
@@ -35,6 +38,14 @@ public class PublishedSiteService {
     private StackPacks stacks;
     @Autowired
     void useStacks(StackPacks stacks) { this.stacks = stacks; }
+    private SupabaseConnectionRepository supabaseConnections;
+    private SelfHostedSupabase selfHosted;
+    @Autowired(required = false)
+    void useSupabase(SupabaseConnectionRepository connections,
+                     SelfHostedSupabase selfHosted) {
+        this.supabaseConnections = connections;
+        this.selfHosted = selfHosted;
+    }
 
     private final SiteBuildService sites;
     private final ProjectFiles files;
@@ -91,6 +102,8 @@ public class PublishedSiteService {
     public record Capability(boolean available,String reason) {}
     public Capability capability(UUID projectId) {
         if(stacks==null)return new Capability(false,"Publication capability is unavailable");
+        String supabase=SupabaseAdmission.problem(supabaseConnections,selfHosted,projectId);
+        if(supabase!=null)return new Capability(false,supabase);
         var stack=stacks.detect(files,projectId,".");
         if(stack instanceof MernPack || files.exists(projectId,".","server/package.json"))
             return new Capability(false,"Publishing apps with an API is unavailable until isolated frontend/backend releases are supported");

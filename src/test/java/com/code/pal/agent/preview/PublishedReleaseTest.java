@@ -39,4 +39,27 @@ class PublishedReleaseTest {
         project.write(".codepal/published/" + id + "/index.html", "legacy");
         assertNull(service.publishedSite(project.projectId));
     }
+
+    @Test void anAppOnTheDisabledSharedSupabaseCannotPublishButOwnProjectsCan() {
+        var project = LocalProject.create();
+        var sites = mock(SiteBuildService.class);
+        when(sites.build(project.projectId)).thenReturn(SiteBuildService.Result.notNeeded());
+        var service = new PublishedSiteService(sites, project.files, project.sandbox);
+        service.useStacks(new StackPacks(new ObjectMapper()));
+        project.write("index.html", "A");
+        var connection = mock(com.code.pal.project.supabase.SupabaseConnectionRepository.Capability.class);
+        var connections = mock(com.code.pal.project.supabase.SupabaseConnectionRepository.class);
+        when(connections.capability(project.projectId)).thenReturn(java.util.Optional.of(connection));
+        when(connection.getMode()).thenReturn(com.code.pal.project.supabase.SupabaseConnection.Mode.SELF_HOSTED);
+        service.useSupabase(connections, new com.code.pal.project.supabase.SelfHostedSupabase("", "", "postgres", ""));
+
+        assertEquals(com.code.pal.project.supabase.SupabaseAdmission.SELF_HOSTED_BLOCKED, service.capability(project.projectId).reason());
+        assertThrows(IllegalStateException.class, () -> service.publish(project.projectId));
+        verifyNoInteractions(sites);
+        assertNull(service.publishedSite(project.projectId));
+
+        when(connection.getMode()).thenReturn(com.code.pal.project.supabase.SupabaseConnection.Mode.CLOUD);
+        service.publish(project.projectId);
+        assertNotNull(service.publishedSite(project.projectId));
+    }
 }

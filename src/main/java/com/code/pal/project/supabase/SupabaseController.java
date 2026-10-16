@@ -38,11 +38,38 @@ public class SupabaseController {
         return supabase.migrations(principal.userId(), projectId);
     }
 
-    /** The user's approval: runs every pending migration, in order. */
-    @PostMapping("/migrations/apply")
-    public SupabaseService.ApplyResult apply(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId) {
-        return supabase.apply(principal.userId(), projectId);
+    /** The exact SQL and manifest digest the user approves; any later change to files or connection invalidates it. */
+    @GetMapping("/migrations/review")
+    public SupabaseService.MigrationReview review(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId) {
+        return supabase.review(principal.userId(), projectId);
     }
+
+    /**
+     * The user's approval of one reviewed manifest. The client keeps the same Idempotency-Key across retries of
+     * this approval, so a lost response never runs the SQL twice. No body means a legacy client: refused.
+     */
+    @PostMapping("/migrations/apply")
+    public SupabaseService.ApplyResult apply(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId,
+                                             @RequestBody(required = false) ApplyRequest request,
+                                             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        if (request == null) return supabase.apply(principal.userId(), projectId);
+        return supabase.apply(principal.userId(), projectId, request.expectedManifestHash(), idempotencyKey);
+    }
+
+    @GetMapping("/migrations/operations/{operationId}")
+    public SupabaseService.ApplyResult operation(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId,
+                                                 @PathVariable UUID operationId) {
+        return supabase.operation(principal.userId(), projectId, operationId);
+    }
+
+    /** Status after a lost response, found by the approval's Idempotency-Key. */
+    @GetMapping("/migrations/operations")
+    public SupabaseService.ApplyResult operationByKey(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId,
+                                                      @RequestParam("key") String idempotencyKey) {
+        return supabase.operationByKey(principal.userId(), projectId, idempotencyKey);
+    }
+
+    public record ApplyRequest(String expectedManifestHash) {}
 
     /** {@code accessToken}: optional personal access token, needed only to apply migrations from here. */
     public record ConnectRequest(String url, String anonKey, String accessToken) {}
