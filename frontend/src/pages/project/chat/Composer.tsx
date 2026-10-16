@@ -69,6 +69,7 @@ function LoadedComposer({ project, onSend, quote, onClearQuote, editRequest, run
 
   const submit = (e?: FormEvent) => {
     e?.preventDefault()
+    if (running) return
     const text = draft.trim()
     if (!text) return
     const prompt = quote ? `> ${quote.text.replace(/\n/g, '\n> ')}\n\n${text}` : text

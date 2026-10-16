@@ -35,6 +35,7 @@ export function useProjectWorkspace(id: string) {
   // Highest step seq already held per run, so the timeline only fetches what it is missing (afterSeq).
   const maxSeqRef = useRef<Record<string, number>>({})
   const messageRefreshVersion = useRef(0)
+  const previousActiveRuns = useRef(new Set<string>())
 
   const selectedRun = useMemo(() => runs.find((run) => isActive(run)) ?? runs[0], [runs])
   const steps = selectedRun ? stepsByRun[selectedRun.id] ?? [] : []
@@ -115,6 +116,14 @@ export function useProjectWorkspace(id: string) {
       if (version === messageRefreshVersion.current) incoming.forEach(upsert)
     }).catch(() => undefined)
   }, [loadLatestMessages, upsert])
+
+  useEffect(() => {
+    const currentRuns = runs.filter((run) => run.projectId === id)
+    const finished = currentRuns.some((run) => previousActiveRuns.current.has(run.id) && !isActive(run))
+    previousActiveRuns.current = new Set(currentRuns.filter(isActive).map((run) => run.id))
+    // Fetch AFTER the run update: a parallel message request may still have returned PENDING.
+    if (finished) refreshMessages()
+  }, [id, runs, refreshMessages])
 
   const addTimelineStep = useCallback((event: TimelineEvent, type: string) => {
     if (!event.runId || typeof event.seq !== 'number') return
@@ -263,12 +272,16 @@ export function useProjectWorkspace(id: string) {
     setCancelling(true)
     try {
       await agentApi.cancel(id, selectedRun.id)
-      await refreshTimeline()
     } catch {
-      // ignore — the run may have just finished; the timeline refresh reflects the real state
+      // The run may have just finished; re-read its state below.
     } finally {
-      await refreshTimeline()
-      setCancelling(false)
+      try {
+        await refreshTimeline()
+      } catch {
+        // Realtime/reconnect and the in-flight recheck can recover a failed refresh.
+      } finally {
+        setCancelling(false)
+      }
     }
   }, [id, refreshTimeline, selectedRun])
 

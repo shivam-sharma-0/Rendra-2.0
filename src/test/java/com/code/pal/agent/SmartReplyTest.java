@@ -120,20 +120,23 @@ class SmartReplyTest {
     }
 
     @Test
-    void unclearOfferUsesTheConcreteModelProposalInsteadOfTheVagueRequest() {
+    void unclearOfferKeepsTheUsersWordsAndBuildsWithTheAcceptedProposalAsContext() {
         var fixture = new Fixture(ProjectType.BUILD, "hmm");
         fixture.run("{\"reply\":\"Add a contact form to the bakery page.\",\"action\":\"build\"}");
-        assertEquals("Add a contact form to the bakery page.", fixture.assistant.getSuggestedBuildText());
+        assertEquals("hmm", fixture.assistant.getSuggestedBuildText(), "model prose is never put in the user's mouth");
+        String execution = com.code.pal.message.service.ConversationProposals.executionPrompt(fixture.assistant);
+        assertTrue(execution.contains("> hmm") && execution.contains("> Add a contact form to the bakery page."), execution);
+        assertTrue(execution.contains("the original request wins on any conflict"), execution);
         fixture.noWrites();
     }
 
     @Test
-    void unclearOfferHasABoundedLength() {
+    void theAcceptedProposalContextIsBounded() {
         var fixture = new Fixture(ProjectType.BUILD, "hmm");
         fixture.run("{\"reply\":\"Add dark mode. " + "Detail. ".repeat(400) + "\",\"action\":\"build\"}");
-        String offer = fixture.assistant.getSuggestedBuildText();
-        assertTrue(offer.startsWith("Add dark mode."));
-        assertTrue(offer.length() <= 2_000);
+        String execution = com.code.pal.message.service.ConversationProposals.executionPrompt(fixture.assistant);
+        assertTrue(execution.contains("> Add dark mode."));
+        assertTrue(execution.length() <= 2_400, "proposal context stays bounded: " + execution.length());
         fixture.noWrites();
     }
 

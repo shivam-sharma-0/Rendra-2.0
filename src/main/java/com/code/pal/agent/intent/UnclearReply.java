@@ -32,8 +32,4 @@ public record UnclearReply(String reply, String action) {
         boolean hinglish = RequestRouter.normalize(request).matches(".*\\b(kya|hai|karo|chahiye|mujhe|haan)\\b.*");
         return new UnclearReply(hinglish ? "Aap kya karna chahte hain?" : "What would you like to do?", "ask");
     }
-
-    public String offerText() {
-        return reply.substring(0, Math.min(2_000, reply.length())).strip();
-    }
 }

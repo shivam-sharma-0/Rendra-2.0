@@ -115,6 +115,7 @@ import java.util.LinkedHashMap;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -291,6 +292,8 @@ public class AgentRunner implements AgentRuntime {
         long deadlineNanos;
         /** The project had no app files when the run started: its first build gets the completeness review. */
         boolean newProject;
+        /** A bare go-ahead resumed the previous failed request, so the model must be given that request. */
+        boolean resumedRequest;
 
         RunState(AgentRun run, DeltaBatcher stream, RunCancellation cancellation) {
             this.run = run;
@@ -447,12 +450,21 @@ public class AgentRunner implements AgentRuntime {
         List<String> attachments = accepted.request().executionAttachmentPaths();
         if (run.getMode() == ProjectType.BUILD && accepted.request().getSourceProposalId() == null && attachments.isEmpty()
                 && RequestRouter.confirmation(userRequest)) {
-            // "ok make it" with no open offer: the user means their last request, if it never got a finished build
-            // (for example a restart interrupted it). Never reaches past that one turn.
-            String unfinished = unfinishedBuildRequest(history, accepted.request());
+            // "ok make it" with no open offer: the user means their request just before, if its build failed
+            // before saving anything (for example a restart interrupted it). Never reaches past that one turn.
+            Message unfinished = unfinishedBuildRequest(history, accepted.request(), earlier -> runRepository
+                    .findByProjectIdAndRequestMessageId(run.getProjectId(), earlier.getId())
+                    .filter(prior -> prior.getMode() == ProjectType.BUILD && prior.getStatus() == RunStatus.FAILED
+                            && prior.getCodeSavedAt() == null)
+                    .isPresent());
             if (unfinished != null) {
+                // The whole original request resumes: its server-resolved text (an accepted offer or plan) and its
+                // attachments, so a resumed build neither drops an image nor re-plans an accepted plan.
                 log.info("confirmation_resumes_request runId={}", run.getId());
-                userRequest = unfinished;
+                userRequest = unfinished.getResolvedRequestText() == null ? unfinished.getContent()
+                        : unfinished.getResolvedRequestText();
+                attachments = unfinished.executionAttachmentPaths();
+                state.resumedRequest = true;
             }
         }
         RequestRouter.Route route = RequestRouter.route(run.getMode(), userRequest, attachments, false);
@@ -504,23 +516,30 @@ public class AgentRunner implements AgentRuntime {
         return runToolLoop(state, setup, userRequest);
     }
 
-    /** The same author's previous request when it asked for a change and no build of it completed; else null. */
-    static String unfinishedBuildRequest(List<Message> history, Message request) {
-        for (int i = history.size() - 1; i >= 0; i--) {
-            Message earlier = history.get(i);
-            if (earlier.getRole() != MessageRole.USER || earlier.getId().equals(request.getId())) {
-                continue;
-            }
-            if (!Objects.equals(earlier.getAuthorId(), request.getAuthorId())
-                    || RequestRouter.route(earlier.getContent()) != RequestRouter.Route.CHANGE) {
-                return null;
-            }
-            boolean built = history.stream().anyMatch(reply -> reply.getRole() == MessageRole.ASSISTANT
-                    && earlier.getId().equals(reply.getReplyToId()) && reply.getMode() == ProjectType.BUILD
-                    && reply.getStatus() == MessageStatus.COMPLETE);
-            return built ? null : earlier.getContent();
+    /**
+     * The same author's request message just before this go-ahead, when the reply right after it is a failed build that
+     * saved no code (for example a restart interrupted it); else null. A clarifying question, a chat answer or a
+     * build that saved code is never resumed.
+     */
+    static Message unfinishedBuildRequest(List<Message> history, Message request,
+                                         Predicate<Message> failedUnsavedBuild) {
+        int at = history.indexOf(request);
+        if (at < 2) {
+            return null;
         }
-        return null;
+        Message reply = history.get(at - 1);
+        Message earlier = history.get(at - 2);
+        boolean answers = reply.getRole() == MessageRole.ASSISTANT && earlier.getRole() == MessageRole.USER
+                && earlier.getId().equals(reply.getReplyToId());
+        if (!answers || reply.getStatus() != MessageStatus.FAILED
+                || !Objects.equals(earlier.getAuthorId(), request.getAuthorId())
+                || !Objects.equals(earlier.getProjectId(), request.getProjectId())
+                || RequestRouter.route(earlier.getResolvedRequestText() == null ? earlier.getContent()
+                        : earlier.getResolvedRequestText()) != RequestRouter.Route.CHANGE
+                || !failedUnsavedBuild.test(earlier)) {
+            return null;
+        }
+        return earlier;
     }
 
     private void requireBuildAllowed(AgentRun run) {
@@ -595,7 +614,7 @@ public class AgentRunner implements AgentRuntime {
             convo.add(LlmMessage.user(state.projectContext.projectContextMessage()));
         }
         state.projectContext.conversation().stream().map(AgentRunner::toLlmMessage).forEach(convo::add);
-        if (accepted.request().getResolvedRequestText() != null) {
+        if (accepted.request().getResolvedRequestText() != null || state.resumedRequest) {
             convo.add(LlmMessage.user(userRequest));
         }
         if (!attachments.isEmpty() && vision != null) {
@@ -1336,7 +1355,8 @@ public class AgentRunner implements AgentRuntime {
                 var decision = UnclearReply.decode(objectMapper,
                         res.content() == null ? decisionText.toString() : res.content(), userRequest);
                 if (decision.action().equals("build")) {
-                    suggestBuild(run, decision.offerText(), attachments);
+                    // The model's reply only describes the offer; accepting it builds what the user actually asked.
+                    suggestBuild(run, userRequest, attachments);
                 }
                 stream.append(decision.reply());
             }

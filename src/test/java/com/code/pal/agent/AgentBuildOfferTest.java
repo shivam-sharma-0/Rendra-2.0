@@ -99,6 +99,8 @@ class AgentBuildOfferTest {
         assertTrue(json.isObject(), "Completed reply must include its backend-generated build action");
         assertEquals("Build this", json.path("label").asString());
         assertEquals("BUILD", json.path("mode").asString());
-        assertEquals(proposedChange, json.path("message").asString());
+        assertEquals(prompt, json.path("message").asString(), "the offer posts the user's own words");
+        assertTrue(com.code.pal.message.service.ConversationProposals.executionPrompt(assistant).contains(proposedChange),
+                "the accepted proposal is context for the build");
     }
 }

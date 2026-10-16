@@ -23,10 +23,16 @@ export function ChatMessage({ message, run, projectId, currentPreview = true, on
   onBuild?: (action: SuggestedAction) => Promise<void>
 }) {
   if (message.role === 'USER') return <UserMessage message={message} onEdit={onEdit} />
-  const pending = message.status === 'PENDING' || (message.status === 'STREAMING' && !message.content)
   const active = !!run && isActive(run)
+  const terminal = !!run && (run.status === 'DONE' || run.status === 'FAILED' || run.status === 'CANCELLED')
+  const pending = !terminal && (message.status === 'PENDING' || (message.status === 'STREAMING' && !message.content))
   const build = run?.mode === 'BUILD' && !run.conversational
-  const content = build ? readableBuildText(message.content) : message.content
+  let content = build ? readableBuildText(message.content) : message.content
+  if (!build && run && terminal && !content.trim()) {
+    if (run.status === 'CANCELLED') content = 'Run stopped.'
+    else if (run.status === 'FAILED') content = 'This run failed. Open Details for more information.'
+    else content = 'Run finished.'
+  }
 
   return (
     <article className="msg msg--agent" data-message-id={message.id} data-role="ASSISTANT">
@@ -40,7 +46,7 @@ export function ChatMessage({ message, run, projectId, currentPreview = true, on
             {run?.mode === 'PLAN' && run.status === 'DONE' && run.planAvailable && <PlanApproval run={run} />}
             {message.status === 'COMPLETE' && message.suggestedAction && !active
               && <BuildSuggestion action={message.suggestedAction} onBuild={onBuild} />}
-            <MessageActions message={{ ...message, content: build ? (run?.status === 'DONE' ? content : run ? buildReply(run).text : '') : message.content }} run={run} hasPreview={currentPreview && !!run && buildReply(run).preview}
+            <MessageActions message={{ ...message, content: build ? (run?.status === 'DONE' ? content : run ? buildReply(run).text : '') : content }} run={run} hasPreview={currentPreview && !!run && buildReply(run).preview}
               onOpenPreview={onOpenPreview} onFeedback={onFeedback} />
           </>
         )}

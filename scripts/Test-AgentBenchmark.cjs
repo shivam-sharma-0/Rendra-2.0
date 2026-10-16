@@ -35,6 +35,8 @@ const definitions = [
   { id: 7, name: 'new-vite-multi-page', prompt: vitePrompt, expected: 'BUILD', storage: 'BROWSER', fresh: true },
   { id: 8, name: 'new-todo-browser-substitute', prompt: todoPrompt, expected: 'BUILD', storage: 'BROWSER', fresh: true },
   { id: 9, name: 'plan-then-build-this', prompt: 'Add a Reset button id=reset to the existing counter that resets #count to 0. Preserve increment behavior. Plan the change first.', expected: 'PLAN' },
+  // A vague request: the model may offer a concrete change; accepting it must post the user's own words and build.
+  { id: 10, name: 'unclear-offer-accept', prompt: 'a modern look', expected: 'BUILD' },
 ];
 
 function sourceProof(root) {
@@ -150,6 +152,9 @@ async function accept(record, definition, result) {
     record.acceptance = { passed: record.routingCorrect && last.status === 'DONE' && content, sourceUnchanged: unchanged, usefulBriefReply: content };
     return;
   }
+  if (definition.id === 10 && !record.offerUsesUserWords) {
+    record.acceptance = { passed: false, reason: 'Build this did not post the original request text' }; return;
+  }
   record.routingCorrect = last.mode === 'BUILD'
     && (definition.id !== 9 || (record.turns[0]?.mode === 'PLAN' && record.planSourceUnchanged));
   if (!last.codeSavedAt || last.previewStatus !== 'READY' || last.status !== 'DONE') {
@@ -230,6 +235,12 @@ async function stopActive(record) {
           if (plan?.state === 'DRAFT') await api(`/api/projects/${project.id}/agent-runs/${result.run.id}/plan/approve`, 'POST',
             { contractId: plan.id, reviewedHash: plan.hash });
         }
+        result = await post(record, offer.message, 'BUILD', { proposalId: offer.proposalId, attachments: offer.attachments });
+      }
+      if (definition.id === 10) {
+        const offer = result.reply?.suggestedAction;
+        if (!offer) throw Error('Model answered without offering a build for the vague request (model variance)');
+        record.offerUsesUserWords = offer.message === definition.prompt;
         result = await post(record, offer.message, 'BUILD', { proposalId: offer.proposalId, attachments: offer.attachments });
       }
       await accept(record, definition, result);

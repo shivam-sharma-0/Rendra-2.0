@@ -57,7 +57,7 @@ const result = {
   journey8: 'BROWSER storage with no login; Supabase/login journey is deferred until Phase 7',
   questionCounting: 'Unique requirement prompts + ASK_USER prompts + question-mark sentences in final replies (code blocks excluded); deterministic observable proxy, not semantic classification',
   acceptanceScope: 'Fixed browser recipes on the saved artifact, cached Chromium with network disabled; no real publish request',
-  completed: records.length === 9 && fixture.success === true,
+  completed: records.length === 10 && fixture.success === true,
   cleanupVerified: fixture.cleanupVerified === true,
   passed: fixture.success === true && fixture.cleanupVerified === true && ledger !== null && unexpectedProviders.length === 0
     && journeys.every(value => value.routingCorrect === true && value.acceptance.passed && value.questionsAsked <= 2 && value.usageComplete

@@ -20,6 +20,7 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ConversationProposals {
+    private static final int MAX_PROPOSAL_CONTEXT = 2_000;
     private final MessageRepository messages;
 
     public record Resolution(String prompt, List<String> attachments, Message proposal) {}
@@ -73,8 +74,19 @@ public class ConversationProposals {
         String prompt = "Build the proposed changes.\n\nOriginal request:\n" + quote(proposal.getSuggestedBuildText());
         if (proposal.getProposalPlanId() != null) {
             prompt += "\n\nImplementation proposal " + proposal.getProposalPlanId() + ":\n" + quote(proposal.getContent());
+        } else if (proposal.getContent() != null && !proposal.getContent().isBlank()
+                && !proposal.getContent().strip().equals(proposal.getSuggestedBuildText().strip())) {
+            // The user accepted the offer as it was shown to them, so its wording is context for the build; their own
+            // request stays the instruction. Approved storage/auth decisions are still enforced by the server.
+            prompt += "\n\nThe assistant proposed this and the user accepted it. Use it for detail; "
+                    + "the original request wins on any conflict:\n" + quote(bounded(proposal.getContent()));
         }
         return prompt;
+    }
+
+    private static String bounded(String text) {
+        String clean = text.strip();
+        return clean.length() <= MAX_PROPOSAL_CONTEXT ? clean : clean.substring(0, MAX_PROPOSAL_CONTEXT).strip();
     }
 
     private static String quote(String text) {

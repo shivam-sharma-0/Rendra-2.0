@@ -81,7 +81,14 @@ BEGIN
  END IF;
  SELECT string_agg(format('%I.%I',schemaname,tablename),',') INTO targets
  FROM pg_tables WHERE schemaname='public' AND tablename <> 'flyway_schema_history';
+ -- Append-only audit tables refuse TRUNCATE by trigger; this disposable copy disables user triggers just for the wipe.
+ FOR item IN SELECT schemaname,tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'flyway_schema_history' LOOP
+  EXECUTE format('ALTER TABLE %I.%I DISABLE TRIGGER USER',item.schemaname,item.tablename);
+ END LOOP;
  IF targets IS NOT NULL THEN EXECUTE 'TRUNCATE TABLE ' || targets || ' RESTART IDENTITY CASCADE'; END IF;
+ FOR item IN SELECT schemaname,tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'flyway_schema_history' LOOP
+  EXECUTE format('ALTER TABLE %I.%I ENABLE TRIGGER USER',item.schemaname,item.tablename);
+ END LOOP;
  FOR item IN SELECT schemaname,tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'flyway_schema_history' LOOP
   EXECUTE format('SELECT count(*) FROM %I.%I',item.schemaname,item.tablename) INTO row_count;
   IF row_count <> 0 THEN RAISE EXCEPTION 'Copied application data remains'; END IF;
@@ -176,7 +183,7 @@ END $codex$;
             if ($benchmarkProjects.owner -ne $taskId) { throw 'Synthetic project manifest ownership mismatch' }
             $identities = @($benchmarkProjects.projects | ForEach-Object { $_.id })
         }
-        if ($identities.Count -gt 9 -or ($identities | Where-Object { $_ -notmatch '^[a-f0-9-]{36}$' })) {
+        if ($identities.Count -gt 10 -or ($identities | Where-Object { $_ -notmatch '^[a-f0-9-]{36}$' })) {
             throw 'Unexpected benchmark project identities'
         }
         if ($identities.Count) {
