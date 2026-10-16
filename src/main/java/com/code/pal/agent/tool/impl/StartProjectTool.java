@@ -37,7 +37,7 @@ public class StartProjectTool implements AgentTool {
     public String description() {
         return "Set up a new app from a tested starter: \"vite-react\" (Vite + React + TypeScript + Tailwind) or \"mern\" "
                 + "(that app in client/ plus an Express + MongoDB API in server/). Writes package.json with versions that work "
-                + "together, a tested package-lock.json and runtime metadata, tsconfig.json, vite.config.ts, index.html, src/main.tsx and src/index.css (for mern also "
+                + "together, a tested package-lock.json and runtime metadata, tsconfig.json, vite.config.ts, index.html, src/main.tsx, src/index.css and src/router.tsx (a hash router for several pages) (for mern also "
                 + "server/package.json, server/tsconfig.json and server/src/index.ts with /api/health and the database "
                 + "connection). Call it once, after setPlan, in a project without package.json; then write src/App.tsx and the "
                 + "rest. Never write these setup files yourself; only add a package to package.json when the app needs one.";
