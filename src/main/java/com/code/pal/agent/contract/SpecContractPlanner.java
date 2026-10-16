@@ -16,7 +16,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -176,19 +175,8 @@ final class SpecContractPlanner {
                 throw new IllegalArgumentException("Approved page has no implemented route");
             }
         }
-        for (var scenario : approved.spec().acceptance()) {
-            if (!"BROWSER".equals(scenario.kind())) {
-                throw new IllegalArgumentException("Required connector acceptance needs its approved adapter");
-            }
-            for (int index = 0; index < scenario.steps().size(); index++) {
-                String id = scenario.id() + "_" + index;
-                var step = scenario.steps().get(index);
-                if (contract.acceptance().browser().stream().noneMatch(action -> action.id().equals(id)
-                        && action.kind().name().equals(step.kind()) && Objects.equals(action.selector(), step.selector())
-                        && Objects.equals(action.value(), step.value()))) {
-                    throw new IllegalArgumentException("Approved acceptance action was omitted or weakened");
-                }
-            }
+        if (!contract.acceptance().browser().containsAll(SpecPlanValues.acceptance(approved).browser())) {
+            throw new IllegalArgumentException("Approved acceptance action was omitted or weakened");
         }
     }
 }

@@ -1,8 +1,6 @@
 package com.code.pal.agent.contract;
 
 import com.code.pal.agent.validation.BehaviorCriteria;
-import com.code.pal.agent.validation.BehaviorCriteria.BrowserAction;
-import com.code.pal.agent.validation.BehaviorCriteria.BrowserKind;
 import com.code.pal.project.spec.ApprovedSpec;
 
 import java.util.ArrayList;
@@ -49,17 +47,7 @@ final class SpecPlanValues {
     }
 
     static BehaviorCriteria acceptance(ApprovedSpec approved) {
-        var actions = new ArrayList<BrowserAction>();
-        for (var scenario : approved.spec().acceptance()) {
-            if (!scenario.kind().equals("BROWSER")) {
-                throw new IllegalArgumentException("Required connector acceptance needs its approved adapter");
-            }
-            for (int index = 0; index < scenario.steps().size(); index++) {
-                var step = scenario.steps().get(index);
-                actions.add(new BrowserAction(scenario.id() + "_" + index, BrowserKind.valueOf(step.kind()), step.selector(), step.value()));
-            }
-        }
-        return new BehaviorCriteria(1, actions, List.of(), false, false);
+        return SpecAcceptance.compile(approved).criteria();
     }
 
     static Map<String, String> theme(ApprovedSpec approved) {

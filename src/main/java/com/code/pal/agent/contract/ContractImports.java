@@ -25,18 +25,28 @@ public final class ContractImports {
             return "";
         }
         return "\nAllowed bare imports: " + (contract.stack() == BuildContract.Stack.VITE ? String.join(", ", REACT.stream().sorted().toList()) : "none")
-                + ". Other imports must be relative paths to owned files, declared dependency files or these coordinator modules: "
+                + ". Relative imports may read owned files in the same or an earlier batch, or these coordinator modules: "
                 + String.join(", ", coordinatorPaths(contract))
                 + ". Use plain <a href=\"/path\"> navigation with the existing path router. No react-router-dom, lucide-react, "
                 + "new packages, Router/Routes/Link wrappers or computed imports. For TS2307 on a disallowed package, remove the import "
                 + "and replace its uses with existing React/HTML behavior, not a package install.";
     }
 
-    public static void validate(BuildContract contract, BuildContract.Unit unit, String file, String source) {
+    public static Set<String> validate(BuildContract contract, BuildContract.Unit unit, String file, String source) {
+        return scan(contract, unit, file, source, true);
+    }
+
+    /** Existing failing source may contain invalid imports. Only proven readable targets become repair context. */
+    public static Set<String> repairDependencies(BuildContract contract, BuildContract.Unit unit, String file, String source) {
+        return scan(contract, unit, file, source, false);
+    }
+
+    private static Set<String> scan(BuildContract contract, BuildContract.Unit unit, String file, String source, boolean strict) {
         if (source == null || contract.schemaVersion() != 2 || contract.stack() == BuildContract.Stack.MERN
                 || !file.matches("(?i).+\\.(?:[cm]?[jt]sx?)$")) {
-            return;
+            return Set.of();
         }
+        var dependencies = new HashSet<String>();
         var tokens = tokens(source);
         for (int index = 0; index < tokens.size(); index++) {
             var token = tokens.get(index);
@@ -47,49 +57,93 @@ public final class ContractImports {
                 var next = tokens.get(index + 1);
                 if (next.value().equals("(")) {
                     if (index + 3 >= tokens.size() || !tokens.get(index + 2).literal() || !tokens.get(index + 3).value().equals(")")) {
-                        throw new IllegalArgumentException("Computed module imports are not supported by the fixed starter");
+                        if (strict) {
+                            throw new IllegalArgumentException("Computed module imports are not supported by the fixed starter");
+                        }
+                        continue;
                     }
-                    requireAllowed(contract, unit, file, tokens.get(index + 2).value());
+                    add(dependencies, resolve(contract, unit, file, tokens.get(index + 2).value(), strict));
                 } else if (token.value().equals("import") && next.literal()) {
-                    requireAllowed(contract, unit, file, next.value());
+                    add(dependencies, resolve(contract, unit, file, next.value(), strict));
                 } else if (token.value().equals("import") && !next.value().equals(".")) {
-                    checkFrom(contract, unit, file, tokens, index + 1);
+                    add(dependencies, checkFrom(contract, unit, file, tokens, index + 1, strict));
                 }
             } else if (token.value().equals("export") && index + 1 < tokens.size()
                     && Set.of("{", "*", "type").contains(tokens.get(index + 1).value())) {
-                checkFrom(contract, unit, file, tokens, index + 1);
+                add(dependencies, checkFrom(contract, unit, file, tokens, index + 1, strict));
             }
+        }
+        return Set.copyOf(dependencies);
+    }
+
+    private static void add(Set<String> dependencies, String path) {
+        if (path != null) {
+            dependencies.add(path);
         }
     }
 
-    private static void checkFrom(BuildContract contract, BuildContract.Unit unit, String file, List<Token> tokens, int start) {
+    private static String checkFrom(BuildContract contract, BuildContract.Unit unit, String file, List<Token> tokens, int start, boolean strict) {
         for (int index = start; index + 1 < tokens.size(); index++) {
             var token = tokens.get(index);
             if (!token.literal() && Set.of(";", "=", "import", "export").contains(token.value())) {
-                return;
+                return null;
             }
             if (!token.literal() && token.value().equals("from") && tokens.get(index + 1).literal()) {
-                requireAllowed(contract, unit, file, tokens.get(index + 1).value());
-                return;
+                return resolve(contract, unit, file, tokens.get(index + 1).value(), strict);
             }
+        }
+        return null;
+    }
+
+    private static String resolve(BuildContract contract, BuildContract.Unit unit, String file, String module, boolean strict) {
+        try {
+            return requireAllowed(contract, unit, file, module);
+        } catch (IllegalArgumentException invalid) {
+            if (strict) {
+                throw invalid;
+            }
+            return null;
         }
     }
 
-    private static void requireAllowed(BuildContract contract, BuildContract.Unit unit, String file, String module) {
+    private static String requireAllowed(BuildContract contract, BuildContract.Unit unit, String file, String module) {
         if (!(module.startsWith("./") || module.startsWith("../"))) {
             if (contract.stack() == BuildContract.Stack.VITE && REACT.contains(module)) {
-                return;
+                return null;
             }
             throw new IllegalArgumentException("Disallowed bare module import; remove it and use existing React and plain anchor navigation");
         }
         Path parent = Path.of(file).getParent();
         String target = BuildContract.canonical((parent == null ? Path.of("") : parent).resolve(module).normalize().toString().replace('\\', '/'));
-        var allowed = new HashSet<>(unit.ownedPaths());
-        allowed.addAll(unit.imports());
-        allowed.addAll(coordinatorPaths(contract));
-        if (EXTENSIONS.stream().noneMatch(extension -> allowed.contains(target + extension))) {
-            throw new IllegalArgumentException("Relative module import must target an owned file or a declared dependency or coordinator module");
+        var allowed = availablePaths(contract, unit);
+        for (String extension : EXTENSIONS) {
+            if (allowed.contains(target + extension)) {
+                return target + extension;
+            }
         }
+        throw new IllegalArgumentException("Relative module import must target an owned earlier or same batch file or a coordinator module");
+    }
+
+    /** Read dependencies only. Does not rewrite the reviewed ownership/DAG or grant another file's write scope. */
+    public static Set<String> availablePaths(BuildContract contract, BuildContract.Unit unit) {
+        var paths = new HashSet<>(unit.ownedPaths());
+        if (contract.schemaVersion() == 2) {
+            if (!contract.units().contains(unit)) {
+                throw new IllegalArgumentException("Foreign unit cannot derive import scope");
+            }
+            for (var batch : ContractPlans.ordered(contract.batches())) {
+                paths.addAll(batch.ownedPaths());
+                if (batch.unitIds().contains(unit.id())) {
+                    break;
+                }
+            }
+        } else {
+            paths.addAll(unit.imports());
+        }
+        paths.addAll(coordinatorPaths(contract));
+        // Approved assets are copied before generation; only their paths, never their binary bodies, are importable.
+        contract.assets().forEach(asset -> paths.add(asset.destination()));
+        return Set.copyOf(paths);
     }
 
     private static List<String> coordinatorPaths(BuildContract contract) {

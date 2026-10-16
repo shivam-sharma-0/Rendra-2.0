@@ -110,6 +110,7 @@ public final class BatchUnitGenerator {
                 "batch", batch, "units", frozen.stream().map(input -> Map.of("unit", input.unit(),
                         "repairFeedback", input.repairFeedback())).toList(), "snapshot", snapshot, "acceptance", acceptance));
         data.put("assets", contract.assets().stream().filter(asset -> batch.unitIds().contains(asset.owner())).toList());
+        data.put("acceptanceTargets", SpecAcceptance.targets(contract, spec, Set.copyOf(batch.acceptanceIds())));
         if (spec != null) {
             if (!spec.specId().equals(contract.specId()) || spec.specRevision() != contract.specRevision()
                     || !spec.specHash().equals(contract.specHash())) {
@@ -155,17 +156,23 @@ public final class BatchUnitGenerator {
             reads.addAll(input.unit().imports());
         }
         contract.assets().stream().map(BuildContract.Asset::destination).forEach(reads::remove);
+        var available = new HashSet<String>();
+        inputs.forEach(input -> available.addAll(ContractImports.availablePaths(contract, input.unit())));
         var snapshot = new TreeMap<String, UnitGenerator.FileView>();
         for (var input : inputs) {
             for (var entry : input.snapshot().entrySet()) {
-                if (!reads.contains(entry.getKey())) {
+                if (!reads.contains(entry.getKey()) && !available.contains(entry.getKey())) {
                     continue;
                 }
                 var supplied = entry.getValue();
-                var value = new UnitGenerator.FileView(supplied.version(), supplied.content());
+                var value = new UnitGenerator.FileView(supplied.version(), reads.contains(entry.getKey()) ? supplied.content() : null);
                 var old = snapshot.putIfAbsent(entry.getKey(), value);
-                if (old != null && !old.equals(value)) {
+                if (old != null && (!old.version().equals(value.version())
+                        || old.content() != null && value.content() != null && !old.content().equals(value.content()))) {
                     throw new IllegalArgumentException("Conflicting batch snapshot");
+                }
+                if (old != null && old.content() == null && value.content() != null) {
+                    snapshot.put(entry.getKey(), value);
                 }
             }
         }
@@ -179,6 +186,9 @@ public final class BatchUnitGenerator {
     private List<UnitGenerator.Output> generatePrepared(List<UnitGenerator.Input> inputs, AgentProperties.ModelSelection model,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, String data, int outputCap, int inputCap) {
         String policy = SYSTEM + ContractImports.policy(inputs.getFirst().contract());
+        if (inputs.getFirst().contract().schemaVersion() == 2) {
+            policy += SpecAcceptance.policy();
+        }
         if (inputs.getFirst().contract().schemaVersion() == 2 && inputs.getFirst().contract().stack() == BuildContract.Stack.STATIC) {
             policy += "\nStatic HTML/CSS/JS only. Backend compiles Tailwind and injects local rendra.css. "
                     + "Use utility classes; no runtime CDN, remote scripts/fonts, CSS imports or compiler directives.";

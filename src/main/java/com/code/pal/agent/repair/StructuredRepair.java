@@ -6,6 +6,7 @@ import com.code.pal.agent.contract.BuildContract;
 import com.code.pal.agent.contract.ContractAcceptanceFailures;
 import com.code.pal.agent.contract.ContractImports;
 import com.code.pal.agent.contract.ContractStore;
+import com.code.pal.agent.contract.SpecAcceptance;
 import com.code.pal.agent.contract.UnitGenerator;
 import com.code.pal.agent.contract.UnitWriteScope;
 import com.code.pal.agent.domain.AgentRun;
@@ -41,7 +42,9 @@ public final class StructuredRepair {
             {"schemaVersion":1,"batchId":"supplied batchId","diagnosticsRevision":"supplied identity",
              "patches":[{"path":"supplied path","expectedVersion":"supplied hash",
              "edits":[{"search":"exact unique nonempty old text","replace":"replacement"}]}]}.
-            Every search must match exactly once in the original body. No overlapping edits, new/deleted files,
+            Every search must match exactly once in the original body. For an attributed owned file with version
+            absent and null content, use exactly one edit with search="" and replace=the complete source file.
+            Empty search is forbidden for existing files. No overlapping edits, foreign/new paths or deleted files,
             packages, scripts, privileges, shared-interface edits or replacement applications. Preserve working behavior.
             For acceptance failures, follow the supplied ordered steps, including earlier prerequisites, and satisfy
             their assertion values and scenario expected result. Preserve the other approved behavior.
@@ -92,14 +95,21 @@ public final class StructuredRepair {
         }
         var snapshot = new TreeMap<String, UnitGenerator.FileView>();
         for (String path : paths) {
-            snapshot.put(path, read(ctx, path));
+            snapshot.put(path, files.exists(ctx.projectId(), ctx.root(), path) ? read(ctx, path)
+                    : new UnitGenerator.FileView("absent", null));
         }
         var interfaces = new TreeMap<String, UnitGenerator.FileView>();
-        candidates.stream().flatMap(unit -> unit.imports().stream()).filter(path -> !paths.contains(path)).distinct()
-                .forEach(path -> interfaces.put(path, read(ctx, path)));
+        var imports = new HashSet<String>();
+        candidates.forEach(unit -> imports.addAll(unit.imports()));
+        snapshot.forEach((path, value) -> {
+            var unit = candidates.stream().filter(owner -> owner.ownedPaths().contains(path)).findFirst().orElseThrow();
+            imports.addAll(ContractImports.repairDependencies(contract, unit, path, value.content()));
+        });
+        contract.assets().forEach(asset -> imports.remove(asset.destination()));
+        imports.stream().filter(path -> !paths.contains(path)).sorted().forEach(path -> interfaces.put(path, read(ctx, path)));
         String revision = "sha256:" + ContractStore.hash(mapper.writeValueAsString(Map.of("report", report, "files", snapshot)));
         var scope = new RepairPatches.Scope("repair", revision, paths, snapshot);
-        String policy = POLICY + ContractImports.policy(contract);
+        String policy = POLICY + ContractImports.policy(contract) + SpecAcceptance.policy();
         String input = mapper.writeValueAsString(Map.of("batchId", scope.batchId(), "diagnosticsRevision", revision,
                 "diagnostics", report.introducedDiagnostics(), "checks", report.checks(), "files", snapshot, "interfaces", interfaces,
                 "acceptance", acceptance(contract, report, spec)));
@@ -187,7 +197,9 @@ public final class StructuredRepair {
             return false;
         }).toList();
         return Map.of("failedIds", failed.stream().sorted().toList(), "steps", contract.acceptance().browser(),
-                "api", contract.acceptance().api(), "scenarios", scenarios);
+                "api", contract.acceptance().api(), "scenarios", scenarios,
+                "acceptanceTargets", SpecAcceptance.targets(contract, spec,
+                        contract.acceptance().browser().stream().map(action -> action.id()).collect(Collectors.toSet())));
     }
 
     private static Set<String> diagnosedPaths(BuildContract contract, List<BuildContract.Unit> units, ValidationReport report) {

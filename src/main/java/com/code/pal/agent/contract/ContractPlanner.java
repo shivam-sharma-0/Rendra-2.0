@@ -196,7 +196,7 @@ public final class ContractPlanner {
                     || origin.equals(SpecPlanCompletion.class.getName()) || origin.equals(SpecPlanValues.class.getName())
                     || origin.equals(ContractPlans.class.getName()) || origin.equals(ContractBatch.class.getName())
                     || origin.equals(ProjectPaths.class.getName()) || origin.equals(ContractImports.class.getName())
-                    || origin.equals(UnstoredUnitSplit.class.getName()))
+                    || origin.equals(UnstoredUnitSplit.class.getName()) || origin.equals(SpecAcceptance.class.getName()))
                     && (failure instanceof IllegalArgumentException || failure instanceof WorkflowStageException)
                     && failure.getMessage() != null
                     && failure.getMessage().matches("[A-Za-z0-9 /,;:.()\\[\\]_-]{1,180}"))

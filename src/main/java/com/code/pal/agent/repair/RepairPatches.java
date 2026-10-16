@@ -69,8 +69,20 @@ public final class RepairPatches {
                 throw new IllegalArgumentException("Repair exceeds diagnosed file scope");
             }
             var before = scope.snapshot().get(file.path());
-            if (before == null || before.content() == null || !before.version().equals(file.expectedVersion())
-                    || !before.version().equals("sha256:" + ContractStore.hash(before.content()))) {
+            if (before == null || !before.version().equals(file.expectedVersion())) {
+                throw new IllegalArgumentException("Repair target is missing or stale");
+            }
+            if (before.content() == null && before.version().equals("absent")) {
+                if (file.edits().size() != 1 || !"".equals(file.edits().getFirst().search())
+                        || file.edits().getFirst().replace() == null || file.edits().getFirst().replace().isBlank()) {
+                    throw new IllegalArgumentException("Missing owned file needs one explicit empty-search creation");
+                }
+                String content = file.edits().getFirst().replace();
+                validateText(content);
+                changes.add(new UnitGenerator.Delta(file.path(), "absent", content));
+                continue;
+            }
+            if (before.content() == null || !before.version().equals("sha256:" + ContractStore.hash(before.content()))) {
                 throw new IllegalArgumentException("Repair target is missing or stale");
             }
             var ranges = new ArrayList<Range>();

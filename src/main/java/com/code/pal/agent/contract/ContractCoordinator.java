@@ -478,13 +478,17 @@ public final class ContractCoordinator {
                 .filter(p -> !p.endsWith("contract.json")).toList());
         var assets = new HashSet<String>();
         c.assets().forEach(a -> assets.add(a.destination()));
+        var bodies = Set.copyOf(paths);
+        if (c.schemaVersion() == 2) {
+            paths.addAll(ContractImports.availablePaths(c, unit));
+        }
         var snapshot = new TreeMap<String, UnitGenerator.FileView>();
         for (String path : paths) {
             if (assets.contains(path))
                 continue;
             String version = files.version(ctx.projectId(), ctx.root(), path);
             snapshot.put(path, new UnitGenerator.FileView(version,
-                    files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null));
+                    bodies.contains(path) && files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null));
         }
         return new UnitGenerator.Input(c, unit, request, req, snapshot, feedback);
     }
