@@ -6,6 +6,9 @@ import { type RealtimeMessage, useRealtime } from '../../realtime/useRealtime'
 import { isActive } from './runUtils'
 import { PAGE_SIZE, TIMELINE_EVENT_TYPES, type TimelineEvent } from './workspaceTypes'
 
+/** How often an in-flight run is re-read, as a fallback for realtime pushes missed during a reconnect. */
+const IN_FLIGHT_RECHECK_MS = 15_000
+
 /**
  * Everything the workspace knows about one project: the project, its conversation (paged, newest
  * first), its agent runs and their steps, live preview status, and the actions on them (send,
@@ -184,6 +187,19 @@ export function useProjectWorkspace(id: string) {
   }, [addTimelineStep, id, refreshMessages, refreshTimeline, upsert, queryClient])
 
   useRealtime({ enabled: !!project, projectId: id, onMessage: onRealtime })
+
+  // Realtime pushes can be missed (the socket drops while the server restarts), and a run the server has already
+  // recovered as failed would then look like it is still thinking forever. While anything is in flight, re-read
+  // the real state now and then; a quiet project makes no extra requests.
+  const inFlight = !!selectedRun && isActive(selectedRun)
+  useEffect(() => {
+    if (!inFlight) return
+    const timer = window.setInterval(() => {
+      refreshMessages()
+      void refreshTimeline().catch(() => undefined)
+    }, IN_FLIGHT_RECHECK_MS)
+    return () => window.clearInterval(timer)
+  }, [inFlight, refreshMessages, refreshTimeline])
 
   const loadOlder = useCallback(async () => {
     if (oldestPage <= 0 || loadingOlder) return
