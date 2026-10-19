@@ -17,6 +17,8 @@ import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.event.AssistantTurnRequested;
 import com.code.pal.project.exception.RequirementApprovalRequiredException;
 import com.code.pal.project.service.ProjectService;
+import com.code.pal.project.requirement.BuildRequestIntake;
+import com.code.pal.project.dto.ProjectResponse;
 import com.code.pal.realtime.RealtimeService;
 import com.code.pal.realtime.dto.RealtimeMessage;
 import com.code.pal.shared.usage.AgentTurnAdmission;
@@ -52,6 +54,7 @@ public class MessageServiceImpl implements MessageService {
     private final AgentTurnAdmission admission;
     private final com.code.pal.agent.workspace.ProjectFiles files;
     private final ConversationProposals proposals;
+    private final BuildRequestIntake buildIntake;
 
     @Override
     @Transactional
@@ -87,10 +90,12 @@ public class MessageServiceImpl implements MessageService {
         ProjectType requestedMode = mode;
         var resolution = proposals.resolve(userId, projectId, request, requestedMode);
         mode = RequestRouter.mode(mode, resolution.prompt(), resolution.attachments());
+        String uploadedAttachments = attachments(projectId, request.attachments());
+        String resolvedAttachments = resolution.proposal() == null ? null : attachments(projectId, resolution.attachments());
         // The opening prompt of a project created with pendingPrompt (its attachments uploaded first):
         // stored for the requirements step, which builds from it once approved, so no turn starts now.
-        boolean openingPrompt = false;
-        if (mode == ProjectType.BUILD && project.getLifecycleStage() == ProjectStage.REQUIREMENTS) {
+        boolean openingPrompt = buildIntake.prepare(project, mode, resolution.prompt());
+        if (!openingPrompt && mode == ProjectType.BUILD && project.getLifecycleStage() == ProjectStage.REQUIREMENTS) {
             if (messageRepository.countByProjectId(projectId) == 0) {
                 openingPrompt = true;
             } else {
@@ -112,12 +117,11 @@ public class MessageServiceImpl implements MessageService {
         List<Message> created = new ArrayList<>(2);
         Message userMessage = Message.user(projectId, request.id(), request.message(), mode, userId);
         userMessage.setRequestedMode(requestedMode);
-        userMessage.setAttachments(attachments(projectId, request.attachments()));
+        userMessage.setAttachments(uploadedAttachments);
         if (resolution.proposal() != null) {
             userMessage.setSourceProposalId(resolution.proposal().getId());
             userMessage.setResolvedRequestText(resolution.prompt());
-            String executionAttachments = attachments(projectId, resolution.attachments());
-            userMessage.setResolvedAttachments(executionAttachments == null ? "" : executionAttachments);
+            userMessage.setResolvedAttachments(resolvedAttachments == null ? "" : resolvedAttachments);
         }
         userMessage.setSeq(sequence.next());
         created.add(messageRepository.save(userMessage));
@@ -139,6 +143,7 @@ public class MessageServiceImpl implements MessageService {
         // never leaves collaborators showing a message that was never persisted.
         List<MessageResponse> responses = created.stream().map(MessageResponse::from).toList();
         broadcastAfterCommit(projectId, responses);
+        if (openingPrompt) broadcastProjectAfterCommit(project);
         if (resolution.proposal() != null && resolution.proposal().getProposalConsumedBy() != null) {
             broadcastAfterCommit(projectId, List.of(MessageResponse.from(resolution.proposal())));
         }
@@ -181,8 +186,9 @@ public class MessageServiceImpl implements MessageService {
     @Override
     @Transactional(readOnly = true)
     public List<String> openingAttachments(UUID projectId) {
-        return messageRepository.findFirstByProjectIdAndRoleOrderBySeqAsc(projectId, MessageRole.USER)
-                .map(Message::attachmentPaths).orElse(List.of());
+        return messageRepository.findFirstByProjectIdAndRoleAndModeOrderBySeqAsc(projectId, MessageRole.USER, ProjectType.BUILD)
+                .or(() -> messageRepository.findFirstByProjectIdAndRoleOrderBySeqAsc(projectId, MessageRole.USER))
+                .map(Message::executionAttachmentPaths).orElse(List.of());
     }
 
     @Override
@@ -228,6 +234,18 @@ public class MessageServiceImpl implements MessageService {
         MessageResponse response = responseFor(userId, projectId, messageRepository.save(message));
         broadcastAfterCommit(projectId, List.of(response));
         return response;
+    }
+
+    private void broadcastProjectAfterCommit(Project project) {
+        var update = RealtimeMessage.of("PROJECT_UPDATED", ProjectResponse.from(project));
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            realtimeService.sendToProject(project.getId(), update);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() { realtimeService.sendToProject(project.getId(), update); }
+        });
     }
 
     /** Fire the room broadcast once the surrounding transaction commits (falls back to inline if none). */

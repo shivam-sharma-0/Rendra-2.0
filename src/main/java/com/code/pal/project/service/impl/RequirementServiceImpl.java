@@ -7,11 +7,18 @@ import com.code.pal.agent.llm.LlmClient;
 import com.code.pal.agent.llm.LlmClient.LlmMessage;
 import com.code.pal.agent.llm.LlmClient.LlmRequest;
 import com.code.pal.agent.llm.LlmClient.LlmResult;
+import com.code.pal.agent.llm.LlmStreamException;
+import com.code.pal.agent.plan.PlanningModelCalls;
 import com.code.pal.message.dto.CreateMessageRequest;
 import com.code.pal.message.service.MessageService;
 import com.code.pal.project.brief.ProjectBriefFile;
 import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.capability.DecisionDefaults;
+import com.code.pal.project.capability.CapabilityProposal;
+import com.code.pal.agent.prompt.PromptLoader;
+import com.code.pal.agent.prompt.PromptLoader.Prompt;
+import com.code.pal.project.requirement.RequirementDraft;
+import com.code.pal.project.requirement.RequirementInterviewPolicy;
 import com.code.pal.project.domain.*;
 import com.code.pal.project.dto.RequirementDtos;
 import com.code.pal.project.artifact.ProjectArtifactService;
@@ -27,30 +34,18 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
-import com.code.pal.project.spec.SpecNormalizer;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.util.*;
 
 @Slf4j
 @Service
 public class RequirementServiceImpl implements RequirementService {
-    /**
-     * These calls run inside the user's HTTP request and already fall back to deterministic questions,
-     * so a slow provider must not hold the request open.
-     */
-    private static final java.time.Duration LLM_BUDGET = java.time.Duration.ofSeconds(30);
     /** Section 7 target: at most two questions, none when the request is clear. */
     private static final int MAX_QUESTIONS = 2;
-    /** Enough for two questions with options; the old cap reserved a full generation budget. */
-    private static final int QUESTION_OUTPUT_TOKENS = 1_500;
-    /** Two questions plus a bounded spec draft, only when the spec-driven build path is enabled. */
-    private static final int SPEC_OUTPUT_TOKENS = 4_000;
-    private static final java.time.Duration SPEC_LLM_BUDGET = java.time.Duration.ofSeconds(45);
-    /** A spec draft larger than this cannot fit the approved spec envelope, so it is not kept. */
-    private static final int MAX_SPEC_DRAFT_CHARS = 24_000;
 
     private final ProjectService projects;
     private final RequirementSessionRepository sessions;
@@ -61,7 +56,7 @@ public class RequirementServiceImpl implements RequirementService {
     private final ProjectArtifactService artifacts;
     private final MessageService messages;
     /**
-     * Model calls take up to {@link #LLM_BUDGET}; holding a pooled DB connection that long would let a
+     * Model calls have a bounded request budget; holding a pooled DB connection that long would let a
      * few slow requests starve the whole app. So start/answer read and write in short transactions
      * and call the model between them, with no transaction open.
      */
@@ -131,7 +126,7 @@ public class RequirementServiceImpl implements RequirementService {
                 generated = generate(interview.project());
             }
             // A modern default look is used (or the attached images decide it), so style is never asked.
-            List<QuestionDraft> drafts = generated.questions().stream().filter(draft -> !isAboutTheLook(draft)).toList();
+            List<QuestionDraft> drafts = limited(generated.questions());
             result = tx.execute(status -> {
                 lockRequirements(projectId);
                 projects.requireCanEdit(userId, projectId);
@@ -309,7 +304,8 @@ public class RequirementServiceImpl implements RequirementService {
                 !result.isEmpty() && result.stream().filter(RequirementDtos.Question::required).allMatch(q -> nonBlank(q.selectedOption()) || nonBlank(q.otherText())), session.getApprovedAt(),
                 session.getAnswerRevision(), coordinator != null && coordinator.processing(session.getId(), session.getAnswerRevision()),
                 coordinator == null ? "NONE" : coordinator.projectionState(session.getProjectionId()),
-                coordinator == null ? "NONE" : coordinator.reviewState(session.getId(), session.getAnswerRevision()));
+                coordinator == null ? "NONE" : coordinator.reviewState(session.getId(), session.getAnswerRevision()),
+                RequirementDraft.review(session.getSpecDraftJson(), !keptRecommendations(session)));
     }
 
     private RequirementDtos.Question question(RequirementQuestion q) {
@@ -417,8 +413,8 @@ public class RequirementServiceImpl implements RequirementService {
         if (buildDecisions == null) {
             return;
         }
-        var inferred = DecisionDefaults.infer(prompt,
-                buildDecisions.available(session.getProjectId()).supabaseConnected());
+        var inferred = DecisionDefaults.infer(prompt, buildDecisions.available(session.getProjectId()),
+                capabilityProposal(session));
         for (RequirementQuestion question : questions.findBySessionIdOrderBySequenceAsc(session.getId())) {
             if (question.getSelectedOption() != null) {
                 continue;
@@ -455,8 +451,8 @@ public class RequirementServiceImpl implements RequirementService {
      */
     private static String attachmentNote(List<String> attachments) {
         if (attachments.isEmpty()) return "";
-        return "\nThe user also attached " + attachments.size() + " image(s) (screenshots or mock-ups) that the build will "
-                + "follow for layout and visual style: do not ask about visual style or layout, ask about what images cannot show.";
+        return "\n" + PromptLoader.load(Prompt.REQUIREMENTS_ATTACHMENTS)
+                .replace("{{count}}", Integer.toString(attachments.size()));
     }
 
     /**
@@ -477,54 +473,54 @@ public class RequirementServiceImpl implements RequirementService {
      */
     private Drafted generate(ProjectBrief project) {
         try {
-            // The first listed (fast) PLAN model: a round-robin pick of a slow reasoning model misses the request budget.
+            // Requirements and architecture follow the deployment's configured planning route.
             AgentProperties.ModelSelection selection = properties.preferredModel(ProjectType.PLAN);
-            // The spec drives the build's behaviour checks on every path, not only the structured one.
-            boolean withSpec = true;
-            String prompt = """
-                    Return only one JSON object {"questions": [...]%s} for this software project.
-                    questions: 0 to 2 blocking questions, only what a sensible production default cannot decide (the
-                    core purpose or main features when unclear, who uses it when that changes the product); [] when
-                    the request is clear. Never ask about visual style, storage, database, backend or sign-in, and never
-                    use platform_ keys. Each question has key, prompt, required (boolean), recommended (option id) and
-                    options (id, label, description), including an option with id "other".
-                    %s
-                    User prompt: %s
-                    """.formatted(withSpec ? ", \"spec\": {...}" : "", withSpec ? SPEC_INSTRUCTIONS : "",
-                    project.initialPrompt()) + attachmentNote(project.attachments());
-            LlmResult result = llm.chat(new LlmRequest(selection.provider(), selection.model(),
-                    List.of(LlmMessage.system("You are a product requirements analyst."), LlmMessage.user(prompt)), List.of(), 0.0,
-                    withSpec ? SPEC_LLM_BUDGET : LLM_BUDGET).withMaxTokens(withSpec ? SPEC_OUTPUT_TOKENS : QUESTION_OUTPUT_TOKENS));
+            String prompt = PromptLoader.load(Prompt.REQUIREMENTS).replace("{{request}}", project.initialPrompt())
+                    + attachmentNote(project.attachments());
+            String system = PromptLoader.load(Prompt.REQUIREMENTS_SYSTEM)
+                    .replace("{{runtimeCapabilities}}", PromptLoader.load(Prompt.RUNTIME_CAPABILITIES));
+            var request = new LlmRequest(selection.provider(), selection.model(),
+                    List.of(LlmMessage.system(system), LlmMessage.user(prompt)),
+                    List.of(), 0.0, Duration.ofMillis(properties.getRequirements().getTimeoutMs()))
+                    .withMaxTokens(properties.getRequirements().getMaxOutputTokens());
+            LlmResult result = new PlanningModelCalls(properties).execute(request, llm::chat, () -> {});
             String content = result.content() == null ? "" : stripJsonFence(result.content()).strip();
             if (content.equals("[]")) return new Drafted(List.of(), null);
             JsonNode root = content.isBlank() ? null : objectMapper.readTree(content);
             if (root != null && root.isObject() && root.path("questions").isArray()) {
-                return new Drafted(limited(parseQuestionDrafts(root.path("questions"))), withSpec ? specDraft(root.path("spec")) : null);
+                return new Drafted(limited(parseQuestionDrafts(root.path("questions"))), specDraft(root.path("spec")));
             }
             List<QuestionDraft> parsed = parseQuestionDrafts(root);
             if (!parsed.isEmpty()) return new Drafted(limited(parsed), null);
         } catch (RuntimeException error) {
-            log.warn("requirement_questions_fallback project={} reason={}", project.id(), error.getClass().getSimpleName());
+            log.warn("requirement_questions_fallback project={} reason={} streamReason={} providerCode={}",
+                    project.id(), error.getClass().getSimpleName(),
+                    error instanceof LlmStreamException stream ? stream.reason() : null,
+                    error instanceof LlmStreamException stream ? stream.providerCode() : null);
         }
         return new Drafted(defaults(project.initialPrompt()), null);
     }
 
-    private static final String SPEC_INSTRUCTIONS = """
-                    spec: what to build, assuming each question's recommended option. Fields: title, language (e.g. "en"),
-                    goal; pages [{id, path ("/" first), title, featureIds}]; entities [{id, fields [{name, kind:
-                    STRING|NUMBER|BOOLEAN|DATE, required}], ownership: USER|SHARED}] only for data the user saves;
-                    features [{id, kind, description, pageIds, entityIds}] with kind CONTENT, CONTACT_LINK, NAV_ANCHOR,
-                    CALCULATOR, COUNTER, LOCAL_CRUD or a short custom UPPER_CASE kind; theme {background, foreground,
-                    accent, muted (hex colors), radius, spacing (like "8px"), font: system|serif|mono}; acceptance
-                    [{id, featureId, kind: "BROWSER", steps [{kind: CLICK|FILL|SELECT|ASSERT_TEXT|ASSERT_COUNT|
-                    ASSERT_ROUTE|RELOAD, selector, value}], expected}] with at least one scenario per feature;
-                    Use at most 24 browser actions across all acceptance scenarios combined, not 24 per scenario;
-                    combine redundant steps while preserving feature coverage, and never truncate required checks.
-                    constraints {responsive: true, accessibility: true, exclusions: []}. Ids are letters, digits and _.
-                    Page featureIds and feature pageIds must agree.""";
+    private CapabilityProposal capabilityProposal(RequirementSession session) {
+        if (session.getSpecDraftJson() == null || !keptRecommendations(session)) return null;
+        try {
+            return CapabilityProposal.from(objectMapper.readTree(session.getSpecDraftJson()).path("capabilities"));
+        } catch (RuntimeException invalidDraft) {
+            return null;
+        }
+    }
+
+    private boolean keptRecommendations(RequirementSession session) {
+        return questions.findBySessionIdOrderBySequenceAsc(session.getId()).stream()
+                .filter(question -> !question.getQuestionKey().startsWith("platform_"))
+                .allMatch(question -> (question.getOtherText() == null || question.getOtherText().isBlank())
+                        && Objects.equals(question.getSelectedOption(), question.getRecommendedOption()));
+    }
 
     private static List<QuestionDraft> limited(List<QuestionDraft> parsed) {
-        return parsed.stream().filter(draft -> !isAboutTheLook(draft)).limit(MAX_QUESTIONS).toList();
+        return parsed.stream().filter(draft -> !isAboutTheLook(draft))
+                .filter(draft -> !RequirementInterviewPolicy.redundant(draft.key(), draft.prompt()))
+                .limit(MAX_QUESTIONS).toList();
     }
 
     /**
@@ -532,10 +528,7 @@ public class RequirementServiceImpl implements RequirementService {
      * field before anything uses it.
      */
     private String specDraft(JsonNode spec) {
-        JsonNode shaped = SpecNormalizer.draft(spec);
-        if (shaped == null) return null;
-        String json = write(shaped);
-        return json.length() > MAX_SPEC_DRAFT_CHARS ? null : json;
+        return RequirementDraft.capture(spec);
     }
 
     /**
@@ -547,7 +540,10 @@ public class RequirementServiceImpl implements RequirementService {
         boolean keptRecommendations = answered.stream().filter(question -> !question.getQuestionKey().startsWith("platform_"))
                 .allMatch(question -> (question.getOtherText() == null || question.getOtherText().isBlank())
                         && Objects.equals(question.getSelectedOption(), question.getRecommendedOption()));
-        return keptRecommendations ? session.getSpecDraftJson() : null;
+        if (keptRecommendations) return session.getSpecDraftJson();
+        return RequirementDraft.withChangedAnswers(session.getSpecDraftJson(), answered.stream()
+                .filter(question -> !question.getQuestionKey().startsWith("platform_"))
+                .map(question -> question.getPrompt() + ": " + answerLabel(question)).toList());
     }
 
     private List<QuestionDraft> parseQuestionDrafts(JsonNode root) {
@@ -584,21 +580,9 @@ public class RequirementServiceImpl implements RequirementService {
         return content.trim().replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "");
     }
 
-    /** The fallback questions when the model cannot write them: the to-do set only for a to-do request. */
+    /** A provider failure must not invent a questionnaire or shrink the requested product. */
     private List<QuestionDraft> defaults(String prompt) {
-        String request = prompt == null ? "" : prompt.toLowerCase(java.util.Locale.ROOT);
-        if (!request.matches("(?s).*\\b(to-?do|todos?|tasks?|checklist)\\b.*")) {
-            return List.of(
-                    q("audience", "Who will use it?", true, "just_me", List.of(o("just_me", "Just for me", "A personal tool or a game for yourself"), o("public", "Friends or customers", "Other people will use it, so it should be polished and self-explanatory"), o("learning_demo", "Learning/demo project", "Exploring what the product can do"), o("other", "Write your own...", "Describe who will use it and why"))),
-                    q("scope", "How complete should the first version be?", true, "standard", List.of(o("core", "Simple core", "Only the main feature, done well"), o("standard", "Standard", "The main feature plus the obvious extras users expect"), o("full_featured", "Full-featured", "Everything that makes it feel like a finished product"), o("other", "Write your own...", "Describe the features you need"))),
-                    q("visual_direction", "What visual style should it have?", true, "clean_minimal", List.of(o("clean_minimal", "Clean & minimal", "Light, airy, generous whitespace"), o("calm_warm", "Calm & warm", "Soothing colors, soft shapes, friendly tone"), o("bold_colorful", "Bold & colorful", "Vivid colors and big, playful elements"), o("dark_moody", "Dark & moody", "Dark background with vibrant accents"), o("other", "Write your own...", "Describe the visual style")))
-            );
-        }
-        return List.of(
-                q("audience", "Who will use this to-do app, and for what kind of tasks?", true, "just_me", List.of(o("just_me", "Just for me", "You use it alone to track daily tasks"), o("shared_accounts", "Shared with accounts", "Multiple people sign in and each manages their own tasks"), o("learning_demo", "Learning/demo project", "Exploring what the product can do"), o("other", "Write your own...", "Describe who will use it and why"))),
-                q("features", "Beyond adding and completing tasks, which features matter?", true, "bare_minimum", List.of(o("bare_minimum", "Bare minimum", "Add, check off, delete - nothing else"), o("standard", "Standard", "Due dates, priorities, and categories/projects"), o("full_featured", "Full-featured", "Due dates, priorities, subtasks, search, and filters"), o("other", "Write your own...", "Describe the features you need"))),
-                q("visual_direction", "What visual style should it have?", true, "dark_moody", List.of(o("clean_minimal", "Clean & minimal", "Light, airy, generous whitespace - Things/Todoist style"), o("calm_warm", "Calm & warm", "Soothing colors, soft shapes, friendly tone"), o("bold_structured", "Bold & structured", "Dense information layout, sharp edges, productivity-tool vibe"), o("dark_moody", "Dark & moody", "Dark background with vibrant accents"), o("other", "Write your own...", "Describe the visual style")))
-        );
+        return List.of();
     }
 
     private static QuestionDraft q(String key, String prompt, boolean required, String recommended, List<OptionDraft> options) { return new QuestionDraft(key, prompt, required, recommended, options); }

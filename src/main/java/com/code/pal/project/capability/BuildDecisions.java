@@ -1,6 +1,8 @@
 package com.code.pal.project.capability;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.prompt.PromptLoader;
+import com.code.pal.agent.prompt.PromptLoader.Prompt;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.project.domain.RequirementQuestion;
 import com.code.pal.project.domain.RequirementStatus;
@@ -32,15 +34,14 @@ public class BuildDecisions {
     public record State(Choice choice, Available available, String problem) {
         public boolean blocked() { return problem != null; }
         public String prompt() {
-            String choiceText = choice == null ? "Storage/auth are not approved; do not guess a cloud provider."
-                    : "Approved storage=" + choice.storage() + "; auth=" + choice.auth() + ".";
-            return "<platform-build-decision version=\"1\">\n" + choiceText
-                    + "\nMERN configured=" + available.mernConfigured()
-                    + "; Supabase connection recorded=" + available.supabaseConnected()
-                    + ". Live database readiness and application behavior still require validation."
-                    + (blocked() ? "\nBUILD BLOCKED: " + problem : "")
-                    + "\nUse browser persistence only for BROWSER; never substitute it for server data/accounts."
-                    + "\n</platform-build-decision>\n";
+            return PromptLoader.load(Prompt.BUILD_DECISION)
+                    .replace("{{storage}}", choice == null ? "UNAPPROVED" : choice.storage().name())
+                    .replace("{{auth}}", choice == null ? "UNAPPROVED" : choice.auth().name())
+                    .replace("{{approved}}", Boolean.toString(choice != null))
+                    .replace("{{mernConfigured}}", Boolean.toString(available.mernConfigured()))
+                    .replace("{{supabaseRecorded}}", Boolean.toString(available.supabaseConnected()))
+                    .replace("{{blocked}}", Boolean.toString(blocked()))
+                    .replace("{{problem}}", problem == null ? "" : problem.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")) + "\n";
         }
     }
 

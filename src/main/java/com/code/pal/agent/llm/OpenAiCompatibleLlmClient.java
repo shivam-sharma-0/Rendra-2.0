@@ -59,6 +59,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private final Set<String> streamUsageProviders = new HashSet<>();
     private final double defaultTemperature;
     private final int maxAttempts;
+    private final int planningMaxAttempts;
     private final long initialBackoffMs;
     private final long maxBackoffMs;
     private final Duration requestTimeout;
@@ -74,6 +75,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         this.objectMapper = objectMapper;
         this.defaultTemperature = llm.getTemperature();
         this.maxAttempts = Math.max(1, llm.getMaxAttempts());
+        this.planningMaxAttempts = Math.min(this.maxAttempts, Math.clamp(props.getPlanning().getMaxTransportAttempts(), 1, 3));
         this.initialBackoffMs = Math.max(50, llm.getRetryInitialBackoffMs());
         this.maxBackoffMs = Math.max(initialBackoffMs, llm.getRetryMaxBackoffMs());
         this.requestTimeout = Duration.ofMillis(Math.max(1_000, llm.getRequestTimeoutMs()));
@@ -129,6 +131,9 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         // The run's Stop signal (bound to the calling thread by the agent): it aborts the wait for the
         // response, the stream and the back-off between attempts.
         RunCancellation cancellation = RunCancellation.current();
+        boolean planning = Set.of(CallPurpose.REQUIREMENTS, CallPurpose.PLANNER, CallPurpose.SCHEMA_CORRECTION)
+                .contains(LlmCallContext.current().purpose());
+        int transmissions = 0;
         int maxRateLimited = maxAttempts * pool.size();
         int rateLimited = 0;
         int transientFailures = 0;
@@ -142,13 +147,16 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                 throw new LlmHttpException(401, "LLM call failed: HTTP 401 - every API key of '" + provider + "' was rejected recently");
             }
             try {
+                transmissions++;
                 return streamOnce(endpoint, request, onTextDelta, attemptTimeout, deadline, cancellation);
             } catch (KeyRejectedException rejected) {
                 // A revoked or mistyped key: set it aside and go on at once with the provider's other keys.
                 pool.disable(endpoint, rejectedKeyCooldown);
                 log.warn("API key {} of {} for '{}' was rejected (HTTP 401); skipping it for {} min",
                         pool.indexOf(endpoint) + 1, pool.size(), provider, rejectedKeyCooldown.toMinutes());
+                if (planning && transmissions >= planningMaxAttempts) throw rejected;
             } catch (RetryableLlmException e) {
+                if (planning && transmissions >= planningMaxAttempts) throw e;
                 if (e.rateLimited()) {
                     if (++rateLimited >= maxRateLimited) throw e;
                     if (++keysTriedInRound < pool.size()) {
@@ -235,6 +243,12 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                 closeQuietly(response.body());
                 LlmAttemptScope.responseClosed();
                 throw new LlmHttpException(status, "LLM call failed: HTTP " + status);
+            }
+            String contentType = response.headers().firstValue("Content-Type").orElse("").toLowerCase(Locale.ROOT);
+            if (!contentType.isBlank() && !contentType.startsWith("text/event-stream")) {
+                closeQuietly(response.body());
+                LlmAttemptScope.responseClosed();
+                throw new LlmStreamException(LlmStreamException.Reason.UNEXPECTED_CONTENT_TYPE, null, null);
             }
             // The request timeout stops at the response headers; the body needs its own guard.
             watchdog = new StreamWatchdog(response.body(), streamIdleTimeoutNanos, deadline, cancellation);
@@ -377,9 +391,13 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                 .sorted(Map.Entry.comparingByKey(Comparator.naturalOrder()))
                 .map(entry -> entry.getValue().build(entry.getKey()))
                 .toList();
+        if (content.isEmpty() && calls.isEmpty() && !"length".equals(finishReason[0])) {
+            throw new LlmStreamException(LlmStreamException.Reason.EMPTY_STREAM, null, reportedUsage(usage));
+        }
         log.debug("llm_stream_done reasoningChars={} contentChars={}", reasoning.length(), content.length());
         return new LlmResult(content.toString(), reasoning.isEmpty() ? null : reasoning.toString(), calls,
-                usage.reported ? new Usage(usage.promptTokens, usage.completionTokens) : null, finishReason[0]);
+                usage.reported ? new Usage(usage.promptTokens, usage.completionTokens, usage.cachedTokens, usage.reasoningTokens)
+                        : null, finishReason[0]);
     }
 
     /** @return true when the terminal [DONE] event was received. */
@@ -389,47 +407,69 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         String data = raw.toString();
         if (data.isBlank()) return false;
         if ("[DONE]".equals(data)) return true;
+        JsonNode root;
         try {
-            JsonNode root = objectMapper.readTree(data);
-            JsonNode usageNode = root.path("usage");
-            JsonNode prompt = usageNode.path("prompt_tokens"), completion = usageNode.path("completion_tokens");
-            if (prompt.isIntegralNumber() && completion.isIntegralNumber()
-                    && prompt.asLong() >= 0 && prompt.asLong() <= Integer.MAX_VALUE
-                    && completion.asLong() >= 0 && completion.asLong() <= Integer.MAX_VALUE) {
-                usage.promptTokens = prompt.asInt();
-                usage.completionTokens = completion.asInt();
-                usage.reported = true;
+            root = objectMapper.readTree(data);
+        } catch (RuntimeException malformed) {
+            log.debug("Ignoring malformed LLM SSE event: {}", malformed.getClass().getSimpleName());
+            return false;
+        }
+        if (root == null) return false;
+        JsonNode usageNode = root.path("usage");
+        JsonNode prompt = usageNode.path("prompt_tokens"), completion = usageNode.path("completion_tokens");
+        if (prompt.isIntegralNumber() && completion.isIntegralNumber()
+                && prompt.asLong() >= 0 && prompt.asLong() <= Integer.MAX_VALUE
+                && completion.asLong() >= 0 && completion.asLong() <= Integer.MAX_VALUE) {
+            usage.promptTokens = prompt.asInt();
+            usage.completionTokens = completion.asInt();
+            usage.cachedTokens = usageDetail(usageNode.path("prompt_tokens_details").path("cached_tokens"), usage.promptTokens);
+            usage.reasoningTokens = usageDetail(usageNode.path("completion_tokens_details").path("reasoning_tokens"), usage.completionTokens);
+            usage.reported = true;
+        }
+        if (root.hasNonNull("error")) {
+            var code = root.path("error").path("code");
+            int numeric = code.asInt(0);
+            Integer safeCode = numeric >= 100 && numeric <= 599 ? numeric : null;
+            throw new LlmStreamException(LlmStreamException.Reason.PROVIDER_ERROR, safeCode, reportedUsage(usage));
+        }
+        JsonNode choices = root.path("choices");
+        if (!choices.isArray() || choices.isEmpty()) return false;
+        JsonNode choice = choices.get(0);
+        if (!choice.path("finish_reason").isNull()) finishReason[0] = choice.path("finish_reason").asText(null);
+        if ("error".equals(finishReason[0])) {
+            throw new LlmStreamException(LlmStreamException.Reason.PROVIDER_ERROR, null, reportedUsage(usage));
+        }
+        JsonNode delta = choice.path("delta");
+        String text = delta.path("content").asText("");
+        if (!text.isEmpty()) {
+            content.append(text);
+            onTextDelta.accept(text);
+        }
+        // Reasoning-capable models (e.g. DeepSeek R1-style, OpenRouter "reasoning" field) stream their
+        // chain-of-thought separately from the final answer; different providers name it differently.
+        String reasoningText = delta.path("reasoning").asText(delta.path("reasoning_content").asText(""));
+        if (!reasoningText.isEmpty()) reasoning.append(reasoningText);
+        JsonNode toolNodes = delta.path("tool_calls");
+        if (toolNodes.isArray()) {
+            for (JsonNode tool : toolNodes) {
+                int index = tool.path("index").asInt(0);
+                ToolCallBuilder target = toolCalls.computeIfAbsent(index, ignored -> new ToolCallBuilder());
+                if (!tool.path("id").isMissingNode()) target.id = tool.path("id").asText(target.id);
+                JsonNode function = tool.path("function");
+                if (!function.path("name").isMissingNode()) target.name = function.path("name").asText(target.name);
+                if (!function.path("arguments").isMissingNode()) target.arguments.append(function.path("arguments").asText(""));
+                if (tool.path("extra_content").isObject()) target.extraContent = objectMapper.convertValue(tool.path("extra_content"), Map.class);
             }
-            JsonNode choices = root.path("choices");
-            if (!choices.isArray() || choices.isEmpty()) return false;
-            JsonNode choice = choices.get(0);
-            if (!choice.path("finish_reason").isNull()) finishReason[0] = choice.path("finish_reason").asText(null);
-            JsonNode delta = choice.path("delta");
-            String text = delta.path("content").asText("");
-            if (!text.isEmpty()) {
-                content.append(text);
-                onTextDelta.accept(text);
-            }
-            // Reasoning-capable models (e.g. DeepSeek R1-style, OpenRouter "reasoning" field) stream their
-            // chain-of-thought separately from the final answer; different providers name it differently.
-            String reasoningText = delta.path("reasoning").asText(delta.path("reasoning_content").asText(""));
-            if (!reasoningText.isEmpty()) reasoning.append(reasoningText);
-            JsonNode toolNodes = delta.path("tool_calls");
-            if (toolNodes.isArray()) {
-                for (JsonNode tool : toolNodes) {
-                    int index = tool.path("index").asInt(0);
-                    ToolCallBuilder target = toolCalls.computeIfAbsent(index, ignored -> new ToolCallBuilder());
-                    if (!tool.path("id").isMissingNode()) target.id = tool.path("id").asText(target.id);
-                    JsonNode function = tool.path("function");
-                    if (!function.path("name").isMissingNode()) target.name = function.path("name").asText(target.name);
-                    if (!function.path("arguments").isMissingNode()) target.arguments.append(function.path("arguments").asText(""));
-                    if (tool.path("extra_content").isObject()) target.extraContent = objectMapper.convertValue(tool.path("extra_content"), Map.class);
-                }
-            }
-        } catch (RuntimeException e) {
-            log.debug("Ignoring malformed LLM SSE event: {}", e.getMessage());
         }
         return false;
+    }
+
+    private static Usage reportedUsage(UsageBuilder usage) {
+        return usage.reported ? new Usage(usage.promptTokens, usage.completionTokens, usage.cachedTokens, usage.reasoningTokens) : null;
+    }
+
+    private static Integer usageDetail(JsonNode value, int total) {
+        return value.isIntegralNumber() && value.asLong() >= 0 && value.asLong() <= total ? value.asInt() : null;
     }
 
     Map<String, Object> buildBody(LlmRequest request) {
@@ -544,7 +584,13 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         }
     }
 
-    private static final class UsageBuilder { private int promptTokens; private int completionTokens; private boolean reported; }
+    private static final class UsageBuilder {
+        private int promptTokens;
+        private int completionTokens;
+        private boolean reported;
+        private Integer cachedTokens;
+        private Integer reasoningTokens;
+    }
 
     /** HTTP 401 for one key; the call goes on with the provider's other keys. */
     private static final class KeyRejectedException extends LlmHttpException {

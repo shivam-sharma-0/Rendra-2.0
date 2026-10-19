@@ -3,6 +3,7 @@ package com.code.pal.message.repository;
 import com.code.pal.message.domain.Message;
 import com.code.pal.message.domain.MessageRole;
 import com.code.pal.message.domain.MessageStatus;
+import com.code.pal.project.domain.ProjectType;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -72,4 +73,8 @@ public interface MessageRepository extends JpaRepository<Message, String> {
 
     /** The project's first message by the given role (its opening prompt, for USER). */
     Optional<Message> findFirstByProjectIdAndRoleOrderBySeqAsc(UUID projectId, MessageRole role);
+
+    /** The actionable build intake, which may follow greetings in CHAT mode. */
+    Optional<Message> findFirstByProjectIdAndRoleAndModeOrderBySeqAsc(UUID projectId, MessageRole role,
+                                                                  ProjectType mode);
 }

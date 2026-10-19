@@ -89,5 +89,13 @@ public interface LlmClient {
         public boolean hasToolCalls() { return toolCalls != null && !toolCalls.isEmpty(); }
     }
 
-    record Usage(int promptTokens, int completionTokens) {}
+    record Usage(int promptTokens, int completionTokens, Integer cachedInputTokens, Integer reasoningOutputTokens) {
+        public Usage {
+            if (cachedInputTokens != null && (cachedInputTokens < 0 || cachedInputTokens > promptTokens)) cachedInputTokens = null;
+            if (reasoningOutputTokens != null && (reasoningOutputTokens < 0 || reasoningOutputTokens > completionTokens)) reasoningOutputTokens = null;
+        }
+        public Usage(int promptTokens, int completionTokens) {
+            this(promptTokens, completionTokens, null, null);
+        }
+    }
 }

@@ -34,6 +34,11 @@ class RequestRouterTest {
             a to do app | CHANGE
             please add a button which clears the list | CHANGE
             can you add dark mode? | CHANGE
+            A todo app with a clean UI, can u build it? | CHANGE
+            i want to buld a end to end with a clean and attractive UI Todo application with all mendatory features, can u build it? | CHANGE
+            The footer has no links; could you add them? | CHANGE
+            Explain how this works, can you describe the setup? | QUESTION
+            Don't change anything, could you explain the build? | QUESTION
             create an app that shows how much I spend | CHANGE
             Don't change anything, explain the backend | QUESTION
             changes nahi krna, sirf check | QUESTION

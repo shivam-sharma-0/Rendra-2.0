@@ -14,8 +14,15 @@ public final class RequirementDtos {
     public record Question(UUID id, int sequence, String key, String prompt, RequirementQuestionType type,
                            boolean required, List<Option> options, String recommendedOption,
                            String selectedOption, String otherText) {}
+    public record Feature(String id, String description, boolean checkPlanned) {}
+    public record Review(String goal, List<String> pages, List<Feature> features, boolean answersChanged) {}
     public record Session(UUID id, UUID projectId, RequirementStatus status, List<Question> questions,
-                          boolean complete, Instant approvedAt, long revision, boolean processing, String artifactStatus, String reviewStatus) {
+                          boolean complete, Instant approvedAt, long revision, boolean processing, String artifactStatus,
+                          String reviewStatus, Review review) {
+        public Session(UUID id, UUID projectId, RequirementStatus status, List<Question> questions,
+                boolean complete, Instant approvedAt, long revision, boolean processing, String artifactStatus, String reviewStatus) {
+            this(id, projectId, status, questions, complete, approvedAt, revision, processing, artifactStatus, reviewStatus, null);
+        }
         public Session(UUID id, UUID projectId, RequirementStatus status, List<Question> questions, boolean complete, Instant approvedAt) {
             this(id, projectId, status, questions, complete, approvedAt, 0, false, "NONE", "NONE");
         }

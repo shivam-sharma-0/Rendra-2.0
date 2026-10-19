@@ -165,8 +165,55 @@ app:
   agent:
     structured-contracts: ${AGENT_STRUCTURED_CONTRACTS:false}
     full-stack-contracts: ${AGENT_FULL_STACK_CONTRACTS:true}
+    requirements:
+      timeout-ms: ${AGENT_REQUIREMENTS_TIMEOUT_MS:90000}
+      max-output-tokens: ${AGENT_REQUIREMENTS_MAX_OUTPUT_TOKENS:6000}
+    planning:
+      max-route-attempts: ${AGENT_PLANNING_MAX_ROUTE_ATTEMPTS:2}
+      max-transport-attempts: ${AGENT_PLANNING_MAX_TRANSPORT_ATTEMPTS:1}
+      route-timeout-ms: ${AGENT_PLANNING_ROUTE_TIMEOUT_MS:90000}
+      contract-output-tokens: ${AGENT_PLANNING_CONTRACT_OUTPUT_TOKENS:12288}
+      contract-tool-enabled: ${AGENT_PLANNING_CONTRACT_TOOL_ENABLED:false}
+      correction-fallback: ${AGENT_PLANNING_CORRECTION_FALLBACK:true}
+      schema-providers: ${AGENT_PLANNING_SCHEMA_PROVIDERS:mistral}
+    repair:
+      repeated-failure-threshold: ${AGENT_REPAIR_REPEAT_THRESHOLD:2}
+      failed-revision-threshold: ${AGENT_REPAIR_FAILED_REVISION_THRESHOLD:2}
+      max-model-escalations: ${AGENT_REPAIR_MAX_MODEL_ESCALATIONS:1}
     batch-generation: ${AGENT_BATCH_GENERATION:true}
     automatic-starter: ${AGENT_AUTOMATIC_STARTER:true}
+    default-render-stack: ${AGENT_DEFAULT_RENDER_STACK:VITE}
+    # Entries contain revision and USD prices per million tokens; absent prices stay unknown.
+    model-pricing: {}
+    visual-review:
+      enabled: ${AGENT_VISUAL_REVIEW_ENABLED:true}
+      max-output-tokens: ${AGENT_VISUAL_REVIEW_MAX_OUTPUT_TOKENS:600}
+      timeout-ms: ${AGENT_VISUAL_REVIEW_TIMEOUT_MS:15000}
+    compact-tool-catalog: ${AGENT_COMPACT_TOOL_CATALOG_ENABLED:false}
+    build-artifacts:
+      enabled: ${AGENT_BUILD_ARTIFACTS_ENABLED:false}
+      max-entries-per-run: ${AGENT_BUILD_ARTIFACTS_MAX_ENTRIES_PER_RUN:2}
+      max-files: ${AGENT_BUILD_ARTIFACTS_MAX_FILES:256}
+      max-file-bytes: ${AGENT_BUILD_ARTIFACTS_MAX_FILE_BYTES:2000000}
+      max-run-bytes: ${AGENT_BUILD_ARTIFACTS_MAX_RUN_BYTES:8000000}
+      max-total-bytes: ${AGENT_BUILD_ARTIFACTS_MAX_TOTAL_BYTES:32000000}
+    feature-outcomes:
+      enabled: ${AGENT_FEATURE_OUTCOMES_ENABLED:false}
+      browser-budget-ms: ${AGENT_FEATURE_OUTCOMES_BROWSER_BUDGET_MS:12000}
+      step-timeout-ms: ${AGENT_FEATURE_OUTCOMES_STEP_TIMEOUT_MS:2000}
+    supabase-validation:
+      enabled: ${AGENT_SUPABASE_VALIDATION_ENABLED:false}
+      startup-timeout-ms: ${AGENT_SUPABASE_VALIDATION_STARTUP_TIMEOUT_MS:30000}
+      behavior-timeout-ms: ${AGENT_SUPABASE_VALIDATION_BEHAVIOR_TIMEOUT_MS:60000}
+      database-memory-mb: ${AGENT_SUPABASE_VALIDATION_DATABASE_MEMORY_MB:512}
+      service-memory-mb: ${AGENT_SUPABASE_VALIDATION_SERVICE_MEMORY_MB:256}
+      max-migrations: ${AGENT_SUPABASE_VALIDATION_MAX_MIGRATIONS:64}
+      max-migration-bytes: ${AGENT_SUPABASE_VALIDATION_MAX_MIGRATION_BYTES:1000000}
+      command-timeout-ms: ${AGENT_SUPABASE_VALIDATION_COMMAND_TIMEOUT_MS:15000}
+      recovery-interval-ms: ${AGENT_SUPABASE_VALIDATION_RECOVERY_INTERVAL_MS:60000}
+      recovery-budget-ms: ${AGENT_SUPABASE_VALIDATION_RECOVERY_BUDGET_MS:5000}
+      max-recovery-environments: ${AGENT_SUPABASE_VALIDATION_MAX_RECOVERY_ENVIRONMENTS:16}
+      max-processes: ${AGENT_SUPABASE_VALIDATION_MAX_PROCESSES:256}
     polish-turn: ${AGENT_POLISH_TURN:false}
     parallel-units: ${AGENT_PARALLEL_UNITS:false}
     scheduling:
@@ -222,14 +269,13 @@ app:
       # Safety, embedding, vision, speech, structured-data and unrelated general models are excluded.
       # Priority order: a run sticks to the first available model (one line of reasoning, one code
       # style) and uses the next ones only while it fails; other calls (requirements, intent) rotate.
-      # Only models the free Mistral tier serves (checked 2026-10-06): codestral, open-mistral-nemo and
-      # ministral-8b answer; small/medium/devstral/magistral return 429 on every key, large returns 403.
+      # Mistral deprecated open-mistral-nemo on 2026-05-22; keep the current small Ministral model first.
       build: "${AGENT_MODEL_BUILD:mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b}"
-      chat: "${AGENT_MODEL_CHAT:mistral:open-mistral-nemo,mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b}"
-      plan: "${AGENT_MODEL_PLAN:mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b}"
+      chat: "${AGENT_MODEL_CHAT:mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b}"
+      plan: "${AGENT_MODEL_PLAN:openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,mistral:codestral-latest}"
       free-build: "mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b"
-      free-chat: "mistral:open-mistral-nemo,mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b"
-      free-plan: "mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b"
+      free-chat: "mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b"
+      free-plan: "${AGENT_MODEL_FREE_PLAN:openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,mistral:codestral-latest}"
       # Reads attached images (screenshots, designs) into a text brief for the coding model; in order.
       vision: "${AGENT_MODEL_VISION:nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia:meta/llama-3.2-11b-vision-instruct}"
     # Per-project code lives here (one dir per project).
@@ -264,6 +310,7 @@ app:
     heartbeat-interval-ms: ${AGENT_HEARTBEAT_INTERVAL_MS:15000}
     rollback-on-failure: ${AGENT_ROLLBACK_ON_FAILURE:true}
     max-repair-attempts: ${AGENT_MAX_REPAIR_ATTEMPTS:3}
+    max-truncated-responses: ${AGENT_MAX_TRUNCATED_RESPONSES:1}
     max-patch-misses: ${AGENT_MAX_PATCH_MISSES:3}
     max-validation-diagnostics: ${AGENT_MAX_VALIDATION_DIAGNOSTICS:40}
     sandbox:
@@ -296,6 +343,9 @@ app:
       install-network: ${AGENT_SANDBOX_INSTALL_NETWORK:bridge}
       install-timeout-ms: ${AGENT_SANDBOX_INSTALL_TIMEOUT_MS:300000}
       max-dependency-bytes: ${AGENT_SANDBOX_MAX_DEPENDENCY_BYTES:1000000000}
+      dependency-install-attempts: ${AGENT_DEPENDENCY_INSTALL_ATTEMPTS:2}
+      command-state-attempts: ${AGENT_COMMAND_STATE_ATTEMPTS:3}
+      command-state-timeout-ms: ${AGENT_COMMAND_STATE_TIMEOUT_MS:10000}
       # Runtime check: the staged site is loaded in headless Chromium (no network) before commit.
       runtime-check: ${AGENT_SANDBOX_RUNTIME_CHECK:true}
       browser-image: ${AGENT_SANDBOX_BROWSER_IMAGE:codepal-browser}

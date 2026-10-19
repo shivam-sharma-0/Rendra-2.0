@@ -19,6 +19,7 @@ import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.event.AssistantTurnRequested;
 import com.code.pal.project.exception.RequirementApprovalRequiredException;
 import com.code.pal.project.service.ProjectService;
+import com.code.pal.project.requirement.BuildRequestIntake;
 import com.code.pal.realtime.RealtimeService;
 import com.code.pal.shared.usage.AgentTurnAdmission;
 import com.code.pal.testsupport.CodexJpaFixture;
@@ -509,7 +510,7 @@ class AtomicAgentAcceptanceIT {
         @Bean MessageSequence sequence() { return new MessageSequence(); }
         @Bean MessageServiceImpl messageService(MessageRepository m, ProjectService p, RealtimeService r,
                                                ApplicationEventPublisher e, MessageSequence s, AgentTurnAdmission a, ProjectFiles f) {
-            return new MessageServiceImpl(m, p, r, e, s, a, f, new ConversationProposals(m));
+            return new MessageServiceImpl(m, p, r, e, s, a, f, new ConversationProposals(m), mock(BuildRequestIntake.class));
         }
         @Bean AgentRunCreator creator(AgentRunRepository r, MessageRepository m, AgentDispatchRepository o) {
             return new AgentRunCreator(r, m, o);

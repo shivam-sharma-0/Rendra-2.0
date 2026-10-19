@@ -10,6 +10,7 @@ import com.code.pal.project.domain.RequirementQuestionType;
 import com.code.pal.project.domain.RequirementSession;
 import com.code.pal.project.domain.RequirementStatus;
 import com.code.pal.project.dto.RequirementDtos;
+import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.repository.RequirementQuestionRepository;
 import com.code.pal.project.repository.RequirementSessionRepository;
 import com.code.pal.project.service.ProjectService;
@@ -39,6 +40,60 @@ import static org.mockito.Mockito.when;
 
 /** Model calls take up to 30 s, so they must never run while a transaction holds a pooled DB connection. */
 class RequirementServiceImplTest {
+    @Test
+    void unavailablePrimaryPlannerUsesOnlyTheConfiguredPlanFallbackOutsideTransactions() {
+        var decisions = mock(BuildDecisions.class);
+        when(decisions.available(projectId)).thenReturn(new BuildDecisions.Available(true, null));
+        service.setBuildDecisions(decisions);
+        properties.getModels().setPlan(List.of("openrouter:primary", "nvidia:planning-fallback"));
+        modelReply = () -> {
+            if (modelCalls.get() == 1) throw new com.code.pal.agent.llm.LlmStreamException(
+                    com.code.pal.agent.llm.LlmStreamException.Reason.PROVIDER_ERROR, 503, null);
+            return "{\"questions\":[],\"spec\":" + COFFEE + "}";
+        };
+        var view = service.start(7L, projectId);
+        assertEquals(2, modelCalls.get());
+        assertEquals(List.of("primary", "planning-fallback"), calledModels);
+        assertEquals(0, modelCallsInsideATransaction.get());
+        assertTrue(view.complete());
+        assertTrue(session.getSpecDraftJson().contains("Coffee"));
+    }
+
+    @Test
+    void aTodoRequestSkipsGenericDiscoveryAndAutomaticallySelectsItsBackend() {
+        var decisions = mock(BuildDecisions.class);
+        when(decisions.available(projectId)).thenReturn(new BuildDecisions.Available(true, null));
+        service.setBuildDecisions(decisions);
+        when(projects.requireCanEdit(7L, projectId)).thenReturn(Project.builder().id(projectId).initialPrompt("Build a complete Todo app").build());
+        modelReply = () -> "{\"questions\":[" + question("primary_use_case") + "],\"spec\":" + COFFEE + "}";
+        var view = service.start(7L, projectId);
+        assertEquals(List.of("platform_storage", "platform_auth"), view.questions().stream().map(RequirementDtos.Question::key).toList());
+        assertEquals(List.of("MERN", "NONE"), stored.stream().map(RequirementQuestion::getSelectedOption).toList());
+        assertTrue(view.complete());
+        assertEquals(RequirementStatus.APPROVAL_REQUIRED, view.status());
+        assertEquals(1, modelCalls.get());
+    }
+
+    @Test
+    void aProviderFailureDoesNotInventABareMinimumQuestionnaire() {
+        modelReply = () -> { throw new IllegalStateException("Fixture unavailable"); };
+        assertTrue(service.start(7L, projectId).questions().isEmpty());
+        assertNull(session.getSpecDraftJson());
+    }
+    @Test
+    void semanticCapabilitiesAreResolvedInTheExistingInterviewCall() {
+        var decisions = mock(BuildDecisions.class);
+        when(decisions.available(projectId)).thenReturn(new BuildDecisions.Available(true, null));
+        service.setBuildDecisions(decisions);
+        modelReply = () -> "{\"questions\":[],\"spec\":" + COFFEE.replace("\"title\":\"Coffee\"",
+                "\"capabilities\":{\"persistence\":\"SERVER\",\"accounts\":true},\"title\":\"Coffee\"") + "}";
+        service.start(7L, projectId);
+        assertEquals("MERN", stored.stream().filter(value -> value.getQuestionKey().equals("platform_storage"))
+                .findFirst().orElseThrow().getSelectedOption());
+        assertEquals("ACCOUNTS", stored.stream().filter(value -> value.getQuestionKey().equals("platform_auth"))
+                .findFirst().orElseThrow().getSelectedOption());
+        assertEquals(1, modelCalls.get());
+    }
 
     private final UUID projectId = UUID.randomUUID();
     private final ProjectService projects = mock(ProjectService.class);
@@ -51,6 +106,7 @@ class RequirementServiceImplTest {
     private Supplier<String> modelReply = () -> "[]";
     private Runnable duringModelCall = () -> { };
     private final List<String> prompts = new ArrayList<>();
+    private final List<String> calledModels = new ArrayList<>();
     private final MessageService messages = mock(MessageService.class);
     private final ProjectArtifactService artifacts = mock(ProjectArtifactService.class);
 
@@ -167,7 +223,10 @@ class RequirementServiceImplTest {
         service.start(7L, projectId);
 
         assertTrue(session.getSpecDraftJson().contains("\"lists\""), session.getSpecDraftJson());
-        assertFalse(session.getSpecDraftJson().contains("loading_state"), session.getSpecDraftJson());
+        assertTrue(session.getSpecDraftJson().contains("loading_state"), "uncheckable scope is preserved separately");
+        var review=service.get(7L,projectId).review();
+        assertEquals(2,review.features().size());
+        assertFalse(review.features().get(1).checkPlanned());
     }
 
     @Test
@@ -225,8 +284,9 @@ class RequirementServiceImplTest {
 
     @Test
     void storageIsPreselectedOnlyAfterTheLastProductAnswer() {
-        service.setBuildDecisions(new com.code.pal.project.capability.BuildDecisions(sessions,
-                mock(com.code.pal.project.supabase.SupabaseConnectionRepository.class), new AgentProperties(), new ObjectMapper()));
+        var decisions = mock(BuildDecisions.class);
+        when(decisions.available(projectId)).thenReturn(new BuildDecisions.Available(true, null));
+        service.setBuildDecisions(decisions);
         modelReply = () -> "[{\"key\":\"features\",\"prompt\":\"What should it do?\",\"required\":true,\"recommended\":\"a\","
                 + "\"options\":[{\"id\":\"a\",\"label\":\"Save my tasks\"},{\"id\":\"b\",\"label\":\"Just a page\"}]}]";
 
@@ -236,7 +296,7 @@ class RequirementServiceImplTest {
 
         RequirementDtos.Session view = service.answer(7L, projectId, stored.getFirst().getId(), new RequirementDtos.AnswerRequest("a", null));
 
-        assertEquals("BROWSER", storage.getSelectedOption());
+        assertEquals("MERN", storage.getSelectedOption());
         assertEquals(RequirementStatus.APPROVAL_REQUIRED, view.status());
         assertEquals(1, modelCalls.get());
     }
@@ -327,6 +387,7 @@ class RequirementServiceImplTest {
     private LlmClient model() {
         return (request, onTextDelta) -> {
             modelCalls.incrementAndGet();
+            calledModels.add(request.model());
             request.messages().forEach(message -> prompts.add(message.content()));
             if (TransactionSynchronizationManager.isActualTransactionActive()) modelCallsInsideATransaction.incrementAndGet();
             duringModelCall.run();

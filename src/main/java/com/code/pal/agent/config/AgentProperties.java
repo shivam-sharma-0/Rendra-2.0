@@ -18,6 +18,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.code.pal.agent.starter.Starter;
+import com.code.pal.project.spec.ApprovedSpec.RenderStack;
+import java.math.BigDecimal;
 import java.util.Set;
 import org.springframework.context.EnvironmentAware;
 import org.springframework.core.env.Environment;
@@ -31,6 +33,100 @@ import org.springframework.core.env.Environment;
 public class AgentProperties implements EnvironmentAware {
     /** MERN requires coordinator-bound acceptance even when optional structured routes are off. */
     private boolean fullStackContracts = true;
+    private final Requirements requirements = new Requirements();
+    private final Planning planning = new Planning();
+    private final Repair repair = new Repair();
+    private final VisualReview visualReview = new VisualReview();
+    private final SupabaseValidation supabaseValidation = new SupabaseValidation();
+    private final FeatureOutcomes featureOutcomes = new FeatureOutcomes();
+    private final BuildArtifacts buildArtifacts = new BuildArtifacts();
+    /** Capability-specific tool schemas stay opt-in until runner/catalog regression and provider gates pass. */
+    private boolean compactToolCatalog = false;
+    /** Optional operator-maintained USD prices, keyed by provider:model. Empty means monetary cost is unknown. */
+    private Map<String, ModelPrice> modelPricing = new LinkedHashMap<>();
+
+    @Getter
+    @Setter
+    public static class BuildArtifacts {
+        private boolean enabled = false;
+        private int maxEntriesPerRun = 2;
+        private int maxFiles = 256;
+        private int maxFileBytes = 2_000_000;
+        private int maxRunBytes = 8_000_000;
+        private int maxTotalBytes = 32_000_000;
+    }
+
+    @Getter
+    @Setter
+    public static class ModelPrice {
+        private String revision;
+        private BigDecimal inputPerMillion;
+        private BigDecimal cachedInputPerMillion;
+        private BigDecimal outputPerMillion;
+    }
+
+    @Getter
+    @Setter
+    public static class Repair {
+        private int repeatedFailureThreshold = 2;
+        private int failedRevisionThreshold = 2;
+        private int maxModelEscalations = 1;
+    }
+
+    @Getter
+    @Setter
+    public static class VisualReview {
+        /** One optional visual review on a new app, only when a configured vision route and captures exist. */
+        private boolean enabled = true;
+        private int maxOutputTokens = 600;
+        private long timeoutMs = 15_000;
+    }
+
+    @Getter
+    @Setter
+    public static class SupabaseValidation {
+        /** Keep opt-in until the isolated adapter and its full browser integration pass their gates. */
+        private boolean enabled = false;
+        private long startupTimeoutMs = 30_000;
+        private long behaviorTimeoutMs = 60_000;
+        private int databaseMemoryMb = 512;
+        private int serviceMemoryMb = 256;
+        private int maxMigrations = 64;
+        private int maxMigrationBytes = 1_000_000;
+        private long commandTimeoutMs = 15_000;
+        private long recoveryIntervalMs = 60_000;
+        private long recoveryBudgetMs = 5_000;
+        private int maxRecoveryEnvironments = 16;
+        private int maxProcesses = 256;
+    }
+
+    @Getter
+    @Setter
+    public static class FeatureOutcomes {
+        /** Opt-in until independent native form/CRUD browser fixtures pass their real Chromium gate. */
+        private boolean enabled = false;
+        private long browserBudgetMs = 12_000;
+        private long stepTimeoutMs = 2_000;
+    }
+
+    @Getter
+    @Setter
+    public static class Requirements {
+        private long timeoutMs = 90_000;
+        private int maxOutputTokens = 6_000;
+    }
+
+    @Getter
+    @Setter
+    public static class Planning {
+        private int maxRouteAttempts = 2;
+        private int maxTransportAttempts = 1;
+        private long routeTimeoutMs = 90_000;
+        private int contractOutputTokens = 12_288;
+        private boolean contractToolEnabled = false;
+        private boolean correctionFallback = true;
+        private Set<String> schemaProviders = Set.of();
+    }
 
     /**
      * Where the master key is read from: the OS environment and the gitignored secrets file, so the keys
@@ -50,23 +146,7 @@ public class AgentProperties implements EnvironmentAware {
     private final Sandbox sandbox = new Sandbox();
     private final Limits limits = new Limits();
     /** Application request limits for shipped routes; unknown routes require explicit configuration. */
-    private Map<String, AccountingBound> accountingBounds = defaultAccountingBounds();
-
-    private static Map<String, AccountingBound> defaultAccountingBounds() {
-        var bounds = new LinkedHashMap<String, AccountingBound>();
-        for (String model : List.of("mistral:codestral-latest", "mistral:open-mistral-nemo",
-                "mistral:ministral-8b-latest", "nvidia:nvidia/nemotron-3-super-120b-a12b",
-                "nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "nvidia:meta/llama-3.2-11b-vision-instruct")) {
-            var b = new AccountingBound();
-            b.setInputTokens(65536);
-            b.setOutputTokens(8192);
-            b.setImages(model.contains("omni") || model.contains("vision"));
-            b.setEvidence(
-                    "Shipped application caps, 2026-10-14; provider context >=128k; see ACCOUNTING_OPERATIONS.md");
-            bounds.put(model, b);
-        }
-        return bounds;
-    }
+    private Map<String, AccountingBound> accountingBounds = AccountingBounds.load();
 
     private long smallRunTokenBudget = 500_000;
     private long mediumRunTokenBudget = 1_000_000;
@@ -76,9 +156,9 @@ public class AgentProperties implements EnvironmentAware {
     @Getter
     @Setter
     public static class AccountingBound {
-        /** Provider-enforced ceiling including messages, tools, images and hidden input framing. */
+        /** Application input-estimate cap, no larger than the verified provider capacity. */
         private long inputTokens;
-        /** Verified max_tokens ceiling, including all billable reasoning/output tokens. */
+        /** Application max_tokens cap, within the provider's completion limit. */
         private int outputTokens;
         private boolean images;
         /** Operator's verification reference; blank means unsupported. Never put credentials here. */
@@ -180,10 +260,14 @@ public class AgentProperties implements EnvironmentAware {
     private boolean batchGeneration = true;
     /** Prepare an approved, unambiguous fresh starter without asking the model to configure it. */
     private boolean automaticStarter = true;
+    /** Approved specs and explicit user stack choices take priority over this new-app default. */
+    private RenderStack defaultRenderStack = RenderStack.VITE;
     /** Restore the pre-commit archive when a worker dies while committing a BUILD run. */
     private boolean rollbackOnFailure = true;
     /** Maximum fix/validate cycles after the first failed validation. */
     private int maxRepairAttempts = 3;
+    /** Additional bounded generation attempts after token truncation; all attempts retain normal accounting. */
+    private int maxTruncatedResponses = 1;
     /** Patch misses per path/worker execution; effective bound is 1-5. Reads do not reset misses. */
     private int maxPatchMisses = 3;
     /** Bound structured diagnostics returned to the model. */
@@ -443,6 +527,9 @@ public class AgentProperties implements EnvironmentAware {
         private long installTimeoutMs = 300_000;
         /** Maximum size of one installed dependency set (node_modules). */
         private long maxDependencyBytes = 1_000_000_000;
+        private int dependencyInstallAttempts = 2;
+        private int commandStateAttempts = 3;
+        private long commandStateTimeoutMs = 10_000;
         /**
          * Load the staged site in a headless browser before committing, and report runtime errors
          * (exceptions, console errors, missing assets, blank page) to the agent.
@@ -588,6 +675,18 @@ public class AgentProperties implements EnvironmentAware {
                 list.stream().filter(entry -> entry != null && !entry.isBlank()).map(this::selection).forEach(routes::add);
         }
         return routes.stream().distinct().toList();
+    }
+
+    /** Planning cannot fall back to a coding route unless it is explicitly configured as a PLAN route. */
+    public List<ModelSelection> freePlanningRoutes() {
+        return billingMode == BillingMode.FREE ? planningRoutes() : List.of();
+    }
+
+    public List<ModelSelection> planningRoutes() {
+        var configured = billingMode == BillingMode.FREE ? models.getFreePlan() : models.getPlan();
+        if (configured == null) return List.of();
+        return configured.stream().filter(entry -> entry != null && !entry.isBlank())
+                .map(this::selection).distinct().toList();
     }
 
     /** A run never reselects a route whose bounded provider attempt already failed. */

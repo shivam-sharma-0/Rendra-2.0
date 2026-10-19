@@ -1,0 +1,44 @@
+{
+  "mistral:codestral-latest": {
+    "inputTokens": 65536,
+    "outputTokens": 8192,
+    "images": false,
+    "evidence": "Shipped application caps, 2026-10-14; provider context >=128k; see docs/backend-reliability/ACCOUNTING_OPERATIONS.md"
+  },
+  "mistral:open-mistral-nemo": {
+    "inputTokens": 65536,
+    "outputTokens": 8192,
+    "images": false,
+    "evidence": "Shipped application caps, 2026-10-14; provider context >=128k; see docs/backend-reliability/ACCOUNTING_OPERATIONS.md"
+  },
+  "mistral:ministral-8b-latest": {
+    "inputTokens": 65536,
+    "outputTokens": 8192,
+    "images": false,
+    "evidence": "Shipped application caps, 2026-10-14; provider context >=128k; see docs/backend-reliability/ACCOUNTING_OPERATIONS.md"
+  },
+  "nvidia:nvidia/nemotron-3-super-120b-a12b": {
+    "inputTokens": 65536,
+    "outputTokens": 8192,
+    "images": false,
+    "evidence": "Shipped application caps, 2026-10-14; provider context >=128k; see docs/backend-reliability/ACCOUNTING_OPERATIONS.md"
+  },
+  "nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": {
+    "inputTokens": 65536,
+    "outputTokens": 8192,
+    "images": true,
+    "evidence": "Shipped application caps, 2026-10-14; provider context >=128k; see docs/backend-reliability/ACCOUNTING_OPERATIONS.md"
+  },
+  "nvidia:meta/llama-3.2-11b-vision-instruct": {
+    "inputTokens": 65536,
+    "outputTokens": 8192,
+    "images": true,
+    "evidence": "Shipped application caps, 2026-10-14; provider context >=128k; see docs/backend-reliability/ACCOUNTING_OPERATIONS.md"
+  },
+  "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free": {
+    "inputTokens": 65536,
+    "outputTokens": 12288,
+    "images": false,
+    "evidence": "Application caps within published 1000000 context / 65536 completion capacity; text only; contract planning cap reviewed 2026-10-18: https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free"
+  }
+}

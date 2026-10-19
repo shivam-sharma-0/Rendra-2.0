@@ -1,0 +1,4 @@
+{
+  "redundantKeys": ["primary_use_case", "primary_purpose", "use_case", "project_scope", "completeness", "visual_direction"],
+  "redundantPrompt": "(?i)(?:what is|what's|which is) (?:the )?(?:primary|main) (?:use case|purpose)|how complete should|beyond adding and completing tasks|who will use this to.?do app"
+}

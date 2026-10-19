@@ -80,7 +80,9 @@ class OpenAiCompatibleLlmClientTest {
     @Test
     void missingPartialOrInvalidUsageIsUnknownButReportedZeroIsKnown() throws Exception {
         List<String> frames = List.of("", "{\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}",
-                "{\"usage\":{\"prompt_tokens\":3}}", "{\"usage\":{\"prompt_tokens\":-1,\"completion_tokens\":2}}");
+                "{\"usage\":{\"prompt_tokens\":3}}", "{\"usage\":{\"prompt_tokens\":-1,\"completion_tokens\":2}}",
+                "{\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":64},\"completion_tokens_details\":{\"reasoning_tokens\":4}}}",
+                "{\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":101},\"completion_tokens_details\":{\"reasoning_tokens\":20}}}");
         AtomicInteger index = new AtomicInteger();
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", exchange -> {
@@ -102,6 +104,8 @@ class OpenAiCompatibleLlmClientTest {
         assertEquals(new LlmClient.Usage(0,0), client.chat(request).usage());
         assertNull(client.chat(request).usage());
         assertNull(client.chat(request).usage());
+        assertEquals(new LlmClient.Usage(100,10,64,4), client.chat(request).usage());
+        assertEquals(new LlmClient.Usage(100,10), client.chat(request).usage());
     }
 
     private static void respond(HttpExchange exchange, int attempt) throws IOException {

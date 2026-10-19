@@ -42,6 +42,8 @@ class OpeningIntentTest {
             I need a website for my bakery | PENDING
             mujhe ek todo app chahiye | PENDING
             landing page for my gym | PENDING
+            A Todo app with a clean UI, can u build it? | INITIAL
+            A Todo app with a clean UI, can u build it? | PENDING
             """)
     void newBuildNeedRequestsStartRequirementsWithoutDispatchingAnAgent(String prompt, String entryPoint) {
         var fixture = new Fixture();

@@ -93,6 +93,42 @@ class RequirementCoordinationIT {
         } finally { release.countDown(); }
     }
 
+    @Test
+    void aBuildAfterAGreetingCreatesOnlyTheInterviewIntakeBeforeAnyGeneration() {
+        var product = context.getBean(ProjectService.class).requireCanEdit(7L, project);
+        product.setLifecycleStage(ProjectStage.DESIGN);
+        product.setInitialPrompt("Hi");
+        var repository = context.getBean(com.code.pal.message.repository.MessageRepository.class);
+        repository.saveAndFlush(com.code.pal.message.domain.Message.user(project, "greet-" + project.toString().replace("-", ""), "Hi", ProjectType.CHAT, 7L));
+        String prompt = "A Todo app with a clean UI, can u build it?";
+        var result = context.getBean(MessageServiceImpl.class).post(7L, project,
+                new com.code.pal.message.dto.CreateMessageRequest("build-" + project.toString().replace("-", ""), prompt, ProjectType.BUILD,
+                        "answer-" + project.toString().replace("-", "")));
+        assertEquals(1, result.size());
+        assertEquals(ProjectStage.REQUIREMENTS, product.getLifecycleStage());
+        var intake = sessions.findByProjectId(project).orElseThrow();
+        assertEquals(prompt, intake.getSourcePrompt());
+        assertEquals(RequirementStatus.DRAFT, intake.getStatus());
+        assertEquals(0, jdbc.queryForObject("select count(*) from agent_runs where project_id=?", Integer.class, project));
+        assertEquals(0, model.calls.get());
+        verifyNoInteractions(context.getBean(AgentJobQueue.class), context.getBean(AgentTurnAdmission.class));
+    }
+
+    @Test
+    void invalidAttachmentsCannotLeaveARequirementClaimOrDispatchBehind() {
+        var product = context.getBean(ProjectService.class).requireCanEdit(7L, project);
+        product.setLifecycleStage(ProjectStage.DESIGN);
+        product.setInitialPrompt("Hi");
+        assertThrows(com.code.pal.message.exception.InvalidAttachmentException.class,
+                () -> context.getBean(MessageServiceImpl.class).post(7L, project,
+                        new com.code.pal.message.dto.CreateMessageRequest("invalid-" + project.toString().replace("-", ""), "Build a task app", ProjectType.BUILD,
+                                "answer-" + project.toString().replace("-", ""), List.of("uploads/missing.png"), null)));
+        assertTrue(sessions.findByProjectId(project).isEmpty());
+        assertEquals(ProjectStage.DESIGN, product.getLifecycleStage());
+        assertEquals(0, jdbc.queryForObject("select count(*) from agent_runs where project_id=?", Integer.class, project));
+        verifyNoInteractions(context.getBean(AgentJobQueue.class), context.getBean(AgentTurnAdmission.class));
+    }
+
     @Test void lastAnswerGoesStraightToApprovalWithoutAModelCall() {
         seed(RequirementStatus.IN_PROGRESS);
         var auth = question(BuildDecisions.AUTH_KEY); auth.setSelectedOption(null); questions.saveAndFlush(auth);
@@ -115,9 +151,31 @@ class RequirementCoordinationIT {
         var session = sessions.saveAndFlush(RequirementSession.builder().projectId(project).sourcePrompt("fixture").answerRevision(2).build());
         expired(session, "QUESTIONS", UUID.randomUUID());
         var recovered = service.start(7L, project);
-        assertFalse(recovered.processing()); assertFalse(recovered.complete()); assertEquals(0, model.calls.get());
-        assertTrue(recovered.questions().stream().anyMatch(q -> q.key().equals(BuildDecisions.STORAGE_KEY)));
+        assertFalse(recovered.processing()); assertTrue(recovered.complete()); assertEquals(0, model.calls.get());
+        assertEquals(RequirementStatus.APPROVAL_REQUIRED, recovered.status());
+        assertEquals("MERN", question(BuildDecisions.STORAGE_KEY).getSelectedOption());
+        assertEquals("NONE", question(BuildDecisions.AUTH_KEY).getSelectedOption());
+        assertNull(recovered.review(), "Fallback must not invent a detailed product plan");
         assertEquals(1, jdbc.queryForObject("select count(*) from requirement_llm_work where session_id=?", Integer.class, session.getId()));
+    }
+
+    @Test void expiredQuestionGenerationWithoutABackendNeverDowngradesTheSavedRecordRequest() {
+        var properties = context.getBean(AgentProperties.class);
+        boolean original = properties.getSandbox().isMernEnabled();
+        try {
+            properties.getSandbox().setMernEnabled(false);
+            var session = sessions.saveAndFlush(RequirementSession.builder().projectId(project).sourcePrompt("fixture").answerRevision(2).build());
+            expired(session, "QUESTIONS", UUID.randomUUID());
+            var recovered = service.start(7L, project);
+            assertFalse(recovered.processing());
+            assertFalse(recovered.complete());
+            assertEquals(RequirementStatus.IN_PROGRESS, recovered.status());
+            assertNull(question(BuildDecisions.STORAGE_KEY).getSelectedOption());
+            assertEquals(0, model.calls.get());
+            assertEquals(1, jdbc.queryForObject("select count(*) from requirement_llm_work where session_id=?", Integer.class, session.getId()));
+        } finally {
+            properties.getSandbox().setMernEnabled(original);
+        }
     }
 
     @Test void staleAnswerAndApprovalRevisionsAreRejectedBeforeAnyWriteOrDispatch() {
@@ -234,7 +292,7 @@ class RequirementCoordinationIT {
         assertEquals(1, model.calls.get(), "questions and spec come from one call");
     }
 
-    @Test void aChangedAnswerLeavesTheStaleDraftSpecOutOfTheApproval() {
+    @Test void aChangedAnswerRetainsRequestedScopeWithoutApprovingStaleChecks() {
         model.answer("{\"questions\":[{\"key\":\"purpose\",\"prompt\":\"Who?\",\"required\":true,\"recommended\":\"me\",\"options\":["
                 + "{\"id\":\"me\",\"label\":\"Me\"},{\"id\":\"team\",\"label\":\"Team\"},{\"id\":\"other\",\"label\":\"Other\"}]}],"
                 + "\"spec\":" + TASKS + "}");
@@ -242,7 +300,11 @@ class RequirementCoordinationIT {
         var answered = service.answer(7L, project, question("purpose").getId(), new RequirementDtos.AnswerRequest("team", null, started.revision()));
         assertEquals(RequirementStatus.APPROVAL_REQUIRED, answered.status());
         service.approve(7L, project, answered.revision());
-        assertNull(approvedSpecJson());
+        var draft = context.getBean(ObjectMapper.class).readTree(approvedSpecJson());
+        assertTrue(draft.path("answersChanged").asBoolean());
+        assertTrue(draft.path("acceptance").isEmpty());
+        assertEquals("tasks", draft.path("requestedScope").path("features").get(0).path("id").asString());
+        assertTrue(draft.path("answerOverrides").toString().contains("Team"));
         assertEquals(1, model.calls.get());
     }
 
@@ -287,7 +349,7 @@ class RequirementCoordinationIT {
     @Configuration
     @Import({RequirementServiceImpl.class, BuildDecisions.class, RequirementCoordinator.class, RequirementProjection.class,
             ProjectLeaseService.class, ProjectMutationLocks.class, FencedProjectFiles.class, ProjectArtifactService.class,
-            MessageServiceImpl.class, ConversationProposals.class, AgentRunCreator.class, AgentDispatchService.class, AgentTriggerListener.class, AgentDispatchPoller.class})
+            MessageServiceImpl.class, BuildRequestIntake.class, ConversationProposals.class, AgentRunCreator.class, AgentDispatchService.class, AgentTriggerListener.class, AgentDispatchPoller.class})
     static class Services {
         @Bean AgentProperties props(org.springframework.core.env.Environment env) {
             var p = new AgentProperties(); p.setWorkspaceBasePath(env.getRequiredProperty("app.agent.workspace-base-path"));

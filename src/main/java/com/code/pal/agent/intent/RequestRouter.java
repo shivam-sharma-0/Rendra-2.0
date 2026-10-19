@@ -40,7 +40,7 @@ public final class RequestRouter {
             "\\b(?:but|lekin)\\s+(?:please\\s+)?" + ACTION.pattern());
     private static final Pattern IMPERATIVE_CLAUSE = Pattern.compile(
             "(?:\\b(?:and|then|aur|phir|but|lekin)\\s+(?:(?:then|phir)\\s+)?|[,;.!?]\\s*)"
-                    + "(?:(?:please|now)\\s+)*" + ACTION.pattern()
+                    + "(?:(?:please|now)\\s+)*(?:(?:can|could|would|will) (?:you|u) )?" + ACTION.pattern()
                     + "(?!\\s+(?:is|are|looks|seems|was|works|failed|failure|great|slow)\\b)");
     private static final Pattern DIRECT_CHANGE = Pattern.compile(
             "^(?:(?:ok(?:ay)?|yes|sure|alright|haan|han)[,!.]? )?"
@@ -203,9 +203,9 @@ public final class RequestRouter {
     /** Capability sizing excludes explicitly unwanted services without changing request authority. */
     public static String positiveSignals(String text) {
         String value = normalize(text);
-        String data = "(?:database|backend|back-end|auth|authentication|login|signup|accounts|server|api|payments?|cloud|supabase|mongodb|crud)";
+        String data = "(?:database|backend|back-end|auth|authentication|login|signup|accounts|server|api|payments?|cloud|supabase|mongodb|crud|frameworks?|external services?)";
         value = value.replaceAll("\\b(?:without|no|not|don't need|do not need|bina)\\s+(?:a |any |the )?"
-                + data + "(?:\\s*(?:,|or|and|aur)\\s*" + data + ")*", " ");
+                + data + "(?:\\s*(?:,\\s*(?:(?:or|and|aur)\\s+)?|(?:or|and|aur)\\s+)" + data + ")*", " ");
         value = value.replaceAll("\\b" + data + "\\s+(?:nahi chahiye|nahi chaiye|nahi|mat chahiye)\\b", " ");
         return value.replace("ek page", "single page").replace("chhota", "small").replace("chota", "small");
     }

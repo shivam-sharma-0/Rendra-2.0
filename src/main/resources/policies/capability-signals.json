@@ -1,0 +1,11 @@
+{
+  "accounts": "\\b(?:sign ?in|sign ?up|log ?in|logins?|accounts?|multi-?user|each user|per user|user roles?|admin panel)\\b",
+  "noAccounts": "\\b(?:without|no|bina)\\s+(?:a |any )?(?:sign ?in|sign ?up|log ?in|logins?|accounts?)\\b|\\b(?:sign ?in|log ?in|login|accounts?)\\s+(?:nahi|mat|not needed|isn't needed|is not needed)\\b",
+  "server": "\\b(?:supabase|cloud|database|backend|server|online sync|sync across devices|across devices|every device)\\b",
+  "shared": "\\b(?:shared\\s+(?:notes?|lists?|boards?|tasks?|data|docs?|documents?|files?|calendars?|expenses?|todos?)|collaborat\\w*|real-?time|share (?:it |them )?with|crm|customer relationship|sales pipeline|checkout|marketplace|appointments?|bookings?|reserve slots?|online store|e-?commerce)\\b",
+  "persistent": "\\b(?:save[sd]?|remember\\w*|persist\\w*|stored?|history|to-?dos?|notes?|tasks?|tracker|track\\w*|diary|journal|bookmarks?|inventory|crud|records?|entries|expenses?|budget|list of)\\b",
+  "localOnly": "\\b(?:browser[- ]only|localstorage|local storage|this browser|on this device|frontend[- ]only|no backend|without (?:a )?backend|no database|without (?:a )?database)\\b",
+  "staticOnly": "\\bstatic\\s+(?:html|website|site|page)\\b",
+  "supabase": "\\bsupabase\\b",
+  "mern": "\\b(?:mern|mongodb|mongo|express)\\b"
+}
