@@ -3,6 +3,8 @@ Implement exactly this work unit within the immutable approved BuildContract. Re
 Account for every owned code file. Asset destinations are copied by the coordinator; never regenerate assets.
 No tools, commands, secrets, privileges, packages, connector activation or shared/foreign file changes.
 Preserve existing behavior outside this unit. Read dependencies/shared types/theme/API/router interfaces from snapshot.
+For repairs, project.fileTree and project.packageDependencies in repairFeedback are the actual staged paths/packages.
+Resolve relative imports from the importing file to those paths; do not invent shortened coordinator paths.
 Route components export default. MERN router exports exactly the declared Express Router; bootstrap registration is coordinator-owned.
 Coordinator-wired route pages use #/path links and receive {params: Record<string,string>} with decoded named route segments.
 Read params.id for /tasks/:id; use encodeURIComponent when building API paths. Preserve an existing custom router on edits.

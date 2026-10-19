@@ -8,6 +8,7 @@ import com.code.pal.agent.contract.BuildContract;
 import com.code.pal.agent.contract.ContractAcceptanceFailures;
 import com.code.pal.agent.contract.ContractIdentity;
 import com.code.pal.agent.contract.ContractImports;
+import com.code.pal.agent.contract.RepairProjectContext;
 import com.code.pal.agent.contract.ContractStore;
 import com.code.pal.agent.contract.SpecAcceptance;
 import com.code.pal.agent.contract.UnitGenerator;
@@ -115,7 +116,8 @@ public final class StructuredRepair {
         String policy = POLICY + ContractImports.policy(contract) + SpecAcceptance.policy();
         String input = mapper.writeValueAsString(Map.of("batchId", scope.batchId(), "diagnosticsRevision", revision,
                 "diagnostics", report.introducedDiagnostics(), "checks", report.checks(), "files", snapshot, "interfaces", interfaces,
-                "acceptance", acceptance(contract, report, spec)));
+                "acceptance", acceptance(contract, report, spec),
+                "project", RepairProjectContext.capture(files, ctx, contract, candidates, mapper)));
         if ((input + policy).getBytes(StandardCharsets.UTF_8).length > 32_000) {
             throw new IllegalStateException("Attributed repair exceeds its bounded context");
         }

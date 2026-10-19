@@ -27,9 +27,11 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
+import lombok.extern.slf4j.Slf4j;
 
 /** Structured route; one coordinator owns mutation, validation and final save authority. */
 @Service
+@Slf4j
 public final class ContractCoordinator {
     private final ContractStore store;
     private final ContractPlanner planner;
@@ -401,6 +403,8 @@ public final class ContractCoordinator {
     private void repair(AgentContext ctx, AgentRun run, BuildContract c, List<BuildContract.Unit> units, String request,
             String req, Set<String> shared, ValidationReport report,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, Runnable beforeIo, Consumer<String> activity, SpecPlanning planning) {
+        beforeIo.run();
+        if (fixRelativeImports(ctx, c, units, report)) return;
         if (c.schemaVersion() == 2) {
             int beforeFix = changes.view(ctx).revision();
             if (deterministicFixes != null && deterministicFixes.tryFix(ctx, run, c, report)) {
@@ -420,7 +424,8 @@ public final class ContractCoordinator {
             throw new WorkflowStageException("Repair limit reached");
         var output = new ArrayList<UnitGenerator.Delta>();
         String feedback = mapper
-                .writeValueAsString(Map.of("diagnostics", report.introducedDiagnostics(), "checks", report.checks()));
+                .writeValueAsString(Map.of("diagnostics", report.introducedDiagnostics(), "checks", report.checks(),
+                        "project", RepairProjectContext.capture(files, ctx, c, units, mapper)));
         var repairInputs = units.stream().map(unit -> input(ctx, c, unit, request, req, shared, feedback)).toList();
         var batching = new BatchUnitGenerator(mapper);
         if (props.isBatchGeneration() && !props.isParallelUnits() && batching.eligible(repairInputs)) {
@@ -449,6 +454,33 @@ public final class ContractCoordinator {
         try (var scope = UnitWriteScope.wave(ctx, c, units)) {
             merge(ctx, output);
         }
+    }
+
+    boolean fixRelativeImports(AgentContext ctx, BuildContract contract, List<BuildContract.Unit> units, ValidationReport report) {
+        if (report.introducedDiagnostics().stream().noneMatch(diagnostic -> "TS2307".equals(diagnostic.code()))) return false;
+        var existing = RepairProjectContext.existing(files, ctx);
+        var output = new ArrayList<UnitGenerator.Delta>();
+        for (var unit : units) {
+            var readable = new HashSet<>(ContractImports.availablePaths(contract, unit));
+            contract.units().stream().filter(dependency -> unit.dependsOn().contains(dependency.id()))
+                    .forEach(dependency -> readable.addAll(dependency.ownedPaths()));
+            existing.stream().filter(path -> path.startsWith(contract.clientRoot()) || path.startsWith(contract.serverRoot()))
+                    .forEach(readable::add);
+            readable.retainAll(existing);
+            for (String path : unit.ownedPaths()) {
+                if (!existing.contains(path) || !path.matches(".+\\.[cm]?[jt]sx?")) continue;
+                String version = files.version(ctx.projectId(), ctx.root(), path);
+                String source = bounded(ctx, path);
+                String fixed = RelativeImports.fix(path, source, readable, report.introducedDiagnostics());
+                if (!fixed.equals(source)) output.add(new UnitGenerator.Delta(path, version, fixed));
+            }
+        }
+        if (output.isEmpty()) return false;
+        if (report.changeSetRevision() != changes.view(ctx).revision())
+            throw new WorkflowStageException("Relative import diagnostics are stale");
+        try (var scope = UnitWriteScope.wave(ctx, contract, units)) { merge(ctx, output); }
+        output.forEach(delta -> log.info("relative_import_fixed runId={} file={} reason=unique_existing_module", ctx.runId(), delta.path()));
+        return true;
     }
 
     static List<BuildContract.Unit> affected(BuildContract c, ValidationReport report) {

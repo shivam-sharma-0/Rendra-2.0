@@ -16,7 +16,7 @@ public final class ContractImports {
     private static final List<String> EXTENSIONS = List.of("", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".css", ".json",
             "/index.ts", "/index.tsx", "/index.js", "/index.jsx");
 
-    private record Token(String value, boolean literal) {
+    private record Token(String value, boolean literal, int start, int end) {
     }
 
     private ContractImports() {
@@ -160,6 +160,33 @@ public final class ContractImports {
         return paths;
     }
 
+    /** Rewrite static module literals only, never comments, quoted examples or computed imports. */
+    static String rewriteModule(String source, String module, String replacement) {
+        var tokens = tokens(source);
+        var out = new StringBuilder(source);
+        for (int index = tokens.size() - 1; index > 0; index--) {
+            var token = tokens.get(index);
+            if (!token.literal() || !token.value().equals(module) || source.charAt(token.start() - 1) == '`') continue;
+            var previous = tokens.get(index - 1);
+            if (previous.literal()) continue;
+            boolean imported = previous.value().equals("import")
+                    || previous.value().equals("(") && index > 1 && !tokens.get(index - 2).literal()
+                    && Set.of("import", "require").contains(tokens.get(index - 2).value());
+            if (previous.value().equals("from")) {
+                for (int before = index - 2; before >= 0; before--) {
+                    var candidate = tokens.get(before);
+                    if (!candidate.literal() && candidate.value().equals(";")) break;
+                    if (!candidate.literal() && Set.of("import", "export").contains(candidate.value())) {
+                        imported = true;
+                        break;
+                    }
+                }
+            }
+            if (imported) out.replace(token.start(), token.end(), replacement);
+        }
+        return out.toString();
+    }
+
     private static List<Token> tokens(String source) {
         var result = new ArrayList<Token>();
         for (int index = 0; index < source.length();) {
@@ -177,16 +204,16 @@ public final class ContractImports {
                 while (index < source.length() && source.charAt(index) != current) {
                     index += source.charAt(index) == '\\' ? 2 : 1;
                 }
-                result.add(new Token(source.substring(start, Math.min(index, source.length())), true));
+                result.add(new Token(source.substring(start, Math.min(index, source.length())), true, start, Math.min(index, source.length())));
                 index++;
             } else if (Character.isJavaIdentifierStart(current)) {
                 int start = index++;
                 while (index < source.length() && Character.isJavaIdentifierPart(source.charAt(index))) {
                     index++;
                 }
-                result.add(new Token(source.substring(start, index), false));
+                result.add(new Token(source.substring(start, index), false, start, index));
             } else {
-                result.add(new Token(String.valueOf(current), false));
+                result.add(new Token(String.valueOf(current), false, index, index + 1));
                 index++;
             }
         }
