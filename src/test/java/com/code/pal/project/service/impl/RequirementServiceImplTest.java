@@ -40,6 +40,21 @@ import static org.mockito.Mockito.when;
 
 /** Model calls take up to 30 s, so they must never run while a transaction holds a pooled DB connection. */
 class RequirementServiceImplTest {
+    @Test void requirementsRetainTheirOwnPrimaryAndFallbackWhenContractOrderChanges() {
+        properties.getProviders().put("mistral", new AgentProperties.Provider());
+        properties.getModels().setPlan(List.of("mistral:contract", "openrouter:interview", "nvidia:contract-fallback"));
+        properties.getRequirements().setModels(List.of("openrouter:interview", "mistral:contract"));
+        properties.getPlanning().setMaxRouteAttempts(3);
+        modelReply = () -> {
+            if (modelCalls.get() == 1) throw new com.code.pal.agent.llm.LlmStreamException(
+                    com.code.pal.agent.llm.LlmStreamException.Reason.PROVIDER_ERROR, 503, null);
+            return "{\"questions\":[],\"spec\":" + COFFEE + "}";
+        };
+        service.start(7L, projectId);
+        assertEquals(List.of("interview", "contract"), calledModels);
+        assertEquals(90_000, properties.getRequirements().getTimeoutMs());
+    }
+
     @Test
     void unavailablePrimaryPlannerUsesOnlyTheConfiguredPlanFallbackOutsideTransactions() {
         var decisions = mock(BuildDecisions.class);

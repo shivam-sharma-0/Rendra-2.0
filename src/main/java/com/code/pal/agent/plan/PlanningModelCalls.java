@@ -49,7 +49,8 @@ public final class PlanningModelCalls {
             throw new IllegalArgumentException("Planning requires a positive shared time budget");
         }
         var primary = new ModelSelection(request.provider(), request.model());
-        var configured = properties.planningRoutes();
+        var configured = LlmCallContext.current().purpose() == CallPurpose.REQUIREMENTS
+                ? properties.requirementsRoutes() : properties.planningRoutes();
         var routes = new ArrayList<ModelSelection>();
         if (!configured.contains(primary) || properties.available(primary)) routes.add(primary);
         if (configured.contains(primary)) configured.stream().filter(route -> !route.equals(primary))

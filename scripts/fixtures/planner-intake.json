@@ -1,8 +1,10 @@
 {
   "routes": [
+    {"provider": "mistral", "model": "codestral-latest"},
     {"provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free"},
-    {"provider": "mistral", "model": "codestral-latest"}
+    {"provider": "nvidia", "model": "nvidia/nemotron-3-super-120b-a12b"}
   ],
+  "requirementsRoutes": ["openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "mistral:codestral-latest"],
   "name": "Complete personal task application",
   "fullStackPrompt": "Build a complete, polished personal Todo application with private user accounts. Include sign-up, sign-in and sign-out, a task dashboard at /, task details/edit at /tasks/:id, and settings at /settings with working navigation. Users can create, view, edit, complete and delete their own tasks, search and filter them, and keep saved data after refresh and server restart. Include all required frontend pages, backend APIs, persistent database behavior and account ownership. Make the design cohesive, responsive and accessible, with helpful loading, empty, validation, error and success states. Choose sensible implementation defaults without generic use-case or technology questions. Build the real application rather than a demo or static mockup; prepare it for eventual one-click publishing without claiming deployment is already supported.",
   "prompt": "Build a complete, polished Todo application for personal task management. Include all appropriate UI pages, navigation, task create/edit/complete/delete, search/filtering, durable saved tasks and helpful loading, empty, validation and error states. Make it responsive and accessible, with the complete application structure needed for eventual publishing. Choose sensible implementation defaults without asking generic use-case or technology questions."

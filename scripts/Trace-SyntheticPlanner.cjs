@@ -55,7 +55,9 @@ async function main() {
         ['/api/v1/chat/completions', { provider: 'openrouter', model: manifest.routes.find(route => route.provider === 'openrouter')?.model,
             url: 'https://openrouter.ai/api/v1/chat/completions' }],
         ['/mistral/v1/chat/completions', { provider: 'mistral', model: manifest.routes.find(route => route.provider === 'mistral')?.model,
-            url: 'https://api.mistral.ai/v1/chat/completions' }]
+            url: 'https://api.mistral.ai/v1/chat/completions' }],
+        ['/nvidia/v1/chat/completions', { provider: 'nvidia', model: manifest.routes.find(route => route.provider === 'nvidia')?.model,
+            url: 'https://integrate.api.nvidia.com/v1/chat/completions' }]
     ]);
     let sequence = 0;
     const server = http.createServer(async (request, response) => {

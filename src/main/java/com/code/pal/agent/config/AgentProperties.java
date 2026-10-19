@@ -112,6 +112,8 @@ public class AgentProperties implements EnvironmentAware {
     @Getter
     @Setter
     public static class Requirements {
+        /** Explicit interview routes; an empty list retains the legacy PLAN selection for embedders. */
+        private List<String> models = new ArrayList<>();
         private long timeoutMs = 90_000;
         private int maxOutputTokens = 6_000;
     }
@@ -687,6 +689,19 @@ public class AgentProperties implements EnvironmentAware {
         if (configured == null) return List.of();
         return configured.stream().filter(entry -> entry != null && !entry.isBlank())
                 .map(this::selection).distinct().toList();
+    }
+
+    public List<ModelSelection> requirementsRoutes() {
+        var configured = requirements.getModels();
+        if (configured == null || configured.isEmpty()) return planningRoutes();
+        return configured.stream().filter(entry -> entry != null && !entry.isBlank())
+                .map(this::selection).distinct().toList();
+    }
+
+    public ModelSelection preferredRequirementsModel() {
+        var routes = requirementsRoutes();
+        return routes.stream().filter(this::available).findFirst()
+                .orElseGet(() -> routes.isEmpty() ? preferredModel(ProjectType.PLAN) : routes.getFirst());
     }
 
     /** A run never reselects a route whose bounded provider attempt already failed. */

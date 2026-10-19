@@ -26,6 +26,21 @@ class PlanningModelCallsTest {
         properties.getModels().setBuild(List.of("openrouter:coding-only"));
     }
 
+    @Test void threeExplicitContractRoutesAreTriedOnceEachInPriorityOrder() {
+        properties.getProviders().put("mistral", new AgentProperties.Provider());
+        properties.getModels().setPlan(List.of("mistral:codestral", "openrouter:ultra", "nvidia:super"));
+        properties.getPlanning().setMaxRouteAttempts(3);
+        var calls = new ArrayList<String>();
+        var primary = new LlmClient.LlmRequest("mistral", "codestral", request.messages(), List.of(), 0,
+                Duration.ofMinutes(5));
+        assertSame(result, new PlanningModelCalls(properties).execute(primary, routed -> {
+            calls.add(routed.model());
+            if (calls.size() < 3) throw new LlmHttpException(503, "unavailable");
+            return result;
+        }, () -> {}));
+        assertEquals(List.of("codestral", "ultra", "super"), calls);
+    }
+
     @Test void sse503UsesOneExplicitPlanningFallbackWithoutReturningPartialOutput() {
         var calls = new ArrayList<LlmClient.LlmRequest>();
         var failure = new LlmStreamException(LlmStreamException.Reason.PROVIDER_ERROR, 503, null);

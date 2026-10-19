@@ -473,8 +473,8 @@ public class RequirementServiceImpl implements RequirementService {
      */
     private Drafted generate(ProjectBrief project) {
         try {
-            // Requirements and architecture follow the deployment's configured planning route.
-            AgentProperties.ModelSelection selection = properties.preferredModel(ProjectType.PLAN);
+            // Interview routing is explicit so a contract-planner model change does not change requirements.
+            AgentProperties.ModelSelection selection = properties.preferredRequirementsModel();
             String prompt = PromptLoader.load(Prompt.REQUIREMENTS).replace("{{request}}", project.initialPrompt())
                     + attachmentNote(project.attachments());
             String system = PromptLoader.load(Prompt.REQUIREMENTS_SYSTEM)

@@ -184,7 +184,10 @@ END $codex$;
         # Fixed known destinations and FREE routes; no environment override may select a paid/other provider.
         $planningFixture = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/planner-intake.json') -Raw | ConvertFrom-Json
         $planningRouteOrder = @($planningFixture.routes | ForEach-Object { "$($_.provider):$($_.model)" })
-        if ($planningRouteOrder.Count -ne 2 -or ($planningRouteOrder | Where-Object { $_ -notmatch '^(openrouter|nvidia|mistral):[A-Za-z0-9_./:-]+$' })) {
+        $requirementsRouteOrder = @($planningFixture.requirementsRoutes)
+        if ($planningRouteOrder.Count -ne 3 -or $requirementsRouteOrder.Count -ne 2 `
+                -or ($planningRouteOrder | Where-Object { $_ -notmatch '^(openrouter|nvidia|mistral):[A-Za-z0-9_./:-]+$' }) `
+                -or ($requirementsRouteOrder | Where-Object { $_ -notin $planningRouteOrder })) {
             throw 'Unexpected synthetic planning route manifest'
         }
         $appArgs += @('--app.agent.providers.mistral.base-url=https://api.mistral.ai/v1',
@@ -192,6 +195,8 @@ END $codex$;
             '--app.agent.providers.openrouter.base-url=https://openrouter.ai/api',
             '--app.agent.models.free-chat=mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b',
             ('--app.agent.models.free-plan=' + ($planningRouteOrder -join ',')),
+            ('--app.agent.requirements.models=' + ($requirementsRouteOrder -join ',')),
+            '--app.agent.planning.max-route-attempts=3',
             '--app.agent.models.free-build=mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b',
             '--app.agent.models.vision=nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia:meta/llama-3.2-11b-vision-instruct')
     }
@@ -209,10 +214,12 @@ END $codex$;
         if (-not (Test-Path -LiteralPath $traceReady)) { throw 'Synthetic planner trace readiness timeout' }
         $tracePort = (Get-Content -LiteralPath $traceReady -Raw | ConvertFrom-Json).port
         if ($tracePort -notmatch '^\d+$' -or [int]$tracePort -lt 1024 -or [int]$tracePort -gt 65535) { throw 'Invalid synthetic trace port' }
-        $appArgs = @($appArgs | Where-Object { $_ -notlike '--app.agent.providers.openrouter.base-url=*' -and $_ -notlike '--app.agent.providers.mistral.base-url=*' })
+        $appArgs = @($appArgs | Where-Object { $_ -notlike '--app.agent.providers.openrouter.base-url=*' `
+                -and $_ -notlike '--app.agent.providers.mistral.base-url=*' -and $_ -notlike '--app.agent.providers.nvidia.base-url=*' })
         $appArgs += "--app.agent.providers.openrouter.base-url=http://127.0.0.1:$tracePort/api"
         $appArgs += "--app.agent.providers.mistral.base-url=http://127.0.0.1:$tracePort/mistral"
-        $evidence.syntheticProposalTrace = 'response content/tool arguments only; fixed OpenRouter/Mistral upstreams; no requests, headers or reasoning'
+        $appArgs += "--app.agent.providers.nvidia.base-url=http://127.0.0.1:$tracePort/nvidia"
+        $evidence.syntheticProposalTrace = 'response content/tool arguments only; fixed OpenRouter/Mistral/NVIDIA upstreams; no requests, headers or reasoning'
     }
     if($Scenario -eq 'mern'){$appArgs+=@("--app.agent.sandbox.apps-network=$taskId-apps","--app.agent.sandbox.apps-database-container=$taskId-mongo","--app.agent.sandbox.apps-database-volume=$taskId-mongo-data","--app.agent.sandbox.gateway-container=$taskId-gateway","--app.agent.sandbox.gateway-port=$gatewayPort","--app.agent.sandbox.apps-database-port=$mongoPort",'--app.agent.sandbox.apps-database-password=disposable-test-only')}
     # Start-Process string parsing needs quoted arguments; reject quotes before composing its command line.
