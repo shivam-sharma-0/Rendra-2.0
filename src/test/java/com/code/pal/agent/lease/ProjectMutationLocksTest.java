@@ -2,9 +2,11 @@ package com.code.pal.agent.lease;
 
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.workspace.WorkspaceStorage;
+import com.code.pal.testsupport.IsolatedTestJvm;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import java.nio.channels.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -33,15 +35,21 @@ class ProjectMutationLocksTest {
     @Test void aSeparateJvmCannotTakeTheFilesystemLockUntilItsOwnerReleases() throws Exception {
         var p=new AgentProperties();p.setWorkspaceBasePath(directory.toString());var storage=new WorkspaceStorage(p);
         var locks=new ProjectMutationLocks(storage);var project=UUID.randomUUID();
-        String java=Path.of(System.getProperty("java.home"),"bin","java").toString();
         String classpath=System.getProperty("surefire.test.class.path",System.getProperty("java.class.path"));
         Path lock=directory.resolve(".project-mutation-locks").resolve(project+".lock");
-        try(var held=locks.acquire(project)) {assertEquals(2,probe(java,classpath,lock));}
-        assertEquals(0,probe(java,classpath,lock));assertTrue(Files.isRegularFile(lock),"the lock inode must remain stable");
+        try(var held=locks.acquire(project)) {assertEquals(2,probe(classpath,lock));}
+        assertEquals(0,probe(classpath,lock));assertTrue(Files.isRegularFile(lock),"the lock inode must remain stable");
     }
-    private int probe(String java,String classpath,Path file) throws Exception {
-        var process=new ProcessBuilder(java,"-cp",classpath,Probe.class.getName(),file.toString()).redirectErrorStream(true).start();
-        try {assertTrue(process.waitFor(5,TimeUnit.SECONDS));return process.exitValue();}
+    private int probe(String classpath,Path file) throws Exception {
+        var process=IsolatedTestJvm.command("-cp",classpath,Probe.class.getName(),file.toString()).start();
+        try {
+            assertTrue(process.waitFor(5,TimeUnit.SECONDS),"lock probe did not finish");
+            int exit=process.exitValue();
+            if(exit!=0 && exit!=2)
+                fail("lock probe JVM failed (exit "+exit+"): "
+                        +new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8));
+            return exit;
+        }
         finally {if(process.isAlive()) process.destroyForcibly();}
     }
     public static class Probe {
