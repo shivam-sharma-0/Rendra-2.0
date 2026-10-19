@@ -262,7 +262,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                     ? watchdog.fired() : "network error: " + e.getMessage();
             // A reconnect after visible output would duplicate text and can produce a different tool call.
             // The client may retry only a request that failed before its first published delta.
-            if (published.get()) throw new LlmException("LLM stream interrupted after partial output (" + reason + ")", e);
+            if (published.get()) throw new LlmStreamException(reason, e);
             throw new RetryableLlmException(reason, 0, e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

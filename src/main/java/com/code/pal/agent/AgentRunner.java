@@ -711,7 +711,9 @@ public class AgentRunner implements AgentRuntime {
             Function<LlmRequest, LlmResult> attempt) {
         var purpose = LlmCallContext.current().purpose();
         if (purpose == CallPurpose.PLANNER || purpose == CallPurpose.SCHEMA_CORRECTION) {
-            return new PlanningModelCalls(props).execute(request, callBudget(deadline), attempt, () -> {
+            // The route timeout bounds each physical call; failover shares only the overall run deadline.
+            return new PlanningModelCalls(props).execute(request,
+                    Duration.ofNanos(Math.max(0, deadline - System.nanoTime())), attempt, () -> {
                 requireNotCancelled(run);
                 requireBeforeDeadline(deadline);
             });

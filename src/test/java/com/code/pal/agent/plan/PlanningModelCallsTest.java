@@ -68,6 +68,28 @@ class PlanningModelCallsTest {
         }, () -> {});
     }
 
+    @Test void partialPrimaryTimeoutGivesCodestralItsOwnSliceWithinTheRunDeadline() {
+        properties.getProviders().put("mistral", new AgentProperties.Provider());
+        properties.getModels().setPlan(List.of("openrouter:primary", "mistral:codestral"));
+        var time = new AtomicLong();
+        var calls = new ArrayList<LlmClient.LlmRequest>();
+        var contract = new LlmClient.LlmRequest(request.provider(), request.model(), request.messages(), List.of(),
+                0, Duration.ofMinutes(15)).withMaxTokens(2000);
+        assertSame(result, new PlanningModelCalls(properties, time::get).execute(contract,
+                Duration.ofSeconds(250), routed -> {
+                    calls.add(routed);
+                    if (calls.size() == 1) {
+                        time.addAndGet(routed.budget().toNanos());
+                        throw new LlmStreamException(LlmStreamException.Reason.INTERRUPTED_STREAM, null, null);
+                    }
+                    return result;
+                }, () -> {}));
+        assertEquals(List.of("primary", "codestral"), calls.stream().map(LlmClient.LlmRequest::model).toList());
+        assertEquals(List.of(Duration.ofSeconds(90), Duration.ofSeconds(90)),
+                calls.stream().map(LlmClient.LlmRequest::budget).toList());
+        assertTrue(time.get() + calls.getLast().budget().toNanos() <= Duration.ofSeconds(250).toNanos());
+    }
+
     @Test void schemaIsNeverForwardedToAnUnsupportedFallbackProvider() {
         properties.getProviders().put("mistral", new AgentProperties.Provider());
         properties.getModels().setPlan(List.of("mistral:primary", "openrouter:secondary"));

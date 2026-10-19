@@ -85,9 +85,10 @@ class OpenAiCompatibleLlmClientBudgetTest {
         OpenAiCompatibleLlmClient client = client(List.of("key-a"), 3, 1, 300);
         StringBuilder seen = new StringBuilder();
 
-        LlmException failure = assertThrows(LlmException.class, () -> client.chatStreaming(request(null), seen::append));
+        LlmStreamException failure = assertThrows(LlmStreamException.class, () -> client.chatStreaming(request(null), seen::append));
 
-        assertFalse(failure instanceof RetryableLlmException);
+        assertEquals(LlmStreamException.Reason.INTERRUPTED_STREAM, failure.reason());
+        assertEquals(null, failure.usage());
         assertTrue(failure.getMessage().contains("after partial output"), failure.getMessage());
         assertTrue(failure.getMessage().contains("stream stalled"), failure.getMessage());
         assertEquals("partial", seen.toString());

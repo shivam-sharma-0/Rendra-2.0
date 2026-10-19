@@ -94,7 +94,8 @@ public final class PlanningModelCalls {
                 || failure instanceof LlmAccountingException) return false;
         if (failure instanceof LlmStreamException stream) {
             Integer code = stream.providerCode();
-            return stream.reason() == LlmStreamException.Reason.PROVIDER_ERROR && code != null
+            return stream.reason() == LlmStreamException.Reason.INTERRUPTED_STREAM
+                    || stream.reason() == LlmStreamException.Reason.PROVIDER_ERROR && code != null
                     && (code >= 500 || code == 429 || code == 403 || code == 404 || code == 410);
         }
         if (failure instanceof LlmHttpException http) {

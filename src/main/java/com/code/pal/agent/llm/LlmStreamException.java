@@ -2,7 +2,7 @@ package com.code.pal.agent.llm;
 
 /** Failed HTTP-200 stream; its error code is not evidence that the attempt was unbilled. */
 public final class LlmStreamException extends LlmException {
-    public enum Reason { PROVIDER_ERROR, EMPTY_STREAM, UNEXPECTED_CONTENT_TYPE }
+    public enum Reason { PROVIDER_ERROR, EMPTY_STREAM, UNEXPECTED_CONTENT_TYPE, INTERRUPTED_STREAM }
 
     private final Reason reason;
     private final Integer providerCode;
@@ -13,6 +13,13 @@ public final class LlmStreamException extends LlmException {
         this.reason = reason;
         this.providerCode = providerCode;
         this.usage = usage;
+    }
+
+    LlmStreamException(String detail, Throwable cause) {
+        super("LLM stream interrupted after partial output (" + detail + ")", cause);
+        this.reason = Reason.INTERRUPTED_STREAM;
+        this.providerCode = null;
+        this.usage = null;
     }
 
     public Reason reason() { return reason; }

@@ -80,6 +80,30 @@ class MeteredLlmClientTest {
         assertEquals("FAILED", saved.get(1).outcome());
         verify(policy, never()).releaseUnsent(any());
     }
+
+    @Test void partialStreamFailoverKeepsTheUnknownAttemptAndAccountsForTheFallbackSeparately() {
+        props.getProviders().put("fake", new AgentProperties.Provider());
+        props.getModels().setPlan(List.of("fake:model", "fake:fallback"));
+        props.getAccountingBounds().put("fake:fallback", props.getAccountingBounds().get("fake:model"));
+        var metered = new MeteredLlmClient((routed, delta) -> {
+            if (providerCalls.incrementAndGet() == 1)
+                throw new LlmStreamException(LlmStreamException.Reason.INTERRUPTED_STREAM, null, null);
+            return ok;
+        }, policy, props);
+        try (var ignored = LlmCallContext.bind(owner)) {
+            assertSame(ok, new com.code.pal.agent.plan.PlanningModelCalls(props).execute(
+                    new LlmClient.LlmRequest("fake", "model", request.messages(), List.of(), 0,
+                            java.time.Duration.ofMinutes(3)).withMaxTokens(100), metered::chat, () -> {}));
+        }
+        assertEquals(2, saved.size());
+        assertNull(saved.getFirst().report());
+        assertEquals("FAILED", saved.getFirst().outcome());
+        assertEquals("STREAM INTERRUPTED_STREAM", saved.getFirst().error());
+        assertEquals(ok.usage(), saved.getLast().report());
+        assertNotEquals(saved.getFirst().id(), saved.getLast().id());
+        verify(policy, times(2)).reserve(any(), any(), anyLong(), any(), any());
+        verify(policy, never()).releaseUnsent(any());
+    }
     @Test void brokenLedgerFailsTheCallAndRetainsItsBound() {
         doThrow(new IllegalStateException("Scripted DB failure")).when(policy).finishAttempt(any(),any(),anyString(),nullable(String.class),anyInt());
         try(var ignored=LlmCallContext.bind(owner)) { assertThrows(LlmAccountingException.class,()->client(ok,null).chat(request)); }
