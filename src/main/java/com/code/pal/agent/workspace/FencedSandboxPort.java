@@ -89,6 +89,14 @@ public class FencedSandboxPort implements SandboxPort {
         return result;
     }
 
+    public CommandResult browseWithSupabase(UUID p, String r, String acceptance, ServerEndpoint scratch) {
+        UnitWriteScope.rejectWorkerIo();
+        leases.checkCurrent(p);
+        var result = sandbox.browseWithSupabase(p, r, acceptance, scratch);
+        leases.checkCurrent(p);
+        return result;
+    }
+
     public String commandPath(UUID p, String r) {
         return sandbox.commandPath(p, r);
     }

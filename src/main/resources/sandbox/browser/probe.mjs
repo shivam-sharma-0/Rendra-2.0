@@ -7,7 +7,9 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import {exchange, forwardSupabase, supabaseResponseHeaders} from './relay.mjs';
+import {outcomeDom, runOutcomes} from './outcomes.mjs';
 
 const siteDir = path.resolve(process.argv[2] ?? "/site");
 const settleMs = Number(process.argv[3] ?? 1500);
@@ -15,7 +17,12 @@ const MAX_ISSUES = 20;
 const relayDir = process.argv[5] ? path.resolve(process.argv[5]) : null;
 const API_BYTES = 1024 * 1024;
 let apiCalls = 0, activeApiCalls = 0;
-const acceptanceActions = process.argv[4] ? JSON.parse(Buffer.from(process.argv[4], 'base64').toString('utf8')).actions : [];
+const acceptanceData = process.argv[4] ? JSON.parse(Buffer.from(process.argv[4], 'base64').toString('utf8')) : {actions:[]};
+const acceptanceActions = acceptanceData.actions;
+const outcomeDefinitions = acceptanceData.outcomes || [];
+const evidenceDir = process.env.CODEPAL_BROWSER_EVIDENCE_DIR || null;
+const supabaseOrigin = process.env.CODEPAL_SUPABASE_ORIGIN || null;
+const visual = { captures: [], warnings: [] };
 if (!Array.isArray(acceptanceActions) || acceptanceActions.length > 24) throw new Error('Invalid acceptance data');
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css",
   ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -39,13 +46,12 @@ const add = (kind, message, source) => {
   }
 };
 const finish = (extra) => {
-  process.stdout.write(JSON.stringify({ issues, ...extra }) + "\n");
+  process.stdout.write(JSON.stringify({ issues:[...issues, ...visual.warnings.map(message => ({kind:'visual', message, source:null, action:null}))], visual, ...extra }) + "\n");
   process.exit(0);
 };
 
 // Private file relay to one backend-selected candidate. Chromium has no network access.
 async function candidateApi(request, response) {
-  let responseFile;
   if (++apiCalls > 128 || activeApiCalls >= 8) {
     add('api-unavailable', 'Candidate API validation capacity exceeded', null);
     response.writeHead(503, {'Content-Type':'application/json'}).end('{"error":"Validation capacity exceeded"}');return;
@@ -55,16 +61,8 @@ async function candidateApi(request, response) {
     if (!relayDir) throw new Error('Candidate API relay unavailable');
     const chunks = []; let size = 0;
     for await (const chunk of request) { size += chunk.length; if (size > API_BYTES) throw new Error('Request too large'); chunks.push(chunk); }
-    const id = randomUUID().replaceAll('-', '');
-    const requestFile = path.join(relayDir, id + '.request.json');
-    responseFile = path.join(relayDir, id + '.response.json');
-    const temporary = path.join(relayDir, id + '.tmp');
     const headers = Object.fromEntries(['content-type', 'accept', 'authorization'].filter(key => typeof request.headers[key] === 'string').map(key => [key, request.headers[key]]));
-    fs.writeFileSync(temporary, JSON.stringify({method:request.method, path:request.url, headers, body:Buffer.concat(chunks).toString('base64')}), {flag:'wx'});
-    fs.renameSync(temporary, requestFile);
-    const deadline = Date.now() + 12000;
-    while (!fs.existsSync(responseFile)) { if (Date.now() >= deadline) throw new Error('Relay timeout'); await new Promise(resolve => setTimeout(resolve, 15)); }
-    const reply = JSON.parse(fs.readFileSync(responseFile, 'utf8'));
+    const reply = await exchange(relayDir, {method:request.method, path:request.url, headers, body:Buffer.concat(chunks).toString('base64')});
     const body = Buffer.from(reply.body, 'base64');
     if (!Number.isInteger(reply.status) || reply.status < 100 || reply.status > 599 || body.length > API_BYTES) throw new Error('Invalid response');
     if (reply.unavailable) add('api-unavailable', 'Candidate API transport was unavailable', null);
@@ -74,7 +72,7 @@ async function candidateApi(request, response) {
     add('api-unavailable', 'Candidate API validation was unavailable; saved API was not used', null);
     if (!response.headersSent) response.writeHead(503, {'Content-Type':'application/json'});
     response.end(JSON.stringify({error:'Candidate API validation unavailable'}));
-  } finally { activeApiCalls--; if (responseFile && fs.existsSync(responseFile)) fs.unlinkSync(responseFile); }
+  } finally { activeApiCalls--; }
 }
 // SPA fallback applies to pages, never API requests.
 const server = http.createServer((request, response) => {
@@ -126,14 +124,33 @@ const send = (method, params = {}, sessionId) => new Promise((resolve) => {
 
 const { result: { targetId } } = await send("Target.createTarget", { url: "about:blank" });
 const { result: { sessionId } } = await send("Target.attachToTarget", { targetId, flatten: true });
+async function fulfillSupabase(event) {
+  if (++apiCalls > 128 || activeApiCalls >= 8) {
+    add('api-unavailable', 'Isolated Supabase validation capacity exceeded', null);
+    await send('Fetch.failRequest', {requestId:event.requestId, errorReason:'BlockedByClient'}, sessionId);
+    return;
+  }
+  activeApiCalls++;
+  try {
+    const reply = await forwardSupabase(event.request, supabaseOrigin, request => exchange(relayDir, request));
+    if (reply.unavailable) throw Error('Private Supabase transport unavailable');
+    await send('Fetch.fulfillRequest', {requestId:event.requestId, responseCode:reply.status,
+      responseHeaders:supabaseResponseHeaders(reply, siteUrl), body:reply.body}, sessionId);
+  } catch {
+    add('api-unavailable', 'Isolated Supabase browser transport was unavailable; live connection was not used', null);
+    await send('Fetch.failRequest', {requestId:event.requestId, errorReason:'Failed'}, sessionId);
+  } finally { activeApiCalls--; }
+}
 let loaded = false;
 const requestUrls = new Map();
+const requestTypes = new Map();
 // Browsers ask for a favicon on their own; a site without one is not broken.
 const ignored = (url) => /\/favicon\.ico(\?|$)/.test(url ?? "");
 listeners.push((message) => {
   if (message.sessionId !== sessionId) return;
   const p = message.params ?? {};
   switch (message.method) {
+    case 'Fetch.requestPaused': void fulfillSupabase(p); break;
     case "Runtime.exceptionThrown": {
       const d = p.exceptionDetails ?? {};
       const frame = d.stackTrace?.callFrames?.[0];
@@ -151,6 +168,7 @@ listeners.push((message) => {
       break;
     case "Network.requestWillBeSent":
       requestUrls.set(p.requestId, p.request?.url ?? "");
+      requestTypes.set(p.requestId, p.type ?? '');
       break;
     case "Network.responseReceived":
       if (p.response?.status >= 400 && sameOrigin(p.response.url) && !ignored(p.response.url)) {
@@ -159,9 +177,15 @@ listeners.push((message) => {
       break;
     case "Network.loadingFailed": {
       const url = requestUrls.get(p.requestId) ?? "";
+      if (supabaseOrigin && !p.canceled && !sameOrigin(url) && ['Fetch', 'XHR'].includes(requestTypes.get(p.requestId))) {
+        add('api-unavailable', 'A data request did not use the isolated candidate connection', null);
+      }
       if (!p.canceled && sameOrigin(url) && !ignored(url) && !/net::ERR_ABORTED/.test(p.errorText)) add("asset", `${p.errorText} ${url}`, null);
       break;
     }
+    case 'Network.webSocketCreated':
+      if (supabaseOrigin) add('api-unavailable', 'Realtime data validation requires its dedicated adapter', null);
+      break;
     case "Page.loadEventFired":
       loaded = true;
       break;
@@ -171,6 +195,7 @@ listeners.push((message) => {
   }
 });
 for (const domain of ["Runtime.enable", "Log.enable", "Network.enable", "Page.enable"]) await send(domain, {}, sessionId);
+if (supabaseOrigin) await send('Fetch.enable', {patterns:[{urlPattern:supabaseOrigin + '/*', requestStage:'Request'}]}, sessionId);
 // Dialogs and new windows would block or escape the probe; a site using them is not broken for it.
 await send("Page.addScriptToEvaluateOnNewDocument", { source:
   "window.alert = () => {}; window.confirm = () => true; window.prompt = () => ''; window.print = () => {}; window.open = () => null;" }, sessionId);
@@ -189,6 +214,45 @@ const page = evaluation.result?.result?.value ?? {};
 if (!loaded) add("load", "The page did not finish loading", null);
 const blank = (page.textLength ?? 0) === 0 && (page.media ?? 0) === 0;
 if (blank) add("blank", "The page rendered nothing visible", null);
+
+// Evidence is local to this offline probe. Page text and screenshot pixels never become instructions.
+const capture = async (name, width, height, mobile) => {
+  await send('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor:1, mobile}, sessionId);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  if (evidenceDir) {
+    const result = await send('Page.captureScreenshot', {format:'png', captureBeyondViewport:false,
+      clip:{x:0,y:0,width,height,scale:1}}, sessionId);
+    if (typeof result.result?.data === 'string') {
+      const bytes = Buffer.from(result.result.data, 'base64');
+      if (bytes.length > 0 && bytes.length <= 2 * 1024 * 1024) {
+        fs.writeFileSync(path.join(evidenceDir, name + '.png'), bytes, {flag:'wx'});
+        visual.captures.push({name, width, height, bytes:bytes.length, sha256:createHash('sha256').update(bytes).digest('hex')});
+      }
+    }
+  }
+  const audit = await send('Runtime.evaluate', {returnByValue:true, expression:`(() => {
+    const visible = el => { const r=el.getBoundingClientRect(); return r.width>0 && r.height>0 && getComputedStyle(el).visibility!=='hidden'; };
+    const named = el => Boolean((el.getAttribute('aria-label') || '').trim()
+      || (el.getAttribute('aria-labelledby') || '').split(/\\s+/).some(id => document.getElementById(id)?.textContent?.trim())
+      || [...(el.labels || [])].some(label => label.textContent?.trim())
+      || ((el.tagName==='BUTTON' || el.tagName==='A') && (el.textContent?.trim() || el.querySelector('img[alt]:not([alt=""])')))
+      || (el.tagName==='INPUT' && ['submit','button','reset'].includes(el.type) && el.value));
+    return [...document.querySelectorAll('button,input:not([type=hidden]),textarea,select,a[href]')]
+      .filter(el => visible(el) && !named(el)).slice(0,5)
+      .map(el => 'A visible '+el.tagName.toLowerCase()+' needs an accessible name or associated label');
+  })()`}, sessionId);
+  for (const warning of audit.result?.result?.value || []) {
+    const message = String(warning) + ' at ' + width + 'px';
+    if (visual.warnings.length < 10 && !visual.warnings.includes(message)) {
+      visual.warnings.push(message);
+    }
+  }
+};
+if (loaded && !blank) {
+  await capture('desktop', 1440, 900, false);
+  await capture('mobile', 375, 812, true);
+  await send('Emulation.clearDeviceMetricsOverride', {}, sessionId);
+}
 
 // Production baseline: a phone-width (375 px) layout must not scroll sideways. A measurement that cannot be
 // read is reported as such, never taken as "no overflow". Run on load and again on the state acceptance reached.
@@ -247,6 +311,24 @@ const visibleNow = async () => {
   return (check.result?.result?.value ?? 1) > 0;
 };
 const interactions = [];
+async function reloadPage() {
+  loaded = false;
+  await send('Page.reload', {ignoreCache:true}, sessionId);
+  const deadline = Date.now() + 10000;
+  while (!loaded && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+  await new Promise(resolve => setTimeout(resolve, settleMs));
+  return loaded;
+}
+const outcomes = !blank && loaded ? await runOutcomes(outcomeDefinitions, {
+  async evaluate(definition, phase, fixture) {
+    const expression = `(${outcomeDom.toString()})(${JSON.stringify(definition)},${JSON.stringify(phase)},${JSON.stringify(fixture)})`;
+    const result = await send('Runtime.evaluate', {returnByValue:true, expression}, sessionId);
+    if (result.error || result.result?.exceptionDetails) throw Error('Independent outcome evaluation unavailable');
+    return result.result?.result?.value;
+  },
+  reload:reloadPage,
+}, {budgetMs:acceptanceData.outcomeBudgetMs || 12000, stepTimeoutMs:acceptanceData.outcomeStepTimeoutMs || 2000})
+  : outcomeDefinitions.map(definition => ({id:definition.id, outcome:'SKIPPED'}));
 if (!blank && loaded && acceptanceActions.length === 0) {
   const deadline = Date.now() + 6_000;
   for (let index = 0; index < 20 && Date.now() < deadline; index++) {
@@ -315,4 +397,4 @@ if (loaded && !blank && acceptance.length > 0 && acceptance.every((a) => a.passe
 clearTimeout(timer);
 chrome.kill("SIGKILL");
 server.close();
-finish({ loaded, page, interactions, acceptance });
+finish({ loaded, page, interactions, acceptance, outcomes });

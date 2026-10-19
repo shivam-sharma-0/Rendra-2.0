@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.Locale;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -29,9 +30,13 @@ import java.nio.charset.StandardCharsets;
 /** Private file transport between an offline browser and one backend-selected candidate API.
  * Request/response bodies never enter model diagnostics or logs. Only the relay directory is writable. */
 final class BrowserApiRelay implements AutoCloseable {
+    enum Scope { API, SUPABASE }
     static final int MAX_BYTES = 1_048_576;
     private static final Set<String> METHODS = Set.of("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
     private static final Set<String> REQUEST_HEADERS = Set.of("content-type", "accept", "authorization");
+    private static final Set<String> SUPABASE_HEADERS = Set.of("content-type", "accept", "authorization", "apikey", "prefer", "range", "range-unit",
+            "x-client-info", "x-supabase-api-version", "accept-profile", "content-profile");
+    private static final Pattern SUPABASE_PATH = Pattern.compile("/(?:rest/v1(?:/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*|auth/v1/(?:signup|token|logout|user|settings|health))/?");
     private static final Pattern API_PATH = Pattern.compile("/api(?:/[A-Za-z0-9._~!$&'()*+,;=:@%-]*)*");
     private static final Pattern AMBIGUOUS_PATH_ENCODING = Pattern.compile("%(?:2f|5c|40|25)",
             Pattern.CASE_INSENSITIVE);
@@ -40,6 +45,7 @@ final class BrowserApiRelay implements AutoCloseable {
     private final URI candidateBase;
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient http;
+    private final Scope scope;
     private final ExecutorService worker = Executors
             .newSingleThreadExecutor(Thread.ofVirtual().name("candidate-api-relay").factory());
     private final RunCancellation cancellation = RunCancellation.current();
@@ -61,7 +67,17 @@ final class BrowserApiRelay implements AutoCloseable {
     }
 
     BrowserApiRelay(Path directory, SandboxPort.ServerEndpoint endpoint, HttpClient http) throws IOException {
+        this(directory, endpoint, http, Scope.API);
+    }
+
+    BrowserApiRelay(Path directory, SandboxPort.ServerEndpoint endpoint, Scope scope) throws IOException {
+        this(directory, endpoint, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2))
+                .followRedirects(HttpClient.Redirect.NEVER).build(), scope);
+    }
+
+    private BrowserApiRelay(Path directory, SandboxPort.ServerEndpoint endpoint, HttpClient http, Scope scope) throws IOException {
         this.directory = directory;
+        this.scope = scope;
         this.endpoint = Objects.requireNonNull(endpoint);
         this.http = Objects.requireNonNull(http);
         candidateBase = URI.create(endpoint.baseUrl());
@@ -123,7 +139,7 @@ final class BrowserApiRelay implements AutoCloseable {
         }
         var request = HttpRequest.newBuilder(target).timeout(Duration.ofSeconds(5));
         for (var header : data.headers().entrySet()) {
-            if (REQUEST_HEADERS.contains(header.getKey().toLowerCase(Locale.ROOT))) {
+            if ((scope == Scope.SUPABASE ? SUPABASE_HEADERS : REQUEST_HEADERS).contains(header.getKey().toLowerCase(Locale.ROOT))) {
                 if (header.getValue() == null || header.getValue().length() > 8192) {
                     throw new IOException("Invalid API header");
                 }
@@ -162,10 +178,14 @@ final class BrowserApiRelay implements AutoCloseable {
                 if (bytes.length > MAX_BYTES) {
                     throw new IOException("API response exceeds capacity");
                 }
-                return new Reply(response.statusCode(),
-                        Map.of("content-type", response.headers().firstValue("content-type")
-                                .orElse("application/octet-stream")),
-                        Base64.getEncoder().encodeToString(bytes), false);
+                var headers = new LinkedHashMap<String, String>();
+                headers.put("content-type", response.headers().firstValue("content-type").orElse("application/octet-stream"));
+                if (scope == Scope.SUPABASE) {
+                    for (String name : Set.of("content-range", "range-unit", "preference-applied")) {
+                        response.headers().firstValue(name).filter(value -> value.length() <= 8192).ifPresent(value -> headers.put(name, value));
+                    }
+                }
+                return new Reply(response.statusCode(), Map.copyOf(headers), Base64.getEncoder().encodeToString(bytes), false);
             }
         } finally {
             active = null;
@@ -177,7 +197,7 @@ final class BrowserApiRelay implements AutoCloseable {
         URI path = URI.create(value);
         String rawPath = path.getRawPath();
         if (path.isAbsolute() || path.getRawAuthority() != null || path.getFragment() != null
-                || rawPath == null || !API_PATH.matcher(rawPath).matches()
+                || rawPath == null || !(scope == Scope.SUPABASE ? SUPABASE_PATH : API_PATH).matcher(rawPath).matches()
                 || AMBIGUOUS_PATH_ENCODING.matcher(rawPath).find()) {
             throw new IOException("Invalid API path");
         }

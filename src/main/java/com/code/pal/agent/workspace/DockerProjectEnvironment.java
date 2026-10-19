@@ -8,9 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.scheduling.annotation.Scheduled;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -111,7 +109,7 @@ public class DockerProjectEnvironment implements SandboxPort {
     DockerProjectEnvironment(AgentProperties properties, WorkspaceStorage storage, CommandRunner runner, Clock clock) {
         this.properties = properties;
         this.storage = storage;
-        this.runner = runner != null ? runner : this::runProcess;
+        this.runner = runner != null ? runner : new DockerCommands(properties);
         this.clock = clock;
         this.startedAt = clock.instant();
     }
@@ -665,6 +663,16 @@ public class DockerProjectEnvironment implements SandboxPort {
     @Override
     public CommandResult browseWithApi(UUID projectId, String siteRoot, String acceptanceJson,
             ServerEndpoint candidate) {
+        return browseWithRelay(projectId, siteRoot, acceptanceJson, candidate, BrowserApiRelay.Scope.API);
+    }
+
+    @Override
+    public CommandResult browseWithSupabase(UUID projectId, String siteRoot, String acceptanceJson, ServerEndpoint scratch) {
+        return browseWithRelay(projectId, siteRoot, acceptanceJson, scratch, BrowserApiRelay.Scope.SUPABASE);
+    }
+
+    private CommandResult browseWithRelay(UUID projectId, String siteRoot, String acceptanceJson,
+            ServerEndpoint candidate, BrowserApiRelay.Scope scope) {
         if (acceptanceJson == null || acceptanceJson.length() > 24_000)
             throw new IllegalArgumentException("Invalid browser acceptance size");
         String parent = ".codepal/browser-relay";
@@ -677,8 +685,8 @@ public class DockerProjectEnvironment implements SandboxPort {
             Files.createDirectories(root);
             requirePlainCommandRoot(projectId, parent);
             String id = UUID.randomUUID().toString();
-            try (var relay = new BrowserApiRelay(root.resolve(id), candidate)) {
-                return browseInternal(projectId, siteRoot, acceptanceJson, parent + "/" + id);
+            try (var relay = new BrowserApiRelay(root.resolve(id), candidate, scope)) {
+                return browseInternal(projectId, siteRoot, acceptanceJson, parent + "/" + id, scope);
             }
         } catch (IOException unavailable) {
             throw new IllegalStateException("Candidate browser relay unavailable", unavailable);
@@ -686,6 +694,10 @@ public class DockerProjectEnvironment implements SandboxPort {
     }
 
     private CommandResult browseInternal(UUID projectId, String siteRoot, String acceptanceJson, String relayRoot) {
+        return browseInternal(projectId, siteRoot, acceptanceJson, relayRoot, BrowserApiRelay.Scope.API);
+    }
+
+    private CommandResult browseInternal(UUID projectId, String siteRoot, String acceptanceJson, String relayRoot, BrowserApiRelay.Scope scope) {
         String image;
         try {
             image = browserImage();
@@ -706,6 +718,14 @@ public class DockerProjectEnvironment implements SandboxPort {
         if (relayRoot != null)
             args.addAll(List.of("--mount",
                     "type=bind,source=" + environment(projectId).hostPath() + "/" + relayRoot + ",target=/relay"));
+        if (scope == BrowserApiRelay.Scope.SUPABASE) {
+            args.addAll(List.of("-e", "CODEPAL_SUPABASE_ORIGIN=" + DockerSupabaseScratch.BROWSER_ORIGIN));
+        }
+        if (properties.getVisualReview().isEnabled() && RunCancellation.current().runId() != null) {
+            String evidence = prepareBrowserEvidence(projectId);
+            args.addAll(List.of("--mount", "type=bind,source=" + environment(projectId).hostPath()
+                    + "/" + evidence + ",target=/evidence", "-e", "CODEPAL_BROWSER_EVIDENCE_DIR=/evidence"));
+        }
         args.addAll(List.of(image, "/site"));
         if (acceptanceJson != null)
             args.addAll(List.of("1500",
@@ -717,6 +737,34 @@ public class DockerProjectEnvironment implements SandboxPort {
                 outputLimit());
     }
 
+    /** At most two current captures per project; no image history or publicly served files. */
+    private String prepareBrowserEvidence(UUID projectId) {
+        String relative = ".codepal/browser-evidence/current";
+        try {
+            requirePlainCommandRoot(projectId, ".");
+            Path parent = storage.projectDir(projectId);
+            for (String segment : relative.split("/")) {
+                parent = parent.resolve(segment);
+                if (Files.isSymbolicLink(parent) || Files.exists(parent) && !Files.isDirectory(parent)) {
+                    throw new IllegalStateException("Unsafe browser evidence directory");
+                }
+                Files.createDirectories(parent);
+            }
+            requirePlainCommandRoot(projectId, relative);
+            for (String image : List.of("desktop.png", "mobile.png")) {
+                Path target = parent.resolve(image);
+                if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)
+                        && !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
+                    throw new IllegalStateException("Unsafe browser evidence file");
+                }
+                Files.deleteIfExists(target);
+            }
+            return relative;
+        } catch (IOException failure) {
+            throw new IllegalStateException("Browser evidence directory unavailable", failure);
+        }
+    }
+
     /**
      * The probe image, built once from the classpath (Dockerfile + probe.mjs) under a tag derived from
      * their content, so a changed probe gets a new image. Building downloads Chromium.
@@ -724,7 +772,7 @@ public class DockerProjectEnvironment implements SandboxPort {
     private synchronized String browserImage() {
         if (browserImageTag != null)
             return browserImageTag;
-        return browserImageTag = classpathImage("browser", List.of("Dockerfile", "probe.mjs"),
+        return browserImageTag = classpathImage("browser", List.of("Dockerfile", "probe.mjs", "relay.mjs", "outcomes.mjs"),
                 properties.getSandbox().getBrowserImage(), BROWSER_CONTEXT);
     }
 
@@ -1091,10 +1139,7 @@ public class DockerProjectEnvironment implements SandboxPort {
     }
 
     String workspaceNamespace() {
-        String base = storage.base().toAbsolutePath().normalize().toString();
-        if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows"))
-            base = base.toLowerCase(Locale.ROOT);
-        return ContractStore.hash(base).substring(0, 16);
+        return WorkspaceNamespace.of(storage.base());
     }
 
     String primaryContainerName(UUID project) {
@@ -1310,107 +1355,12 @@ public class DockerProjectEnvironment implements SandboxPort {
         return runner.run(args, timeout, stdin, outputLimit);
     }
 
-    private CommandResult runProcess(List<String> args, Duration timeout, byte[] stdin, int outputLimit) {
-        // A stopped run starts nothing new; a running command stops being waited for (see execInContainer for the
-        // processes it left inside the container).
-        if (RunCancellation.current().isCancelled())
-            return new CommandResult(false, -1, "", CommandResult.CANCELLED);
-        List<String> command = new ArrayList<>();
-        command.add(properties.getSandbox().getDockerCommand());
-        String configuredArgs = properties.getSandbox().getDockerCommandArgs();
-        if (configuredArgs != null && !configuredArgs.isBlank()) {
-            command.addAll(List.of(configuredArgs.trim().split("\\s+")));
-        }
-        command.addAll(args);
-        Process process = null;
-        try {
-            process = new ProcessBuilder(command).redirectErrorStream(true).start();
-            Process launched = process;
-            // WSL's pipe transport needs EOF even for commands that consume no input.
-            try (OutputStream output = process.getOutputStream()) {
-                if (stdin != null)
-                    output.write(stdin);
-            }
-            ByteArrayOutputStream captured = new ByteArrayOutputStream();
-            Thread reader = Thread.ofVirtual().start(() -> {
-                try {
-                    launched.getInputStream().transferTo(new BoundedOutputStream(captured, outputLimit));
-                } catch (IOException ignored) {
-                }
-            });
-            ProcessWaiter.Outcome outcome = ProcessWaiter.await(process, timeout);
-            if (outcome != ProcessWaiter.Outcome.FINISHED) {
-                process.destroyForcibly();
-                reader.join(1_000);
-                return new CommandResult(false, -1, captured.toString(StandardCharsets.UTF_8),
-                        outcome == ProcessWaiter.Outcome.CANCELLED ? CommandResult.CANCELLED : CommandResult.TIMED_OUT);
-            }
-            reader.join(1_000);
-            return new CommandResult(process.exitValue() == 0, process.exitValue(),
-                    captured.toString(StandardCharsets.UTF_8), "");
-        } catch (IOException e) {
-            return new CommandResult(false, -1, "", CommandResult.NOT_STARTED + " (docker): " + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return new CommandResult(false, -1, "", CommandResult.CANCELLED);
-        } finally {
-            if (process != null && process.isAlive()) {
-                process.descendants().forEach(ProcessHandle::destroyForcibly);
-                process.destroyForcibly();
-            }
-        }
-    }
-
-    /** Each command gets a pre-created owned container. Stop cannot race a late container creation. */
+    /** Each command gets one owned process; proof retries only inspect that process. */
     private CommandResult runOwnedContainer(String name, List<String> args, Duration timeout, byte[] stdin,
             int outputLimit) {
-        RunCancellation signal = RunCancellation.current();
-        if (signal.isCancelled())
-            return new CommandResult(false, -1, "", CommandResult.CANCELLED);
-        List<String> create = new ArrayList<>();
-        create.add("create");
-        create.addAll(args.subList(args.size() > 1 && args.get(1).equals("--rm") ? 2 : 1, args.size()));
-        if (stdin != null)
-            create.add(1, "-i");
-        try {
-            CommandResult prepared;
-            // Creation launches no generated process; finish this bounded operation then check Stop before start.
-            try (var ignored = RunCancellation.bind(RunCancellation.NONE)) {
-                prepared = run(create, Duration.ofSeconds(20), null, outputLimit);
-            }
-            if (!prepared.success())
-                return prepared;
-            try (var hook = signal.onCancel(() -> Thread.ofVirtual().start(() -> removeContainerQuietly(name)))) {
-                if (signal.isCancelled())
-                    return new CommandResult(false, -1, "", CommandResult.CANCELLED);
-                List<String> start = stdin == null ? List.of("start", "-a", name) : List.of("start", "-a", "-i", name);
-                CommandResult result = run(start, timeout, stdin, outputLimit);
-                if (signal.isCancelled())
-                    return new CommandResult(false, -1, result.stdout(), CommandResult.CANCELLED);
-                if (result.timedOut() || !result.error().isBlank())
-                    return result;
-                CommandResult state = run(List.of("inspect", "-f", "{{.State.ExitCode}}", name), Duration.ofSeconds(10),
-                        null);
-                if (!state.success())
-                    return new CommandResult(false, -1, result.stdout(), "Command exit state unavailable");
-                try {
-                    int exit = Integer.parseInt(state.stdout().trim());
-                    return new CommandResult(exit == 0, exit, result.stdout(), "");
-                } catch (NumberFormatException invalid) {
-                    return new CommandResult(false, -1, result.stdout(), "Command exit state invalid");
-                }
-            }
-        } finally {
-            boolean interrupted = Thread.interrupted();
-            try {
-                removeContainerQuietly(name);
-            } finally {
-                if (interrupted)
-                    Thread.currentThread().interrupt();
-            }
-        }
+        return new OwnedDockerCommand(runner, properties.getSandbox(), this::removeContainerQuietly)
+                .execute(name, args, timeout, stdin, outputLimit);
     }
-
     private static boolean noSuchContainer(CommandResult result) {
         String text = (result.stdout() + "\n" + result.error()).stripLeading().toLowerCase(Locale.ROOT);
         return text.startsWith("error response from daemon: no such container")
@@ -1460,25 +1410,4 @@ public class DockerProjectEnvironment implements SandboxPort {
     public record Environment(UUID projectId, String container, String hostPath, String workspacePath) {
     }
 
-    private static final class BoundedOutputStream extends OutputStream {
-        private final ByteArrayOutputStream delegate;
-        private final int limit;
-
-        private BoundedOutputStream(ByteArrayOutputStream delegate, int limit) {
-            this.delegate = delegate;
-            this.limit = Math.max(1, limit);
-        }
-
-        @Override
-        public void write(int b) {
-            if (delegate.size() < limit)
-                delegate.write(b);
-        }
-
-        @Override
-        public void write(byte[] bytes, int offset, int length) {
-            if (delegate.size() < limit)
-                delegate.write(bytes, offset, Math.min(length, limit - delegate.size()));
-        }
-    }
 }

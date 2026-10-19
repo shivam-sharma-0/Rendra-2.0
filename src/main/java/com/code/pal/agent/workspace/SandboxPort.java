@@ -29,6 +29,11 @@ public interface SandboxPort {
     default void verifyEnvironment() {
     }
 
+    /** Offline browser access to one fresh Supabase endpoint selected by the backend, never the live connector. */
+    default CommandResult browseWithSupabase(UUID projectId, String siteRoot, String acceptanceJson, ServerEndpoint scratch) {
+        return new CommandResult(false, -1, "", CommandResult.NOT_STARTED + ": isolated Supabase browser is unavailable");
+    }
+
     /** Recovery only, under the trusted project critical section; false leaves mutations quarantined. */
     default boolean reconcilePendingOperations(UUID projectId) { return true; }
 

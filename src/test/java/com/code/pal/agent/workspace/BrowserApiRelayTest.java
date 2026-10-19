@@ -17,6 +17,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -41,6 +42,8 @@ class BrowserApiRelayTest {
             assertNull(exchange.getRequestHeaders().getFirst("cookie"));
             byte[] body = exchange.getRequestBody().readAllBytes();
             exchange.getResponseHeaders().set("content-type", "application/json");
+            exchange.getResponseHeaders().set("content-range", "0-0/1");
+            exchange.getResponseHeaders().set("set-cookie", "private=not-forwarded");
             if (body.length == 0) {
                 body = "[]".getBytes();
             }
@@ -75,6 +78,41 @@ class BrowserApiRelayTest {
                 var reply=send(temporary.resolve("relay"),path,"");assertEquals(503,reply.status());assertTrue(reply.unavailable());
             }
             assertEquals(0,requests.get());
+        }
+    }
+
+    @Test
+    void supabaseScopeForwardsOnlyAuthAndRestWhileKeepingAdministrativeRoutesUnavailable() throws Exception {
+        server.createContext("/rest/v1/tasks", exchange -> {
+            requests.incrementAndGet();
+            assertEquals("public-fixture", exchange.getRequestHeaders().getFirst("apikey"));
+            assertEquals("return=representation", exchange.getRequestHeaders().getFirst("prefer"));
+            byte[] body = "[]".getBytes();
+            exchange.getResponseHeaders().set("content-type", "application/json");
+            exchange.getResponseHeaders().set("content-range", "0-0/1");
+            exchange.getResponseHeaders().set("set-cookie", "private=not-forwarded");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        Path directory = temporary.resolve("supabase-relay");
+        try (var relay = new BrowserApiRelay(directory, endpoint(), BrowserApiRelay.Scope.SUPABASE)) {
+            var id = UUID.randomUUID().toString().replace("-", "");
+            var data = new BrowserApiRelay.Request("GET", "/rest/v1/tasks?select=*",
+                    Map.of("apikey", "public-fixture", "prefer", "return=representation", "x-supabase-api-version", "2024-01-01"), "");
+            Files.writeString(directory.resolve(id + ".request.json"), mapper.writeValueAsString(data));
+            Path response = directory.resolve(id + ".response.json");
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!Files.exists(response) && System.nanoTime() < until) Thread.sleep(10);
+            assertTrue(Files.exists(response));
+            var reply = mapper.readValue(Files.readString(response), BrowserApiRelay.Reply.class);
+            assertEquals(200, reply.status());
+            assertEquals("0-0/1", reply.headers().get("content-range"));
+            assertNull(reply.headers().get("set-cookie"));
+            for (String path : List.of("/api/projects", "/auth/v1/admin/users", "/storage/v1/objects", "/rest/v1/%2e%2e/admin")) {
+                assertTrue(send(directory, path, "").unavailable());
+            }
+            assertEquals(1, requests.get());
         }
     }
     @Test void rejectsAnOversizedResponseWithoutDeliveringItToBrowser() throws Exception {

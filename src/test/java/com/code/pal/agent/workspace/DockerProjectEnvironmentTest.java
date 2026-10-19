@@ -349,7 +349,8 @@ class DockerProjectEnvironmentTest {
                 return ok("container-id");
             }
             if(verb.equals("create")) return ok("owned-id");
-            if(verb.equals("inspect") && args.contains("{{.State.ExitCode}}")) return ok("0");
+            if(verb.equals("inspect") && args.contains("{{json .State}}"))
+                return ok("{\"Running\":false,\"Status\":\"exited\",\"ExitCode\":0,\"StartedAt\":\"2026-10-17T00:00:00Z\"}");
             if(verb.equals("rm") && args.getLast().startsWith("codepal-command-")) return ok("");
             if(verb.equals("start") && args.contains("-a")) {
                 execStarted.countDown();

@@ -8,11 +8,37 @@ import java.nio.file.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Real adapter; only a runner-owned path under target and a pinned cached image. */
 @EnabledIfSystemProperty(named="codepal.command.it",matches="true")
 class CommandIsolationIT {
+    @Test
+    void transientFinalInspectionRecoversAnActualTrustedCopyWithoutRepeatingIt() throws Exception {
+        Path base = Path.of(System.getProperty("codex.command.base")).resolve(project.toString());
+        Files.writeString(base.resolve("copy-proof.txt"), "exact saved source");
+        var unavailable = new AtomicBoolean(true);
+        var starts = new AtomicInteger();
+        var transport = new DockerCommands(props);
+        DockerProjectEnvironment.CommandRunner runner = (args, timeout, stdin, limit) -> {
+            if (args.getFirst().equals("start") && args.contains("-a") && args.getLast().startsWith("codepal-trusted-")) {
+                starts.incrementAndGet();
+            }
+            if (args.getFirst().equals("inspect") && args.contains("{{json .State}}")
+                    && args.getLast().startsWith("codepal-trusted-") && unavailable.compareAndSet(true, false)) {
+                return new SandboxPort.CommandResult(false, 1, "", "injected unavailable inspection");
+            }
+            return transport.run(args, timeout, stdin, limit);
+        };
+        var recovered = new DockerProjectEnvironment(props, new WorkspaceStorage(props), runner, Clock.systemUTC());
+        recovered.copyTree(project, ".", ".codepal/inspection-proof");
+        assertEquals("exact saved source", Files.readString(base.resolve(".codepal/inspection-proof/copy-proof.txt")));
+        assertEquals(1, starts.get());
+        assertFalse(unavailable.get());
+    }
+
     @Test void browserExercisesCrudAndReloadThroughCandidateRelayWhileNetworkIsNone() throws Exception {
         var mapper=new tools.jackson.databind.ObjectMapper();var title=new java.util.concurrent.atomic.AtomicReference<String>();
         var completed=new java.util.concurrent.atomic.AtomicBoolean();
@@ -26,7 +52,7 @@ class CommandIsolationIT {
         });api.start();
         try {
             String html="""
-                <!doctype html><h1>Tasks</h1><input id="title"><button id="add">Add</button><button id="edit">Edit</button><button id="toggle">Complete</button><button id="delete">Delete</button><ul id="items"></ul><output id="status"></output>
+                <!doctype html><h1>Tasks</h1><label for="title">Task title</label><input id="title"><button id="add">Add</button><button id="edit">Edit</button><button id="toggle">Complete</button><button id="delete">Delete</button><ul id="items"></ul><output id="status"></output>
                 <script>
                 async function call(method,body){const response=await fetch('/api/todos',{method,headers:{'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});if(!response.ok)throw Error('API failed');const rows=await response.json();document.querySelector('#items').replaceChildren(...rows.map(row=>{const el=document.createElement('li');el.textContent=row.title;return el}));document.querySelector('#status').textContent=rows[0]?.completed?'Completed':'Open'}
                 document.querySelector('#add').onclick=()=>call('POST',{title:document.querySelector('#title').value});document.querySelector('#edit').onclick=()=>call('PUT',{title:document.querySelector('#title').value});document.querySelector('#toggle').onclick=()=>call('PUT',{completed:true});document.querySelector('#delete').onclick=()=>call('DELETE');call('GET');

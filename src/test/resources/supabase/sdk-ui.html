@@ -1,0 +1,42 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Isolated SDK account fixture</title><style>body{font:16px system-ui;margin:2rem;color:#182238;background:#f5f6f8}main{max-width:40rem;margin:auto}form,label{display:grid;gap:.6rem}form{margin:1rem 0}input,button{font:inherit;padding:.6rem}li{margin:1rem 0;overflow-wrap:anywhere}</style></head>
+<body><main><h1>Isolated SDK task app</h1><form id="account"><label>Email<input id="email" type="email" required></label>
+<label>Password<input id="password" type="password" required></label><button id="signup" type="button">Sign up</button>
+<button id="signin" type="button">Sign in</button><button id="signout" type="button">Sign out</button></form>
+<p id="session" role="status">Starting</p><p id="error" role="alert"></p>
+<form id="task"><label>Task title<input id="title" required></label><button type="submit" id="save">Save task</button></form>
+<ul id="items" aria-label="Tasks"></ul></main><script src="supabase.js"></script><script>
+const fixture=__FIXTURE__;
+const client=supabase.createClient(fixture.url,fixture.key,{auth:{autoRefreshToken:false,detectSessionInUrl:false}});
+const select=id=>document.getElementById(id);
+let user=null;
+async function refresh(){
+  select('session').textContent=user?'Signed in':'Signed out';
+  select('items').replaceChildren();
+  if(!user)return;
+  const {data,error}=await client.from('tasks').select('*');if(error)throw error;
+  for(const row of data){
+    const item=document.createElement('li');item.textContent=row.title;
+    const remove=document.createElement('button');remove.type='button';remove.textContent='Delete';
+    remove.addEventListener('click',()=>run(async()=>{
+      if(!fixture.brokenDelete){const {error}=await client.from('tasks').delete().eq('id',row.id);if(error)throw error;}
+      await refresh();
+    }));item.append(remove);select('items').append(item);
+  }
+}
+async function run(work){select('error').textContent='';try{await work();}catch{select('error').textContent='Request failed';}}
+const credentials=()=>({email:select('email').value,password:select('password').value});
+for(const [id,operation] of [['signup','signUp'],['signin','signInWithPassword']]){
+  select(id).addEventListener('click',()=>run(async()=>{
+    const {data,error}=await client.auth[operation](credentials());if(error)throw error;user=data.user;await refresh();
+  }));
+}
+select('signout').addEventListener('click',()=>run(async()=>{const {error}=await client.auth.signOut();if(error)throw error;user=null;await refresh();}));
+select('task').addEventListener('submit',event=>{event.preventDefault();void run(async()=>{
+  const {error}=await client.from('tasks').insert({title:select('title').value});if(error)throw error;select('task').reset();await refresh();
+});});
+void run(async()=>{const {data,error}=await client.auth.getSession();if(error)throw error;
+  if(data.session){const verified=await client.auth.getUser();if(verified.error)throw verified.error;user=verified.data.user;}
+  await refresh();
+});
+</script></body></html>

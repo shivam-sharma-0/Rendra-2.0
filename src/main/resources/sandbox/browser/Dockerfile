@@ -4,7 +4,7 @@ FROM node:22-bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/*
-COPY probe.mjs /opt/codepal/probe.mjs
+COPY probe.mjs relay.mjs outcomes.mjs /opt/codepal/
 ENV CHROMIUM=/usr/bin/chromium
 USER 1000:1000
 WORKDIR /tmp
