@@ -94,7 +94,12 @@ public final class ContractScaffold {
             String directory = app.substring(0, app.lastIndexOf('/') + 1);
             out.put(app, "import " + json(relative(directory, root + "theme.css", true)) + "\nimport { routes } from "
                     + json(relative(directory, root + "routes.ts", true))
-                    + "\n" + resource("contract/hash-app.tsx"));
+                    + "\n" + (c.schemaVersion() == 2 ? resource("contract/hash-app.tsx") : "export default function App() {\n"
+                    + "const route = routes.find(route => route.path === window.location.pathname)\n"
+                    + "const Component = route?.component\n"
+                    + "const params: Record<string,string> = {}\n"
+                    + "return Component ? <Component params={params} /> : <main><h1>Page not found</h1>"
+                    + "<p>The page you requested does not exist.</p><a href=\"/\">Go to the homepage</a></main>\n}\n"));
         }
         if (existing.apply(app) == null && !out.containsKey(app))
             out.put(app, "export default function PendingApp() { return null }\n");
