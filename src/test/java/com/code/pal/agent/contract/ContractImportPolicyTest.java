@@ -35,13 +35,13 @@ class ContractImportPolicyTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "import { Link } from 'react-router-dom'; export default Link",
-            "import type { RouteObject }\n from \"react-router-dom\"; export default null",
-            "export { Link } from 'react-router-dom'",
-            "import 'react-router-dom'",
-            "const router = import('react-router-dom')",
-            "const router = require('react-router-dom')",
-            "const name = 'react-router-dom'; const router = import(name)",
+            "import { Link } from 'lucide-react'; export default Link",
+            "import type { RouteObject }\n from \"lucide-react\"; export default null",
+            "export { Link } from 'lucide-react'",
+            "import 'lucide-react'",
+            "const router = import('lucide-react')",
+            "const router = require('lucide-react')",
+            "const name = 'lucide-react'; const router = import(name)",
             "import icon from 'lucide-react'",
             "import x from '../../outside.ts'"
     })
@@ -51,11 +51,12 @@ class ContractImportPolicyTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
+            "import { Link, useParams } from 'react-router-dom'; export default Link",
             "import { useState } from 'react'; import './index.css'; export default () => null",
             "import { tasks } from './local-state'; export default () => tasks.length",
-            "// import X from 'react-router-dom'\nexport default () => null",
-            "const text = \"import X from 'react-router-dom'\"; export default () => text",
-            "/* export { Link } from 'react-router-dom' */ export default () => null",
+            "// import X from 'lucide-react'\nexport default () => null",
+            "const text = \"import X from 'lucide-react'\"; export default () => text",
+            "/* export { Link } from 'lucide-react' */ export default () => null",
             "const url = import.meta.env.MODE; export default () => url"
     })
     void reviewedReactRelativeImportsAndQuotedExamplesRemainValid(String source) {
@@ -71,7 +72,7 @@ class ContractImportPolicyTest {
                     assertTrue(request.messages().getFirst().content().contains("<a href"));
                     String source;
                     if (calls.incrementAndGet() == 1) {
-                        source = "import { Link } from 'react-router-dom'; export default Link";
+                        source = "import { Link } from 'lucide-react'; export default Link";
                     } else {
                         assertTrue(request.messages().getLast().content().contains("Disallowed bare module import"));
                         source = "export default () => <a href='/'>Home</a>";

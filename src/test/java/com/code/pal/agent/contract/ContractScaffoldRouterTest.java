@@ -29,9 +29,10 @@ class ContractScaffoldRouterTest {
         var contract = routed();
         String app = new ContractScaffold(new ObjectMapper()).render(contract, "Fixture", path -> null).get("src/App.tsx");
         assertTrue(app.contains("window.location.hash"));
-        assertTrue(app.contains("hashchange"), "Mounted pages must react to links and browser back");
+        assertTrue(app.contains("<HashRouter><Routes>"), "Use the preinstalled reactive hash router");
+        assertTrue(app.contains("useParams()"), "Keep dynamic route params available to generated pages");
         assertTrue(app.contains("replaceState"), "The initial home hash must replace history, not add a duplicate entry");
-        assertTrue(app.contains("href=\"#/\""));
+        assertTrue(app.contains("<Link to=\"/\""));
         assertFalse(app.contains("window.location.pathname"));
     }
 
@@ -41,7 +42,7 @@ class ContractScaffoldRouterTest {
         var legacy = new BuildContract(1, v2.id(), v2.stack(), v2.storage(), v2.auth(), v2.limits(), v2.theme(),
                 v2.routes(), v2.types(), v2.models(), v2.api(), v2.assets(), v2.envNames(), v2.units(), v2.acceptance());
         String app = new ContractScaffold(new ObjectMapper()).render(legacy, "Fixture", path -> null).get("src/App.tsx");
-        assertTrue(app.contains("window.location.pathname"));
+        assertTrue(app.contains("<BrowserRouter><Routes>"), "Legacy contracts keep pathname routing");
         assertFalse(app.contains("hashchange"));
     }
 

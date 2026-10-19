@@ -24,7 +24,7 @@ function Invoke-StarterWsl {
 }
 try {
     [void](New-Item -ItemType Directory -Path "$codexOwned/vite/src","$codexOwned/server/src","$codexOwned/cache" -Force)
-    foreach($codexFile in @('package.json','tsconfig.json','vite.config.ts','index.html','src/main.tsx','src/index.css')) {
+    foreach($codexFile in @('package.json','tsconfig.json','vite.config.ts','index.html','src/main.tsx','src/index.css','src/router.tsx')) {
         Copy-Item -LiteralPath (Join-Path $codexRoot "src/main/resources/starters/vite-react/$codexFile") -Destination (Join-Path $codexOwned "vite/$codexFile")
     }
     Copy-Item -LiteralPath (Join-Path $codexRoot 'src/main/resources/starters/design-system.css') -Destination "$codexOwned/vite/src/design-system.css"
@@ -42,7 +42,7 @@ try {
         Copy-Item -Path "$codexFixtureRoot/vite/*" -Destination "$codexOwned/vite" -Recurse -Force
         Copy-Item -Path "$codexFixtureRoot/mern/server/*" -Destination "$codexOwned/server" -Recurse -Force
     } else {
-        "export default function App() { return <main className='p-4'>Starter verification</main> }" | Set-Content -LiteralPath "$codexOwned/vite/src/App.tsx" -Encoding UTF8
+        "import { Router, Routes, Route, Link } from './router'; export default function App() { return <Router><Routes><Route path='/' element={<main><Link to='/'>Starter verification</Link></main>} /></Routes></Router> }" | Set-Content -LiteralPath "$codexOwned/vite/src/App.tsx" -Encoding UTF8
     }
     [ordered]@{project=$codexProject;generateLocks=[bool]$GenerateLocks} | ConvertTo-Json | Set-Content -LiteralPath "$codexOwned/owned.json" -Encoding ASCII
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Test-StarterPackages.cjs') -Destination "$codexOwned/check.cjs"

@@ -40,13 +40,13 @@ class ImportRepairPolicyTest {
     private ValidationReport report(AgentContext ctx, List<String> paths) {
         return new ValidationReport(ValidationOperation.BUILD, true, false, false, false, 1, "tsc", "fixture",
                 paths.stream().map(path -> new ProjectDiagnostic(path, 1, 1, DiagnosticSeverity.ERROR,
-                        "Cannot find module react-router-dom", "compiler", "TS2307")).toList(),
+                        "Cannot find module lucide-react", "compiler", "TS2307")).toList(),
                 List.of(), 0, 2, fixture.changes.view(ctx).revision(), "Failed", List.of());
     }
 
     @Test
     void missingRouterPackageRepairGetsExactPolicyAndReplacesUsedSymbolsWithAnchors() {
-        String before = "import { Link } from 'react-router-dom'; export default () => <Link to='/'>Home</Link>";
+        String before = "import { Link } from 'lucide-react'; export default () => <Link to='/'>Home</Link>";
         String after = "export default () => <a href='/'>Home</a>";
         var run = fixture.run(ProjectType.BUILD);
         run.setRequestFingerprint("accepted");
@@ -128,7 +128,7 @@ class ImportRepairPolicyTest {
                             List.of(new RepairPatch.FilePatch("src/App.tsx", input.at("/files/src~1App.tsx/version").asString(),
                                             List.of(new RepairPatch.Edit("Before", "After"))),
                                     new RepairPatch.FilePatch("src/local-state.ts", input.at("/files/src~1local-state.ts/version").asString(),
-                                            List.of(new RepairPatch.Edit(state, "import router from 'react-router-dom'; " + state)))));
+                                            List.of(new RepairPatch.Edit(state, "import router from 'lucide-react'; " + state)))));
                     return new LlmClient.LlmResult(fixture.mapper.writeValueAsString(patch), null, List.of(), null, "stop");
                 }, () -> {}));
         assertEquals(app, fixture.project.files.readText(ctx.projectId(), ctx.root(), "src/App.tsx"));

@@ -1,1 +1,1 @@
-Use plain <a href="#/path"> links with the existing hash router; logical contract routes stay /path.
+Use react-router-dom Link to="/path" inside the coordinator HashRouter, or <a href="#/path">; logical contract routes stay /path. Do not nest routers.

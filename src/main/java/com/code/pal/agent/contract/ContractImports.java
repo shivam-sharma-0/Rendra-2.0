@@ -12,7 +12,7 @@ import java.util.Set;
 
 /** Early module-quality check for fixed v2 starters, not a JavaScript execution/security boundary. */
 public final class ContractImports {
-    private static final Set<String> REACT = Set.of("react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime");
+    private static final Set<String> REACT = Set.of("react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime", "react-router-dom");
     private static final List<String> EXTENSIONS = List.of("", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".css", ".json",
             "/index.ts", "/index.tsx", "/index.js", "/index.jsx");
 
@@ -113,7 +113,7 @@ public final class ContractImports {
             if (contract.stack() == BuildContract.Stack.VITE && REACT.contains(module)) {
                 return null;
             }
-            throw new IllegalArgumentException("Disallowed bare module import; remove it and use existing React and plain anchor navigation");
+            throw new IllegalArgumentException("Disallowed bare module import; use only preinstalled packages");
         }
         Path parent = Path.of(file).getParent();
         String target = BuildContract.canonical((parent == null ? Path.of("") : parent).resolve(module).normalize().toString().replace('\\', '/'));

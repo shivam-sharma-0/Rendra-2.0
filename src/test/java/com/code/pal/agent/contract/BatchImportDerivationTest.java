@@ -43,7 +43,7 @@ class BatchImportDerivationTest {
         assertDoesNotThrow(() -> ContractImports.validate(together, together.units().getLast(), "src/App.tsx", "import Card from './Card'"));
         var separated = contract(false);
         assertThrows(IllegalArgumentException.class, () -> ContractImports.validate(separated, separated.units().getFirst(), "src/Card.tsx", "import App from './App'"));
-        for (String module : Set.of("./Missing", "../../outside", "react-router-dom")) {
+        for (String module : Set.of("./Missing", "../../outside", "lucide-react")) {
             assertThrows(IllegalArgumentException.class, () -> ContractImports.validate(separated, separated.units().getLast(), "src/App.tsx", "import X from '" + module + "'"));
         }
     }
@@ -75,6 +75,6 @@ class BatchImportDerivationTest {
         var recovered = BatchReceipts.validate(contract, contract.batches().getLast(), receipt);
         assertEquals(receipt.units().getFirst().files(), recovered.getFirst().files());
         assertEquals(Set.of("src/Card.tsx"), ContractImports.repairDependencies(contract, contract.units().getLast(), "src/App.tsx",
-                "import MissingPackage from 'react-router-dom'; import Card from './Card'"));
+                "import MissingPackage from 'lucide-react'; import Card from './Card'"));
     }
 }

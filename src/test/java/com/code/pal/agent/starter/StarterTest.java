@@ -93,6 +93,23 @@ class StarterTest {
     }
 
     @Test
+    void clientsPreinstallRouterAndBothPackagesKeepStrictExceptImplicitAny() {
+        for (var starter : List.of(Starter.VITE_REACT, Starter.MERN)) {
+            var files = starter.files("Fixture");
+            String prefix = starter == Starter.MERN ? "client/" : "";
+            assertEquals("7.18.4", json.readTree(files.get(prefix + "package.json")).at("/dependencies/react-router-dom").asString());
+            var options = json.readTree(files.get(prefix + "tsconfig.json")).path("compilerOptions");
+            assertTrue(options.path("strict").asBoolean());
+            assertFalse(options.path("noImplicitAny").asBoolean());
+            if (starter == Starter.MERN) {
+                options = json.readTree(files.get("server/tsconfig.json")).path("compilerOptions");
+                assertTrue(options.path("strict").asBoolean());
+                assertFalse(options.path("noImplicitAny").asBoolean());
+            }
+        }
+    }
+
+    @Test
     void unknownStacksAreRefused() {
         assertEquals(Optional.of(Starter.MERN), Starter.of("mern"));
         assertEquals(Optional.empty(), Starter.of("static"));
