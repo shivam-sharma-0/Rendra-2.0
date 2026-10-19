@@ -8,7 +8,8 @@ api[{id,method,path,requestType(nullable),responseType,owner,routerPath,routerEx
 assets[{source,destination,fingerprint,owner}],envNames[],
 units[{id,objective,ownedPaths[],imports[],dependsOn[],acceptanceIds[]}],
 acceptance{schema:1,browser:[{id,kind,selector,value}],api:[],authRequired,crudRequired}.
-Every unit includes all six fields. Prefer 3-6 cohesive units; cover the complete scope without splitting every UI control.
+Every unit includes all six fields. For a small single-entity app use 3-4 cohesive units, not one per control.
+Keep every requested page and backend workflow; share helpers within their existing owner instead of adding units.
 Limits: routes at most 20; types at most 16; models at most 12; api at most 24; assets at most 16.
 acceptance.browser and acceptance.api each contain at most 24 actions total. Combine preparatory navigation and
 use cohesive flows covering all required behavior within those bounds; the limit counts setup actions such as FILL,
@@ -16,9 +17,11 @@ SELECT and navigation clicks as well as assertions. Never emit more than 24 in e
 account, CRUD, search/filter and reload-persistence flows. Do not add full tests for optional settings controls,
 secondary preferences or every route when they duplicate required evidence. Keep one concise route assertion where it
 proves navigation; do not restate the same state with multiple selectors.
-objective is one plain-text sentence under 200 characters, not source code or JSX.
+objective is one plain-text sentence under 120 characters, not source code or JSX.
 ownedPaths/imports are arrays of canonical file-path strings; dependsOn/acceptanceIds are arrays of ID strings.
-Return compact data; avoid repeating the request, acceptance examples or implementation code in objectives.
+Return minified JSON without indentation. Target 11000-12000 characters for a simple record app.
+Do not repeat requirements, acceptance IDs, shared imports or implementation prose in objectives.
+Reuse request/response types when their shapes match; do not invent DTOs or extra API endpoints for optional UI controls.
 For MERN set unit acceptanceIds to []; the coordinator assigns every browser/API check to its existing owner.
 {{freshMernPolicy}}
 Field kind: STRING/NUMBER/BOOLEAN/JSON/STRING_ARRAY/NUMBER_ARRAY/JSON_ARRAY. Type references are names or name[].
@@ -56,26 +59,16 @@ Cover EVERY declared method/path with a successful API test. If you declare both
 GET /api/todos/:id, include both READ requests (list assertion /0/title and record assertion /title).
 Do not declare unused extra endpoints, health, or error APIs. DELETE has one successful DELETE test;
 NOT_FOUND is a later GET of the deleted captured identity, not the successful READ coverage.
-Example valid no-account API acceptance sequence (adapt endpoints, fields and values to the request):
-[{"id":"health","kind":"HEALTH","method":"GET","path":"/api/health","body":null,"status":200,"tokenVariable":null,"captureVariable":null,"capturePointer":null,"assertPointer":null,"assertValue":null},
-{"id":"create","kind":"CREATE","method":"POST","path":"/api/todos","body":"{\"title\":\"Fixture task\",\"completed\":false}","status":201,"tokenVariable":null,"captureVariable":"recordId","capturePointer":"/id","assertPointer":"/title","assertValue":"Fixture task"},
-{"id":"list","kind":"READ","method":"GET","path":"/api/todos","body":null,"status":200,"tokenVariable":null,"captureVariable":null,"capturePointer":null,"assertPointer":"/0/title","assertValue":"Fixture task"},
-{"id":"read","kind":"READ","method":"GET","path":"/api/todos/${recordId}","body":null,"status":200,"tokenVariable":null,"captureVariable":null,"capturePointer":null,"assertPointer":"/title","assertValue":"Fixture task"},
-{"id":"update","kind":"UPDATE","method":"PATCH","path":"/api/todos/${recordId}","body":"{\"title\":\"Edited task\",\"completed\":true}","status":200,"tokenVariable":null,"captureVariable":null,"capturePointer":null,"assertPointer":"/title","assertValue":"Edited task"},
-{"id":"persist","kind":"PERSISTENCE","method":"GET","path":"/api/todos/${recordId}","body":null,"status":200,"tokenVariable":null,"captureVariable":null,"capturePointer":null,"assertPointer":"/title","assertValue":"Edited task"},
-{"id":"delete","kind":"DELETE","method":"DELETE","path":"/api/todos/${recordId}","body":null,"status":204,"tokenVariable":null,"captureVariable":null,"capturePointer":null,"assertPointer":null,"assertValue":null},
-{"id":"missing","kind":"NOT_FOUND","method":"GET","path":"/api/todos/${recordId}","body":null,"status":404,"tokenVariable":null,"captureVariable":null,"capturePointer":null,"assertPointer":null,"assertValue":null}]
+Use one API sequence: health, create/capture recordId, list, read recordId, update/assert edited value,
+restart/read/assert the same value, delete, GET deleted record/assert 404. Adapt fields and paths to the app.
 Account tests require signup/login with ${fixtureEmail}/${fixturePassword}, login token capture, missing/invalid token
 rejection, authenticated CRUD, wrong-password denial, and persistent data after restart. Variables cannot be used before capture.
 For ACCOUNTS the coordinator owns ALL /api/auth/* paths. Only POST /api/auth/signup and POST /api/auth/login
 are supported; sign-out clears the client session. Do not declare or implement these paths in application api/units.
-AuthSession is {token:string,userId:string}. After HEALTH use this account setup
-(adapt only the protected data endpoint to your declared API):
-[{"id":"signup","kind":"AUTH_SIGNUP","method":"POST","path":"/api/auth/signup","body":"{\"email\":\"${fixtureEmail}\",\"password\":\"${fixturePassword}\"}","status":201,"tokenVariable":null,"captureVariable":null,"capturePointer":null,"assertPointer":null,"assertValue":null},
-{"id":"login","kind":"AUTH_LOGIN","method":"POST","path":"/api/auth/login","body":"{\"email\":\"${fixtureEmail}\",\"password\":\"${fixturePassword}\"}","status":200,"tokenVariable":null,"captureVariable":"loginToken","capturePointer":"/token","assertPointer":null,"assertValue":null},
-{"id":"no_token","kind":"AUTH_REJECT","method":"GET","path":"/api/todos","body":null,"status":401,"tokenVariable":null,"captureVariable":null,"capturePointer":null,"assertPointer":null,"assertValue":null},
-{"id":"invalid_token","kind":"AUTH_INVALID","method":"GET","path":"/api/todos","body":null,"status":401,"tokenVariable":"invalidToken","captureVariable":null,"capturePointer":null,"assertPointer":null,"assertValue":null},
-{"id":"wrong_password","kind":"AUTH_REJECT","method":"POST","path":"/api/auth/login","body":"{\"email\":\"${fixtureEmail}\",\"password\":\"${invalidToken}\"}","status":401,"tokenVariable":null,"captureVariable":null,"capturePointer":null,"assertPointer":null,"assertValue":null}]
+AuthSession is {token:string,userId:string}. After HEALTH: AUTH_SIGNUP POST /api/auth/signup 201,
+AUTH_LOGIN POST /api/auth/login 200 capturing loginToken at /token; both use fixtureEmail/fixturePassword.
+Then AUTH_REJECT GET the protected collection without a token 401, AUTH_INVALID GET with invalidToken 401,
+and AUTH_REJECT POST /api/auth/login with fixtureEmail/invalidToken as password 401. Never omit these checks.
 Set every later successful CREATE/READ/UPDATE/DELETE/NOT_FOUND/PERSISTENCE tokenVariable to the literal
 captured name "loginToken", never "${loginToken}" or a token value. tokenVariable is null on signup/login;
 captureVariable/capturePointer store the login response AFTER the request, so a request cannot use its own capture.
@@ -95,6 +88,9 @@ if completed is requested, ui_complete CLICK on the task checkbox then ui_comple
 ui_delete CLICK then ui_deleted ASSERT_COUNT on task rows (value 0). Add preparatory FILL/CLICK actions as needed.
 Use selectors matching the actual UI. Task text assertions select task rows, never just headings.
 Preserve every required check; MERN unit responsibility is assigned by the coordinator.
+Fit account setup, CRUD/completion/reload, search, filter and required route checks into one browser flow of at most
+24 actions, including setup. Reuse the created task and edit form. Test one meaningful filter, not every chip;
+combine search evidence with task assertions. Keep settings navigation while skipping optional preference controls.
 Example complete browser sequence for a task form (adapt selectors to the UI you specify):
 [{"id":"ui_fill","kind":"FILL","selector":"input[name='title']","value":"Fixture task"},
 {"id":"ui_add","kind":"CLICK","selector":"button[data-action='add']","value":null},
