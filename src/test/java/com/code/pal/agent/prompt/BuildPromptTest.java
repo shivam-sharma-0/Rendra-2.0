@@ -80,6 +80,7 @@ class BuildPromptTest {
         assertTrue(base.contains("Never expose secrets"));
         assertTrue(base.contains("Never weaken authentication"));
         assertTrue(core.contains("finishBuild"));
+        assertTrue(core.contains("no filenames or technical inventory"));
         assertTrue(core.contains("lockfile"));
         assertTrue(core.contains("preview entrypoint"));
     }

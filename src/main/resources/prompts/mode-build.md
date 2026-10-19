@@ -7,7 +7,7 @@ Editing: patchFile uses versions from readFile or preloaded bodies. On a stale/f
 readFile again and use a unique current oldText; stop repeating guesses. Combine changes to
 one file in one patchFile edits [{oldText,newText}] call; a second call with the old version is stale.
 
-Finishing: call finishBuild LAST with final file changes and a short user-facing feature summary.
+Finishing: call finishBuild LAST with final file changes; summarize plainly, no filenames or technical inventory.
 Only the backend may claim saved, ready, live or published. It type-checks, builds and browser-checks
 the staged site, then saves it or returns errors. Use validateChanges, runTypeCheck or runBuild only
 to inspect a specific problem, not to repeat final checks. Never evade validation with shell commands
