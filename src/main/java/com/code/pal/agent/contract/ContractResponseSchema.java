@@ -30,6 +30,8 @@ final class ContractResponseSchema {
         limits.put("const", Map.of("modelCalls", input.limits().modelCalls(), "toolCalls", input.limits().toolCalls(),
                 "outputTokens", input.limits().outputTokens(), "timeoutMs", input.limits().timeoutMs()));
         properties.put("limits", limits);
+        properties.put("envNames", Map.of("type", "array", "maxItems", BuildContract.SUPPORTED_ENVIRONMENT_NAMES.size(),
+                "items", Map.of("type", "string", "enum", BuildContract.SUPPORTED_ENVIRONMENT_NAMES.stream().sorted().toList())));
         var theme = new LinkedHashMap<String, Object>();
         var tokens = new LinkedHashMap<String, Object>();
         for (String key : List.of("background", "foreground", "accent", "muted"))
@@ -50,6 +52,20 @@ final class ContractResponseSchema {
             properties(acceptance).put("crudRequired", Map.of("type", "boolean", "const", true));
             properties(acceptance).put("authRequired",
                     Map.of("type", "boolean", "const", input.choice().auth() == BuildDecisions.Auth.ACCOUNTS));
+            @SuppressWarnings("unchecked")
+            var unit = (Map<String, Object>) ((Map<String, Object>) properties.get("units")).get("items");
+            properties(unit).put("acceptanceIds", Map.of("type", "array", "items", Map.of("type", "string"), "const", List.of()));
+            if (input.requiredRootPath() != null) {
+                var file = Map.of("type", "string", "pattern", "^(?:client|server)/[A-Za-z0-9_][A-Za-z0-9_./-]{0,225}$");
+                properties(unit).put("imports", Map.of("type", "array", "items", Map.of("type", "string"), "const", List.of()));
+                properties(unit).put("ownedPaths", Map.of("type", "array", "minItems", 1, "maxItems", 12, "items", file));
+                @SuppressWarnings("unchecked")
+                var route = (Map<String, Object>) ((Map<String, Object>) properties.get("routes")).get("items");
+                properties(route).put("componentPath", file);
+                @SuppressWarnings("unchecked")
+                var api = (Map<String, Object>) ((Map<String, Object>) properties.get("api")).get("items");
+                properties(api).put("routerPath", file);
+            }
         }
         return new LlmClient.JsonSchema("build_contract", mapper.writeValueAsString(schema));
     }

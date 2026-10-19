@@ -5,6 +5,7 @@ import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.contract.BuildContract;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.lease.ProjectLeaseService;
+import com.code.pal.agent.starter.Starter;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.validation.DiagnosticSeverity;
 import com.code.pal.agent.validation.ProjectDiagnostic;
@@ -57,6 +58,7 @@ class ContractStackFixesTest {
         props.setWorkspaceBasePath(workspace.toString());
         files = new HostProjectFiles(new WorkspaceStorage(props));
         when(ctx.projectId()).thenReturn(project);
+        when(ctx.root()).thenReturn("stage");
         when(run.getId()).thenReturn(UUID.randomUUID());
         when(run.getProjectId()).thenReturn(project);
         when(run.getRequestFingerprint()).thenReturn("request");
@@ -88,6 +90,26 @@ class ContractStackFixesTest {
         files.writeText(project, "stage", "index.html", "<div id=root></div>");
         var typeError = new ProjectDiagnostic("src/App.tsx", 1, 1, DiagnosticSeverity.ERROR, "Type error", "typecheck", "TS2304");
         assertFalse(fixes.tryFix(ctx, run, contract, failure(typeError)));
+        verify(changes, never()).replaceBatch(any(), anyList());
+    }
+
+    @Test
+    void productionToolLoopRestoresOnlyTheRecognizedBootstrapAndSpendsABoundedAttempt() {
+        files.writeText(project, "stage", "package.json", Starter.VITE_REACT.files("App").get("package.json"));
+        files.writeText(project, "stage", "src/main.tsx", Starter.VITE_REACT.files("App").get("src/main.tsx"));
+        var operations = new java.util.concurrent.atomic.AtomicInteger();
+        assertTrue(fixes.tryFix(ctx, run, failure(), operations::incrementAndGet));
+        assertEquals(3, revision);
+        assertEquals(1, operations.get());
+        assertFalse(fixes.tryFix(ctx, run, failure(), operations::incrementAndGet), "claimed signature is durable");
+        assertEquals(3, revision);
+    }
+
+    @Test
+    void productionToolLoopLeavesCustomBootstrapAndOrdinaryErrorsForTheModel() {
+        files.writeText(project, "stage", "package.json", Starter.VITE_REACT.files("App").get("package.json"));
+        files.writeText(project, "stage", "src/main.tsx", "createRoot(document.getElementById('custom')).render(<App/>);");
+        assertFalse(fixes.tryFix(ctx, run, failure(), () -> { throw new AssertionError("No operation needed"); }));
         verify(changes, never()).replaceBatch(any(), anyList());
     }
 

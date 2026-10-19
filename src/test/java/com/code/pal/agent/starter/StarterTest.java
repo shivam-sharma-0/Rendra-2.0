@@ -13,6 +13,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StarterTest {
+    @Test
+    void staticStarterUsesTheTrustedPortableCompilerWithoutAnAppPlaceholder() {
+        var files = Starter.STATIC_SITE.files("Bakery");
+        assertTrue(files.containsKey("starter-static.json"));
+        assertTrue(files.containsKey("package-lock.json"));
+        assertFalse(files.containsKey("index.html"));
+        assertFalse(files.values().stream().anyMatch(value -> value.contains("@tailwindcss/browser")));
+        assertEquals(Optional.of(Starter.STATIC_SITE), Starter.of("static-site"));
+    }
 
     private final ObjectMapper json = new ObjectMapper();
 
@@ -20,7 +29,7 @@ class StarterTest {
     void theViteStarterHasTheSetupFilesButNotTheApp() {
         Map<String, String> files = Starter.VITE_REACT.files("Tip <Calc> & \"more\"");
         assertEquals(List.of(".gitignore", ".nvmrc", "starter-runtime.json", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts", "index.html", "src/main.tsx",
-                "src/index.css", "src/router.tsx"), List.copyOf(files.keySet()));
+                "src/index.css", "src/router.tsx", "src/design-system.css"), List.copyOf(files.keySet()));
         assertTrue(files.get("index.html").contains("<title>Tip &lt;Calc&gt; &amp; &quot;more&quot;</title>"));
         assertTrue(files.get("index.html").contains("src=\"/src/main.tsx\""));
         assertTrue(files.get("src/index.css").startsWith("@import \"tailwindcss\";"));

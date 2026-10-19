@@ -22,6 +22,8 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         @JsonInclude(JsonInclude.Include.NON_NULL) UUID replacesContractId,
         @JsonInclude(JsonInclude.Include.NON_NULL) String templateVersion,
         @JsonInclude(JsonInclude.Include.NON_EMPTY) List<ContractBatch> batches) {
+    static final Set<String> SUPPORTED_ENVIRONMENT_NAMES = Set.of(
+            "MONGODB_URI", "PORT", "NODE_ENV", "VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY");
     public BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisions.Storage storage,
             BuildDecisions.Auth auth, Limits limits, Map<String, String> theme, List<Route> routes,
             List<DataType> types, List<DataType> models, List<Api> api, List<Asset> assets,
@@ -115,7 +117,7 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             ownedPaths = bounded(ownedPaths, 12);
             imports = bounded(imports, 20);
             dependsOn = bounded(dependsOn, 12);
-            acceptanceIds = bounded(acceptanceIds, 24);
+            acceptanceIds = bounded(acceptanceIds, 48);
             if (ownedPaths.isEmpty())
                 bad("A unit must own files");
             ownedPaths.forEach(BuildContract::canonical);
@@ -162,7 +164,7 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
                 bad("Unsafe theme value");
         }
         for (String env : envNames)
-            if (!Set.of("MONGODB_URI", "PORT", "NODE_ENV", "VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY").contains(env))
+            if (!SUPPORTED_ENVIRONMENT_NAMES.contains(env))
                 bad("Unsupported environment name");
         if ((stack == Stack.MERN) != (storage == BuildDecisions.Storage.MERN))
             bad("Stack/storage mismatch");
@@ -363,7 +365,7 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             bad("Invalid identifier");
     }
 
-    private static boolean reserved(String path, Stack stack) {
+    static boolean reserved(String path, Stack stack) {
         String p = path.toLowerCase(Locale.ROOT);
         return p.endsWith("package.json") || p.endsWith("package-lock.json") || p.endsWith("tsconfig.json")
                 || p.endsWith("vite.config.ts") || p.equals("starter-runtime.json")

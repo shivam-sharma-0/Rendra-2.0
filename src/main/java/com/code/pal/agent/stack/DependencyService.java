@@ -1,6 +1,8 @@
 package com.code.pal.agent.stack;
 
 import com.code.pal.agent.config.AgentProperties;
+import com.code.pal.agent.llm.LlmCancelledException;
+import com.code.pal.agent.runtime.RunCancellation;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.ProjectPaths;
 import com.code.pal.agent.workspace.SandboxPort;
@@ -55,6 +57,8 @@ public class DependencyService {
             return error != null;
         }
     }
+
+    private record InstallFailure(String message, boolean retryable) {}
 
     /**
      * Makes the dependencies declared under {@code root} available there, installing them if this exact
@@ -146,24 +150,56 @@ public class DependencyService {
     }
 
     private String install(StackPack stack, List<String> command, UUID projectId, String root, String set) {
+        int attempts = Math.max(1, Math.min(3, properties.getSandbox().getDependencyInstallAttempts()));
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            if (Thread.currentThread().isInterrupted() || RunCancellation.current().isCancelled()) throw new LlmCancelledException();
+            var failure = installAttempt(stack, retryCommand(command, attempt), projectId, root, set);
+            if (failure == null) return null;
+            if (!failure.retryable() || attempt + 1 == attempts) return failure.message();
+            log.warn("dependency_runtime_retry projectId={} stack={} attempt={}", projectId, stack.id(), attempt + 1);
+        }
+        throw new IllegalStateException("Unreachable dependency install loop");
+    }
+
+    private static List<String> retryCommand(List<String> command, int attempt) {
+        if (attempt == 0 || command.isEmpty() || !command.getFirst().equals("npm")) return command;
+        var retry = new ArrayList<>(command);
+        retry.remove("--prefer-offline");
+        retry.add("--prefer-online");
+        retry.add("--include=optional");
+        return List.copyOf(retry);
+    }
+
+    private InstallFailure installAttempt(StackPack stack, List<String> command, UUID projectId, String root, String set) {
         sandbox.removeTree(projectId, set);
         for (String manifest : stack.dependencyManifests()) {
             if (files.regularFile(projectId, root, manifest)) files.copyFile(projectId, root, manifest, set, manifest);
         }
         long started = System.nanoTime();
         SandboxPort.CommandResult result = sandbox.install(projectId, set, command);
+        if (result.cancelled()) throw new LlmCancelledException();
         long elapsedMs = (System.nanoTime() - started) / 1_000_000;
         if (!result.success()) {
             log.warn("dependency_install_failed projectId={} stack={} exitCode={} elapsedMs={}", projectId, stack.id(),
                     result.exitCode(), elapsedMs);
             removeQuietly(projectId, set);
             String reason = result.timedOut() ? "the install timed out" : tail(result.stdout() + "\n" + result.error());
-            return "Dependencies could not be installed: " + reason;
+            return new InstallFailure("Dependencies could not be installed: " + reason, false);
         }
         String tooLarge = sizeError(projectId, set, stack.dependencyDirectory());
         if (tooLarge != null) {
             removeQuietly(projectId, set);
-            return tooLarge;
+            return new InstallFailure(tooLarge, false);
+        }
+        var check = stack.dependencyCheck(files, projectId, set);
+        if (!check.isEmpty()) {
+            var verified = sandbox.exec(projectId, set, check);
+            if (verified.cancelled()) throw new LlmCancelledException();
+            if (!verified.success()) {
+                removeQuietly(projectId, set);
+                return new InstallFailure("Dependency runtime check failed: " + (verified.timedOut() ? "loader timed out"
+                        : tail(verified.stdout() + "\n" + verified.error())), verified.started() && !verified.timedOut());
+            }
         }
         files.writeText(projectId, set, COMPLETE, Long.toString(System.currentTimeMillis()));
         log.info("dependency_install_done projectId={} stack={} elapsedMs={}", projectId, stack.id(), elapsedMs);
@@ -208,7 +244,8 @@ public class DependencyService {
     }
 
     private String key(StackPack stack, List<String> command, UUID projectId, String root) {
-        String material = stack.id() + "\n" + properties.getSandbox().getImage() + "\n" + String.join(" ", command) + "\n" + stack.dependencyFingerprint(files, projectId, root);
+        String material = stack.id() + "\n" + properties.getSandbox().getImage() + "\n" + String.join(" ", command)
+                + "\n" + stack.dependencyCheck(files, projectId, root) + "\n" + stack.dependencyFingerprint(files, projectId, root);
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(material.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest, 0, 16);

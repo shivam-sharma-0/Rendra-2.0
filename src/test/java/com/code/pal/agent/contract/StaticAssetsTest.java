@@ -15,6 +15,27 @@ class StaticAssetsTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
+    void compilerInspectionIsReadOnlyAndExecutionUsesAnExactPrivateResourceFile() throws Exception {
+        var project = LocalProject.create();
+        StaticAssets.files(ContractFixtures.ID).forEach(project::write);
+        project.write("index.html", "<h1 class='text-red-500'>Compiler transport</h1>");
+        String before = project.files.version(project.projectId, ".", "index.html");
+        var pack = new StackPacks(mapper).detect(project.files, project.projectId, ".");
+
+        assertEquals(List.of("node", ".codepal/static/compiler.mjs"),
+                pack.previewBuild(project.files, project.projectId, ".").command());
+        assertFalse(project.files.exists(project.projectId, ".", ".codepal/static/compiler.mjs"));
+        pack.prepareBuild(project.files, project.projectId, ".");
+
+        try (var resource = getClass().getClassLoader().getResourceAsStream("starters/static-site/build.mjs")) {
+            assertNotNull(resource);
+            assertArrayEquals(resource.readAllBytes(), project.files.readBytes(project.projectId, ".",
+                    ".codepal/static/compiler.mjs", 128_000));
+        }
+        assertEquals(before, project.files.version(project.projectId, ".", "index.html"));
+    }
+
+    @Test
     void staticBuildUsesPinnedPackagesAndOutranksNodeWithoutChangingStackIdentity() {
         var project = LocalProject.create();
         var contract = new SpecPlanningTest().deterministic(SpecFixtures.approved());

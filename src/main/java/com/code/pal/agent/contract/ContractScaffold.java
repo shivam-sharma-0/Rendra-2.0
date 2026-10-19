@@ -23,6 +23,11 @@ public final class ContractScaffold {
 
     @SuppressWarnings("unchecked")
     public Map<String, String> render(BuildContract c, String title, Function<String, String> existing) {
+        return render(c, title, existing, c.id());
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, String> render(BuildContract c, String title, Function<String, String> existing, UUID projectId) {
         var out = new LinkedHashMap<String, String>();
         if (c.schemaVersion() == 2 && c.stack() == BuildContract.Stack.STATIC) {
             var starter = StaticAssets.files(c.id());
@@ -67,6 +72,9 @@ public final class ContractScaffold {
             types += type(type);
         }
         out.put(root + "types.ts", types);
+        if (c.stack() == BuildContract.Stack.MERN && c.auth() == BuildDecisions.Auth.ACCOUNTS)
+            out.put(root + "auth-client.ts", resource("contract/auth-client.ts")
+                    .replace("{{storageKey}}", json("rendra-session:" + projectId)));
         out.put(root + "api.ts", api(c));
         StringBuilder routes = new StringBuilder("import type { ComponentType } from 'react'\n");
         for (int i = 0; i < c.routes().size(); i++) {
@@ -76,7 +84,7 @@ public final class ContractScaffold {
             if (existing.apply(route.componentPath()) == null)
                 out.put(route.componentPath(), "export default function PendingRoute() { return null }\n");
         }
-        routes.append("export const routes: {path: string; component: ComponentType}[] = [\n");
+        routes.append("export const routes: {path: string; component: ComponentType<{params: Record<string,string>}>}[] = [\n");
         for (int i = 0; i < c.routes().size(); i++)
             routes.append("{path:").append(json(c.routes().get(i).path())).append(",component: Route").append(i)
                     .append("},\n");
@@ -86,11 +94,7 @@ public final class ContractScaffold {
             String directory = app.substring(0, app.lastIndexOf('/') + 1);
             out.put(app, "import " + json(relative(directory, root + "theme.css", true)) + "\nimport { routes } from "
                     + json(relative(directory, root + "routes.ts", true))
-                    + "\n" + (c.schemaVersion() == 2 ? resource("contract/hash-app.tsx") : "export default function App() {\n"
-                    + "const route = routes.find(route => route.path === window.location.pathname)\n"
-                    + "const Component = route?.component\n"
-                    + "return Component ? <Component /> : <main><h1>Page not found</h1>"
-                    + "<p>The page you requested does not exist.</p><a href=\"/\">Go to the homepage</a></main>\n}\n"));
+                    + "\n" + resource("contract/hash-app.tsx"));
         }
         if (existing.apply(app) == null && !out.containsKey(app))
             out.put(app, "export default function PendingApp() { return null }\n");
@@ -195,11 +199,14 @@ public final class ContractScaffold {
         if (c.api().isEmpty())
             return "export {}\n";
         var b = new StringBuilder("import type * as Types from './types'\n");
-        b.append(
-                "async function request<T>(path: string, method: string, body: unknown, token?: string): Promise<T> {\nconst response = await fetch(path, {method, headers: {'Content-Type':'application/json', ...(token ? {Authorization: `Bearer ${token}`} : {})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});\nif (!response.ok) throw new Error(`API request failed (${response.status})`);\nreturn (response.status === 204 ? undefined : await response.json()) as T\n}\nexport const api = {\n");
+        boolean accounts = c.stack() == BuildContract.Stack.MERN && c.auth() == BuildDecisions.Auth.ACCOUNTS;
+        if (accounts) b.append("import { auth } from './auth-client'\n");
+        b.append(resource("contract/api-request.ts"));
+        b.append(accounts ? "\nconst request = createRequest(auth)\n" : "\nconst request = createRequest()\n");
+        b.append("export const api = {\n");
         for (var a : c.api()) {
-            b.append(a.id()).append(": (params: Record<string,string>, body: ")
-                    .append(a.requestType() == null ? "undefined" : ref(a.requestType()))
+            b.append(a.id()).append(": (params: Record<string,string> = {}, ")
+                    .append(a.requestType() == null ? "body?: undefined" : "body: " + ref(a.requestType()))
                     .append(", token?: string) => request<").append(ref(a.responseType())).append(">(");
             b.append(json(a.path())).append(
                     ".replace(/:([A-Za-z][A-Za-z0-9_]*)/g, (_, key: string) => {if (!params[key]) throw new Error('Missing API parameter'); return encodeURIComponent(params[key])}), ")

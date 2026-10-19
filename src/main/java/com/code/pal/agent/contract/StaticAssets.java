@@ -1,6 +1,7 @@
 package com.code.pal.agent.contract;
 
 import com.code.pal.agent.workspace.ProjectFiles;
+import com.code.pal.agent.workspace.ProjectPaths;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -21,6 +22,7 @@ public final class StaticAssets {
 
     public static Map<String, String> files(UUID contract) {
         return Map.of("package.json", resource("package.json"), "package-lock.json", resource("package-lock.json"),
+                "design-system.css", read("starters/design-system.css"),
                 MARKER, JSON.writeValueAsString(Map.of("schemaVersion", 1, "contractId", contract.toString(),
                         "templateVersion", TEMPLATE, "compilerHash", revision())));
     }
@@ -51,11 +53,21 @@ public final class StaticAssets {
     }
 
     public static List<String> command() {
-        return List.of("node", "--input-type=module", "--eval", resource("build.mjs"));
+        return List.of("node", ProjectPaths.INTERNAL + "/static/compiler.mjs");
+    }
+
+    public static void prepare(ProjectFiles files, UUID project, String root) {
+        require(files, project, root);
+        // Send a path through Windows/WSL, never multiline JavaScript with quote-sensitive regexes.
+        files.writeText(project, root, ProjectPaths.INTERNAL + "/static/compiler.mjs", resource("build.mjs"));
     }
 
     private static String resource(String name) {
-        try (var stream = StaticAssets.class.getClassLoader().getResourceAsStream("starters/static-site/" + name)) {
+        return read("starters/static-site/" + name);
+    }
+
+    private static String read(String path) {
+        try (var stream = StaticAssets.class.getClassLoader().getResourceAsStream(path)) {
             if (stream == null) {
                 throw new IllegalStateException("Missing trusted static resource");
             }

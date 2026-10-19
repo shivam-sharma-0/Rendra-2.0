@@ -1,0 +1,3 @@
+Write index.html and local CSS/JS/assets in the root. Use Tailwind utility classes or local CSS; the backend compiles local rendra.css and injects its link. No runtime CDN scripts, framework or custom package scripts.
+
+design-system.css supplies overridable --app-* tokens plus optional app-container, app-section, app-stack, app-grid, app-card, app-button, app-field and app-muted classes, compiled into rendra.css. Use native HTML; no special component API is needed. Choose a product-specific palette and hierarchy, add labelled controls and working success/error states, and keep mobile layouts usable.

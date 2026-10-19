@@ -59,7 +59,8 @@ const compiler = await compile('@import "tailwindcss" source(none);', {
   customJsResolver() { throw Error('Project compiler plugins are forbidden') },
 })
 const theme = sources.find(file => file.name === `rendra/${marker.contractId}/theme.css`)
-const css = compiler.build(candidates) + '\n' + (theme?.content.toString('utf8') ?? '')
+const foundation = sources.find(file => file.name === 'design-system.css')
+const css = compiler.build(candidates) + '\n' + (foundation?.content.toString('utf8') ?? '') + '\n' + (theme?.content.toString('utf8') ?? '')
 const output = path.join(root, 'dist')
 const previous = await fs.lstat(output).catch(error => { if (error.code !== 'ENOENT') throw error; return null })
 if (previous?.isSymbolicLink()) throw Error('Artifact output cannot be a symlink')

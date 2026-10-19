@@ -4,6 +4,8 @@ import com.code.pal.agent.validation.BehaviorCriteria;
 import com.code.pal.agent.validation.BehaviorCriteria.BrowserAction;
 import com.code.pal.agent.validation.BehaviorCriteria.BrowserKind;
 import com.code.pal.project.spec.ApprovedSpec;
+import com.code.pal.agent.prompt.PromptLoader;
+import com.code.pal.agent.prompt.PromptLoader.Prompt;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -28,11 +30,7 @@ public final class SpecAcceptance {
     }
 
     public static String policy() {
-        return "\nRender the contract's data-testid hooks on the real semantic elements described by acceptanceTargets. "
-                + "Use space-separated data-testid tokens when one element has multiple targets. Preserve meaningful original ids/roles/attributes. "
-                + "State selectors such as :checked must reflect real native state, not hard-coded test results or hidden duplicate elements. "
-                + "Link checks assert href without visiting external/mailto/fragment destinations; internal route flows still navigate. "
-                + "The compiled acceptance is authoritative when an original selector suggests a different destination.";
+        return "\n" + PromptLoader.load(Prompt.SPEC_ACCEPTANCE);
     }
 
     /** The structured-contract form: strict link counts and the historical (blocking, unlabelled) provenance. */

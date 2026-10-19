@@ -55,6 +55,11 @@ public interface StackPack {
         return null;
     }
 
+    /** Fixed offline loader check before an installed dependency set can be reused. */
+    default List<String> dependencyCheck(ProjectFiles files, UUID projectId, String root) {
+        return List.of();
+    }
+
     /**
      * Validation commands for a project that has no trusted manifest yet (its first build): fixed
      * commands derived from the staged dependencies, never the staged scripts, so a change cannot
@@ -77,6 +82,10 @@ public interface StackPack {
      * applied to the project itself, so the values do not become project files.
      */
     default void applyBuildVariables(ProjectFiles files, UUID projectId, String root, Map<String, String> variables) {
+    }
+
+    /** Backend-owned support files in a disposable build copy; capability inspection stays read-only. */
+    default void prepareBuild(ProjectFiles files, UUID projectId, String root) {
     }
 
     /**

@@ -8,6 +8,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+import com.code.pal.agent.contract.StaticAssets;
 
 /**
  * Tested setup files for a new project, written by code instead of the model: the files that decide
@@ -18,10 +20,11 @@ import java.util.Optional;
 public enum Starter {
 
     VITE_REACT("vite-react"),
+    STATIC_SITE("static-site"),
     MERN("mern");
 
     private static final String BASE = "starters/";
-    public static final String TEMPLATE_VERSION = "2026-10-16.4";
+    public static final String TEMPLATE_VERSION = "2026-10-17.1";
     public static final String RUNTIME_IMAGE = "node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c";
     private static final List<String> VITE_FILES = List.of("package.json", "package-lock.json", "tsconfig.json", "vite.config.ts",
             "index.html", "src/main.tsx", "src/index.css", "src/router.tsx");
@@ -49,8 +52,13 @@ public enum Starter {
         files.put(".gitignore", read("vite-react/gitignore"));
         files.put(".nvmrc", "22.23.3\n");
         files.put("starter-runtime.json", read("runtime.json"));
+        if (this == STATIC_SITE) {
+            files.putAll(StaticAssets.files(UUID.randomUUID()));
+            return files;
+        }
         String prefix = this == MERN ? "client/" : "";
         for (String path : VITE_FILES) files.put(prefix + path, read("vite-react/" + path));
+        files.put(prefix + "src/design-system.css", read("design-system.css"));
         if (this == MERN) {
             // The client sends /api to the server in local development; the preview host forwards it.
             files.put("client/vite.config.ts", read("mern/client/vite.config.ts"));
@@ -62,10 +70,7 @@ public enum Starter {
 
     /** What the model writes next, returned with the tool result. */
     public String next() {
-        return this == MERN
-                ? "Write client/src/App.tsx (export default function App) and the client's components, then the API: "
-                        + "add routes under /api in server/src (register them in server/src/index.ts) and mongoose models."
-                : "Write src/App.tsx (export default function App) and your components under src/. Style with Tailwind classes.";
+        return read(id + "/next.md").strip();
     }
 
     private static String title(String title) {

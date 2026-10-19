@@ -21,4 +21,24 @@ class UnitGeneratorTest {
         assertThrows(IllegalArgumentException.class,()->UnitGenerator.validate(input,new UnitGenerator.Output(List.of())));
     }
     @Test void cancellationNeverTriggersCorrection() {var calls=new AtomicInteger();assertThrows(LlmCancelledException.class,()->generator.generate(input,model,r->{calls.incrementAndGet();throw new LlmCancelledException();}));assertEquals(1,calls.get());}
+
+    @Test void completeProductContextUsesTheConfiguredBoundAndRefusesOversizeBeforeSending() {
+        var properties = new AgentProperties();
+        var scoped = new UnitGenerator.Input(c, c.units().getFirst(), input.request(),
+                "Approved full product scope. ".repeat(1500), input.snapshot(), "");
+        var configured = new UnitGenerator(mapper, properties);
+        var calls = new AtomicInteger();
+        configured.generate(scoped, model, request -> {
+            calls.incrementAndGet();
+            return reply(mapper.writeValueAsString(new UnitGenerator.Output(List.of(
+                    new UnitGenerator.Delta("index.html", "absent", "<main>Calculator</main>")))));
+        });
+        assertEquals(1, calls.get());
+        properties.setContextBudgetChars(32000);
+        assertThrows(IllegalArgumentException.class, () -> configured.generate(scoped, model, request -> {
+            calls.incrementAndGet();
+            throw new AssertionError("Oversized input must not reach the provider");
+        }));
+        assertEquals(1, calls.get());
+    }
 }

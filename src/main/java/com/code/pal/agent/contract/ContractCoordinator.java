@@ -180,17 +180,17 @@ public final class ContractCoordinator {
                 root = "src/App.tsx";
             }
             String requiredRoot = root != null && !files.regularFile(ctx.projectId(), ctx.root(), root) ? root : null;
-            var input = new ContractPlanner.Input(UUID.randomUUID(), request, approved.requirementsJson(), projectMap,
+            var input = new ContractPlanner.Input(UUID.randomUUID(), request, ApprovedProductScope.planningRequirements(approved, mapper), projectMap,
                     choice, allowed, requiredRoot);
             BuildContract contract;
             if (planning == null) {
-                contract = planner.plan(input, props.preferredModel(run.getMode()), checkedCall,
+                contract = planner.plan(input, props.preferredModel(ProjectType.PLAN), checkedCall,
                         proposal -> store.validateSources(ctx.projectId(), proposal));
             } else {
                 var layout = new DeterministicPlan(mapper).plan(planning.spec(), planning.budget());
                 contract = layout.isPresent() ? ContractPlans.fromLayout(input.id(), planning.spec(), layout.get(), allowed)
                         : planner.plan(new ContractPlanner.SpecInput(input, planning.spec(), planning.budget()),
-                                props.preferredModel(run.getMode()), checkedCall,
+                                props.preferredModel(ProjectType.PLAN), checkedCall,
                                 proposal -> store.validateSources(ctx.projectId(), proposal));
                 contract = ContractPlans.sealInterfaces(contract, render(ctx, contract));
                 requireBasis(ctx, basis);
@@ -541,7 +541,8 @@ public final class ContractCoordinator {
     }
 
     private Map<String, String> render(AgentContext ctx, BuildContract contract) {
-        return scaffold.render(contract, "App", path -> files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null);
+        return scaffold.render(contract, "App", path -> files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null,
+                ctx.projectId());
     }
 
     private void requireSpec(AgentContext ctx, ContractStore.Binding basis, ApprovedSpec spec) {

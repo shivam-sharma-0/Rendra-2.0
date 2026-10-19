@@ -28,6 +28,10 @@ public final class FixAttempts {
     }
 
     public boolean claim(AgentRun run, BuildContract contract, DeterministicFixers.Fix fix, Runnable requireCurrent) {
+        return claim(run, ContractIdentity.hash(contract, mapper), fix, requireCurrent);
+    }
+
+    public boolean claim(AgentRun run, String contractHash, DeterministicFixers.Fix fix, Runnable requireCurrent) {
         boolean[] claimed = {false};
         leases.guarded(run.getProjectId(), () -> {
             requireCurrent.run();
@@ -35,7 +39,6 @@ public final class FixAttempts {
                 throw new IllegalStateException("Fixer requires an accepted request identity");
             }
             String root = ".codepal/fix-attempts/" + run.getId();
-            String contractHash = ContractIdentity.hash(contract, mapper);
             var signatures = new TreeSet<String>();
             if (files.exists(run.getProjectId(), root, "attempts.json")) {
                 try {

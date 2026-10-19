@@ -216,6 +216,20 @@ class ToolLoopAcceptanceTest {
                 new ApprovedSpec.Desired(ApprovedSpec.RenderStack.VITE, ApprovedSpec.Storage.SUPABASE, ApprovedSpec.Auth.NONE),
                 ApprovedSpec.Readiness.CONNECTION_REQUIRED);
         assertThrows(IllegalArgumentException.class, () -> ToolLoopAcceptance.from(spec));
+        assertThrows(IllegalArgumentException.class, () -> ToolLoopAcceptance.browserForSupabase(spec));
+    }
+
+    @Test
+    void dedicatedSupabaseAdapterCompilesOnlyAdvisoryBrowserEvidence() {
+        var spec = SpecFixtures.envelope(SpecFixtures.approved().spec(),
+                new ApprovedSpec.Desired(ApprovedSpec.RenderStack.VITE, ApprovedSpec.Storage.SUPABASE, ApprovedSpec.Auth.ACCOUNTS),
+                ApprovedSpec.Readiness.READY);
+        var compiled = ToolLoopAcceptance.browserForSupabase(spec).orElseThrow();
+        assertTrue(compiled.criteria().modelSpec());
+        assertFalse(compiled.criteria().browser().isEmpty());
+        assertTrue(compiled.criteria().api().isEmpty());
+        assertFalse(compiled.criteria().authRequired(), "Browser assertions alone cannot certify accounts");
+        assertThrows(IllegalArgumentException.class, () -> ToolLoopAcceptance.browserForSupabase(SpecFixtures.browser()));
     }
 
     @Test

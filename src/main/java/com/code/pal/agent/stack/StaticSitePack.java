@@ -20,6 +20,11 @@ public class StaticSitePack implements StackPack {
     }
 
     @Override
+    public void prepareBuild(ProjectFiles files, UUID projectId, String root) {
+        if (files.exists(projectId, root, StaticAssets.MARKER)) StaticAssets.prepare(files, projectId, root);
+    }
+
+    @Override
     public int detect(ProjectFiles files, UUID projectId, String root) {
         if (files.exists(projectId, root, StaticAssets.MARKER)) {
             return 30;

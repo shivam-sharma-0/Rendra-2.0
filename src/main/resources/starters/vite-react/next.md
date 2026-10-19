@@ -1,0 +1,3 @@
+Write src/App.tsx (export default function App) and your components under src/. Style with Tailwind classes.
+
+The starter imports src/design-system.css: ordinary CSS tokens and optional app-container, app-section, app-stack, app-grid, app-card, app-button, app-field and app-muted classes. Use native HTML with className; these are not React components and accept no special props. Override --app-* tokens for this product's palette and typography, then compose a distinct layout suited to its content. Keep local font fallbacks, visible keyboard focus, labelled fields, empty/loading/error/success states and responsive layouts. CSS classes are optional; Tailwind can override the base layers. Finish the requested interactions and data flow before decorative extras.

@@ -4,8 +4,8 @@ import com.code.pal.agent.validation.BehaviorCriteria;
 import tools.jackson.databind.ObjectMapper;
 import java.util.*;
 
-/** Adds a required array-list assertion from an existing created-record/read fixture.
- * No endpoint, permission, implementation or limit is added. The full contract is validated afterwards. */
+/** Completes bounded MERN acceptance ownership and removes unit claims on coordinator-owned files.
+ * It adds no endpoint, permission, implementation or acceptance check beyond the existing CRUD fixture. */
 final class ContractAcceptanceCompiler {
     private ContractAcceptanceCompiler() {
     }
@@ -23,7 +23,7 @@ final class ContractAcceptanceCompiler {
         checks.forEach(step -> ids.add(step.id()));
         criteria.browser().forEach(step -> ids.add(step.id()));
         List<Map<String, Object>> units = (List<Map<String, Object>>) data.get("units");
-        boolean changed = false;
+        boolean changed = removeCoordinatorOwnedPaths(units);
         for (Object value : (List<?>) data.get("api")) {
             var api = mapper.convertValue(value, BuildContract.Api.class);
             if (!api.method().equals("GET") || api.path().contains(":") || !api.responseType().endsWith("[]")
@@ -45,7 +45,7 @@ final class ContractAcceptanceCompiler {
                 if (owner == null)
                     continue;
                 var assigned = new ArrayList<>((List<String>) owner.get("acceptanceIds"));
-                if (assigned.size() >= 24)
+                if (assigned.size() >= 48)
                     continue;
                 String id = "collection_" + api.id();
                 if (ids.contains(id))
@@ -60,6 +60,7 @@ final class ContractAcceptanceCompiler {
                 break;
             }
         }
+        changed |= normalizeWrappedListPointers(checks, data, mapper);
         // Responsibility is routing metadata, never a grant. Infer only from already-declared
         // exact file/API owners, retaining every required check and revalidating all ownership.
         var declared = ((List<?>) data.get("api")).stream()
@@ -94,6 +95,53 @@ final class ContractAcceptanceCompiler {
     }
 
     @SuppressWarnings("unchecked")
+    private static boolean removeCoordinatorOwnedPaths(List<Map<String, Object>> units) {
+        boolean changed = false;
+        for (Map<String, Object> unit : units) {
+            List<String> paths = new ArrayList<>((List<String>) unit.get("ownedPaths"));
+            if (paths.removeIf(path -> BuildContract.reserved(path, BuildContract.Stack.MERN))) {
+                unit.put("ownedPaths", paths);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean normalizeWrappedListPointers(List<BehaviorCriteria.ApiStep> checks, Map<String, Object> data,
+            ObjectMapper mapper) {
+        List<BuildContract.Api> apis = ((List<?>) data.get("api")).stream()
+                .map(value -> mapper.convertValue(value, BuildContract.Api.class)).toList();
+        List<Map<String, Object>> types = (List<Map<String, Object>>) data.get("types");
+        boolean changed = false;
+        for (int index = 0; index < checks.size(); index++) {
+            var check = checks.get(index);
+            if (check.kind() != BehaviorCriteria.ApiKind.READ || check.assertPointer() == null
+                    || !check.assertPointer().matches("/[0-9]+(?:/.*)?"))
+                continue;
+            var matching = apis.stream().filter(api -> api.method().equals(check.method())
+                    && BuildContract.matchesApiPath(api.path(), check.path())).toList();
+            if (matching.size() != 1 || matching.getFirst().responseType().endsWith("[]"))
+                continue;
+            String responseType = matching.getFirst().responseType();
+            var declared = types.stream().filter(type -> responseType.equals(type.get("name"))).toList();
+            if (declared.size() != 1)
+                continue;
+            List<Map<String, Object>> arrayFields = ((List<Map<String, Object>>) declared.getFirst().get("fields"))
+                    .stream().filter(field -> field.get("kind") instanceof String kind && kind.endsWith("_ARRAY"))
+                    .toList();
+            if (arrayFields.size() != 1)
+                continue;
+            String field = (String) arrayFields.getFirst().get("name");
+            checks.set(index, new BehaviorCriteria.ApiStep(check.id(), check.kind(), check.method(), check.path(),
+                    check.body(), check.status(), check.tokenVariable(), check.captureVariable(), check.capturePointer(),
+                    "/" + field + check.assertPointer(), check.assertValue()));
+            changed = true;
+        }
+        return changed;
+    }
+
+    @SuppressWarnings("unchecked")
     private static boolean assign(List<Map<String, Object>> units, String owner, String id) {
         if (owner == null || units.stream().anyMatch(unit -> ((List<?>) unit.get("acceptanceIds")).contains(id)))
             return false;
@@ -101,7 +149,7 @@ final class ContractAcceptanceCompiler {
         if (unit == null)
             return false;
         var ids = new ArrayList<>((List<String>) unit.get("acceptanceIds"));
-        if (ids.size() >= 24)
+        if (ids.size() >= 48)
             return false;
         ids.add(id);
         unit.put("acceptanceIds", ids);

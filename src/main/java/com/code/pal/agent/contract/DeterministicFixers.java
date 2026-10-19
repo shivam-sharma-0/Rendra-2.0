@@ -25,9 +25,18 @@ public final class DeterministicFixers {
     }
 
     public Fix plan(BuildContract contract, Map<String, String> snapshot, Set<String> defects) {
+        return plan(contract.id().toString(), contract.schemaVersion() == 2 && contract.stack() == BuildContract.Stack.VITE,
+                snapshot, defects);
+    }
+
+    public Fix planVite(String identity, Map<String, String> snapshot, Set<String> defects) {
+        return plan(identity, true, snapshot, defects);
+    }
+
+    private Fix plan(String identity, boolean vite, Map<String, String> snapshot, Set<String> defects) {
         var replacements = new LinkedHashMap<String, String>();
         boolean refresh = false;
-        if (contract.schemaVersion() == 2 && contract.stack() == BuildContract.Stack.VITE) {
+        if (vite) {
             var trusted = Starter.VITE_REACT.files("App");
             if (defects.contains("PREVIEW_ENTRYPOINT_MISSING") && !snapshot.containsKey("index.html")
                     && snapshot.containsKey("src/main.tsx")) {
@@ -63,7 +72,7 @@ public final class DeterministicFixers {
                 }
             }
         }
-        String signature = ContractIdentity.hashValue(Map.of("contract", contract.id(), "revision", ContractScaffold.revision(),
+        String signature = ContractIdentity.hashValue(Map.of("contract", identity, "revision", ContractScaffold.revision(),
                 "input", new TreeMap<>(snapshot), "defects", new TreeSet<>(defects)), mapper);
         return new Fix(replacements, refresh, signature);
     }

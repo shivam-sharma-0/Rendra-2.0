@@ -38,6 +38,22 @@ class ContractCoordinatorTest {
     }
     ValidationReport report(boolean pass,List<ValidationCheck> checks){return new ValidationReport(ValidationOperation.BUILD,true,pass,pass,false,0,"none","",List.of(),List.of(),0,3,1,"Fixture",checks);}
     AgentRun run(ProjectType mode){return AgentRun.builder().id(UUID.randomUUID()).projectId(project.projectId).userId(7L).mode(mode).status(RunStatus.RUNNING).build();}
+    @Test
+    void buildContractsUseThePlanningRouteInsteadOfTheCodingRoute() {
+        props.getModels().setPlan(List.of("openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"));
+        props.getModels().setBuild(List.of("mistral:fixture-coder"));
+        var planner = mock(ContractPlanner.class);
+        when(planner.plan(any(ContractPlanner.Input.class), any(), any(), any())).thenReturn(c);
+        when(store.create(any(), any(), any(), any())).thenThrow(new IllegalStateException("Plan observed"));
+        var subject = new ContractCoordinator(store, planner, new ContractScaffold(mapper), new UnitGenerator(mapper),
+                memory, decisions, project.files, changes, validation, criteria, checkpoints, props, mapper);
+        var run = run(ProjectType.BUILD);
+        assertThrows(IllegalStateException.class, () -> subject.execute(context(run), run,
+                RunSize.of(SizeTier.M, List.of(), props), "Build the approved application", "map",
+                request -> fail("Mock planner must not send a provider call"), () -> {}, title -> {}));
+        verify(planner).plan(any(ContractPlanner.Input.class), eq(new AgentProperties.ModelSelection(
+                "openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free")), any(), any());
+    }
     @Test void approvedMernUsesBoundAcceptanceWithOptionalStructuredFlagOff() {
         props.setStructuredContracts(false);
         when(decisions.state(project.projectId)).thenReturn(new BuildDecisions.State(new BuildDecisions.Choice(1,BuildDecisions.Storage.MERN,BuildDecisions.Auth.NONE,null),new BuildDecisions.Available(true,null),null));

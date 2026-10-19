@@ -8,6 +8,26 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ContractScaffoldTest {
     final ContractScaffold scaffold=new ContractScaffold(new ObjectMapper());
+    @Test void accountClientUsesStableProjectScopeAndLeavesPasswordsOutOfSessionState() throws Exception {
+        var mapper = new ObjectMapper();
+        var contract = ContractFixtures.accounts();
+        UUID project = UUID.randomUUID();
+        var files = scaffold.render(contract, "Fixture", path -> null, project);
+        String client = files.get(contract.clientRoot() + "auth-client.ts");
+        assertNotNull(client);
+        Map<String, Object> changed = mapper.readValue(mapper.writeValueAsString(contract), Map.class);
+        changed.put("id", UUID.randomUUID().toString());
+        var next = mapper.convertValue(changed, BuildContract.class);
+        assertEquals(client, scaffold.render(next, "Fixture", path -> null, project).get(next.clientRoot() + "auth-client.ts"));
+        var other = scaffold.render(contract, "Fixture", path -> null, UUID.randomUUID());
+        assertNotEquals(client, other.get(contract.clientRoot() + "auth-client.ts"));
+        Path evidence = Path.of("target/codex-contract-scaffold/client-auth.json");
+        Files.createDirectories(evidence.getParent());
+        Files.writeString(evidence, mapper.writeValueAsString(Map.of("auth", client,
+                "api", files.get(contract.clientRoot() + "api.ts"),
+                "otherProjectAuth", other.get(contract.clientRoot() + "auth-client.ts"),
+                "getMethod", contract.api().stream().filter(api -> api.method().equals("GET")).findFirst().orElseThrow().id())));
+    }
     @Test void accountsAlwaysInstallOwnerContextAndOwnerBoundModels() {
         var c=ContractFixtures.accounts();var files=scaffold.render(c,"Fixture",path->null);
         assertTrue(files.get(c.serverRoot()+"register.ts").contains("requireAccount, bindRecordOwner, itemsRouter"));
@@ -16,7 +36,7 @@ class ContractScaffoldTest {
     @Test void freshDeclaredPageIsWiredToTheRootWithoutAnotherGenerationUnit(){
         var c=ContractFixtures.vite();var page=new BuildContract.Unit("ui","Build page",List.of("src/Items.tsx"),List.of(),List.of(),List.of("ui"));
         var routed=new BuildContract(c.schemaVersion(),c.id(),c.stack(),c.storage(),c.auth(),c.limits(),c.theme(),List.of(new BuildContract.Route("/","src/Items.tsx","ui")),c.types(),c.models(),c.api(),c.assets(),c.envNames(),List.of(page),c.acceptance());
-        var output=scaffold.render(routed,"Fixture",path->null);String root=output.get("src/App.tsx");assertTrue(root.contains("import { routes }"));assertTrue(root.contains("<Component />"));assertFalse(root.contains("PendingApp"));assertTrue(root.contains("theme.css"));
+        var output=scaffold.render(routed,"Fixture",path->null);String root=output.get("src/App.tsx");assertTrue(root.contains("import { routes }"));assertTrue(root.contains("<Component params={params} />"));assertFalse(root.contains("PendingApp"));assertTrue(root.contains("theme.css"));
         assertFalse(scaffold.render(routed,"Fixture",path->path.equals("src/App.tsx")?"existing root":null).containsKey("src/App.tsx"));
     }
     @Test void deterministicNewStacksHaveOneThemeMatchingSharedInterfacesAndPendingRouters() throws Exception {

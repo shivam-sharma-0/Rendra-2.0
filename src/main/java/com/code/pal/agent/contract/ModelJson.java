@@ -52,6 +52,14 @@ public final class ModelJson {
 
     /** Contract outputs retain their stricter no-prose policy. */
     public static String object(String content) {
+        String text = unfenced(content);
+        if (!text.equals(extractObject(text))) {
+            throw new IllegalArgumentException("Expected one JSON object without prose");
+        }
+        return text;
+    }
+
+    static String unfenced(String content) {
         requireCapacity(content);
         String text = content.strip();
         if (text.startsWith("```")) {
@@ -61,9 +69,6 @@ public final class ModelJson {
                 throw new IllegalArgumentException("Invalid JSON fence");
             }
             text = text.substring(newline + 1, text.length() - 3).strip();
-        }
-        if (!text.equals(extractObject(text))) {
-            throw new IllegalArgumentException("Expected one JSON object without prose");
         }
         return text;
     }

@@ -23,6 +23,12 @@ public class NodePack implements StackPack {
 
     private final ObjectMapper objectMapper;
 
+    @Override
+    public List<String> dependencyCheck(ProjectFiles files, UUID projectId, String root) {
+        return declaredDependencies(files, projectId, root).contains("vite")
+                ? List.of("node", "node_modules/vite/bin/vite.js", "--version") : List.of();
+    }
+
     public NodePack(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
@@ -178,7 +184,7 @@ public class NodePack implements StackPack {
                         ? List.of("node", "node_modules/typescript/bin/tsc", "-b", "--pretty", "false")
                         : List.of("node", "node_modules/typescript/bin/tsc", "--noEmit", "--pretty", "false"))
                     : null;
-            case BUILD -> declared.contains("vite") ? List.of("node", "node_modules/vite/bin/vite.js", "build") : null;
+            case BUILD -> declared.contains("vite") ? diagnosticBuild(files, projectId, stagedRoot).command() : null;
             default -> null;
         };
         if (command == null) return CommandPlan.unavailable(operation, capabilities, "No fixed command for this project");

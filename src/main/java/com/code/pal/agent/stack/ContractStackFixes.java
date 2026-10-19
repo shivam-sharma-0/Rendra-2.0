@@ -5,6 +5,8 @@ import com.code.pal.agent.contract.BuildContract;
 import com.code.pal.agent.contract.ContractFixes;
 import com.code.pal.agent.contract.DeterministicFixers;
 import com.code.pal.agent.contract.FixAttempts;
+import com.code.pal.agent.contract.ContractIdentity;
+import com.code.pal.agent.starter.Starter;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.tool.AgentContext;
@@ -16,6 +18,8 @@ import com.code.pal.project.exception.WorkflowStageException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.core.JacksonException;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -61,7 +65,34 @@ public class ContractStackFixes implements ContractFixes {
 
     @Override
     public boolean tryFix(AgentContext ctx, AgentRun run, BuildContract contract, ValidationReport failure) {
-        if (contract.schemaVersion() != 2 || run.getRequestFingerprint() == null) {
+        if (contract.schemaVersion() != 2) {
+            return false;
+        }
+        return tryFix(ctx, run, contract, ContractIdentity.hash(contract, mapper), failure, () -> {});
+    }
+
+    /** Production tool-loop adapter; it does not enable contract planning or execute generated commands. */
+    public boolean tryFix(AgentContext ctx, AgentRun run, ValidationReport failure, Runnable beforeIo) {
+        if (!files.regularFile(ctx.projectId(), ctx.root(), "package.json")) {
+            return false;
+        }
+        JsonNode manifest;
+        try {
+            manifest = mapper.readTree(new String(files.readBytes(ctx.projectId(), ctx.root(), "package.json", 256_000),
+                    StandardCharsets.UTF_8));
+        } catch (JacksonException invalid) {
+            return false;
+        }
+        if (!manifest.path("dependencies").has("vite") && !manifest.path("devDependencies").has("vite")) {
+            return false;
+        }
+        String identity = ContractIdentity.hashValue(Map.of("route", "tool-loop-vite", "starter", Starter.TEMPLATE_VERSION), mapper);
+        return tryFix(ctx, run, null, identity, failure, beforeIo);
+    }
+
+    private boolean tryFix(AgentContext ctx, AgentRun run, BuildContract contract, String identity,
+            ValidationReport failure, Runnable beforeIo) {
+        if (run.getRequestFingerprint() == null) {
             return false;
         }
         UUID project = ctx.projectId();
@@ -76,20 +107,26 @@ public class ContractStackFixes implements ContractFixes {
             }
         }
         var defects = defects(failure, snapshot);
+        if (contract == null && !Starter.VITE_REACT.files("App").get("src/main.tsx").equals(snapshot.get("src/main.tsx"))) {
+            // An arbitrary custom bootstrap may expect a different mount node; do not invent its entrypoint.
+            defects.remove("PREVIEW_ENTRYPOINT_MISSING");
+        }
         if (defects.isEmpty()) {
             return false;
         }
-        var fix = new DeterministicFixers(mapper).plan(contract, snapshot, defects);
+        var fixer = new DeterministicFixers(mapper);
+        var fix = contract == null ? fixer.planVite(identity, snapshot, defects) : fixer.plan(contract, snapshot, defects);
         if (fix.replacements().isEmpty() && !fix.refreshLockfiles()) {
             return false;
         }
+        beforeIo.run();
         int revision = view.revision();
         Runnable requireCurrent = () -> {
             if (changes.view(ctx).revision() != revision) {
                 throw new WorkflowStageException("Staged changes moved before the fix was applied");
             }
         };
-        if (!new FixAttempts(files, leases, mapper).claim(run, contract, fix, requireCurrent)) {
+        if (!new FixAttempts(files, leases, mapper).claim(run, identity, fix, requireCurrent)) {
             return false;
         }
         var writes = new LinkedHashMap<>(fix.replacements());
