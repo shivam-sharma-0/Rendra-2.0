@@ -6,6 +6,7 @@ import com.code.pal.agent.prompt.PromptLoader;
 import com.code.pal.agent.prompt.PromptLoader.Prompt;
 import com.code.pal.agent.plan.PlanningModelCalls;
 import com.code.pal.agent.validation.BehaviorCriteria;
+import com.code.pal.agent.validation.AcceptanceStepException;
 import com.code.pal.project.exception.WorkflowStageException;
 import com.code.pal.project.capability.BuildDecisions;
 import org.springframework.stereotype.Component;
@@ -110,6 +111,7 @@ public final class ContractPlanner {
                 result = checkedCall.apply(request);
             }
             String proposal = null;
+            Map<?, ?> proposalData = null;
             boolean validatingSources = false;
             try {
                 if (result == null)
@@ -138,6 +140,7 @@ public final class ContractPlanner {
                 String content = ModelJson.object(body);
                 Map<?, ?> object = mapper.readerFor(Map.class).with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
                         .readValue(content);
+                proposalData = object;
                 var fields = object.keySet();
                 if (!fields.equals(Set.of("schemaVersion", "id", "stack", "storage", "auth", "limits", "theme",
                         "routes", "types", "models", "api", "assets", "envNames", "units", "acceptance")))
@@ -166,7 +169,7 @@ public final class ContractPlanner {
             } catch (RuntimeException invalid) {
                 if (validatingSources && !(invalid instanceof WorkflowStageException))
                     throw invalid;
-                String reason = schemaFeedback(invalid);
+                String reason = schemaFeedback(invalid, proposalData);
                 log.info("planner_contract_rejected attempt={} reason={}", attempt + 1, reason);
                 if (attempt == 1)
                     throw new IllegalArgumentException(
@@ -240,6 +243,10 @@ public final class ContractPlanner {
 
     /** Only backend-validator messages are safe; Jackson/provider messages can include model text. */
     static String schemaFeedback(Throwable failure) {
+        return schemaFeedback(failure, null);
+    }
+
+    static String schemaFeedback(Throwable failure, Map<?, ?> proposal) {
         String decoding = null;
         Set<String> fields = Set.of("schemaVersion", "id", "stack", "storage", "auth", "limits", "modelCalls",
                 "toolCalls", "outputTokens", "timeoutMs", "theme", "routes", "types", "models", "api", "assets",
@@ -250,6 +257,16 @@ public final class ContractPlanner {
                 "body", "status", "tokenVariable", "captureVariable", "capturePointer", "assertPointer", "assertValue",
                 "files", "specId", "specRevision", "specHash", "planRevision", "templateVersion", "replacesContractId", "batches");
         for (int depth = 0; failure != null && depth < 8; depth++, failure = failure.getCause()) {
+            if (failure instanceof AcceptanceStepException step) {
+                var routes = new ArrayList<String>();
+                if (proposal != null && proposal.get("routes") instanceof List<?> declared)
+                    for (Object value : declared)
+                        if (value instanceof Map<?, ?> route && route.get("path") instanceof String path
+                                && path.matches("/[A-Za-z0-9_/:.-]{0,120}") && !path.contains("..")
+                                && !path.contains("//") && routes.size() < 20 && !routes.contains(path))
+                            routes.add(path);
+                return step.feedback(routes);
+            }
             var trace = failure.getStackTrace();
             String origin = trace.length == 0 ? "" : trace[0].getClassName();
             if ((origin.startsWith(BuildContract.class.getName()) || origin.startsWith(BehaviorCriteria.class.getName())

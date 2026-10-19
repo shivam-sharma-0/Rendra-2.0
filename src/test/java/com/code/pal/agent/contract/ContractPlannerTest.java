@@ -13,6 +13,40 @@ class ContractPlannerTest {
     final BuildContract contract=BuildContractTest.valid(List.of(BuildContractTest.unit("page","index.html",List.of())));
     final ContractPlanner.Input input=new ContractPlanner.Input(contract.id(),"Calculator","Approved calculator","index.html",new BuildDecisions.Choice(1,contract.storage(),contract.auth(),null),contract.limits());
     final AgentProperties.ModelSelection model=new AgentProperties.ModelSelection("fake","fake");
+
+    @Test void missingRouteFeedbackNamesTheExactStepAndRoutesInTheCorrection() {
+        var c = ContractFixtures.mern();
+        Map<String, Object> proposal = mapper.readValue(mapper.writeValueAsString(c), Map.class);
+        var routes = (List<Map<String, Object>>) proposal.get("routes");
+        for (String path : List.of("/login", "/signup", "/tasks/:id"))
+            routes.add(Map.of("path", path, "componentPath", "client/src/App.tsx", "owner", "ui"));
+        var action = new LinkedHashMap<String, Object>();
+        action.put("id", "a1"); action.put("kind", "ASSERT_ROUTE"); action.put("value", null);
+        ((Map<String, Object>) proposal.get("acceptance")).put("browser", List.of(action));
+        var fresh = new ContractPlanner.Input(c.id(), "Build Items", "Approved", "Map",
+                new BuildDecisions.Choice(1, c.storage(), c.auth(), null), c.limits());
+        var calls = new AtomicInteger();
+        assertEquals(c, planner.plan(fresh, model, request -> {
+            if (calls.incrementAndGet() == 1) return reply(mapper.writeValueAsString(proposal));
+            String expected = "browser a1 step 1 ASSERT_ROUTE: value is null; must match one of the contract routes: "
+                    + "/, /login, /signup, /tasks/:id";
+            assertTrue(request.messages().getLast().content().contains(expected));
+            return reply(mapper.writeValueAsString(c));
+        }));
+        assertEquals(2, calls.get());
+    }
+
+    @Test void apiFeedbackNamesTheExactFieldWithoutEchoingRejectedModelData() {
+        var c = ContractFixtures.mern();
+        Map<String, Object> proposal = mapper.readValue(mapper.writeValueAsString(c), Map.class);
+        var api = (List<Map<String, Object>>) ((Map<?, ?>) proposal.get("acceptance")).get("api");
+        api.get(1).put("method", "PRIVATE_INVALID_METHOD");
+        RuntimeException error = assertThrows(RuntimeException.class, () ->
+                ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(proposal), mapper));
+        String feedback = ContractPlanner.schemaFeedback(error, proposal);
+        assertEquals("api create step 2 CREATE: method is invalid; must be GET, POST, PUT, PATCH or DELETE", feedback);
+        assertFalse(feedback.contains("PRIVATE_INVALID_METHOD"));
+    }
     @Test void freshRootOwnershipUsesTheExistingCorrectionBudget(){
         var c=ContractFixtures.mern();Map<String,Object> bad=mapper.readValue(mapper.writeValueAsString(c),Map.class);
         var units=(List<Map<String,Object>>)bad.get("units");units.getLast().put("ownedPaths",List.of("client/src/Items.tsx"));
