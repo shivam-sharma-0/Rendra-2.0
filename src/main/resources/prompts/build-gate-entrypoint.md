@@ -1,0 +1,1 @@
+BUILD GATE: The project is not previewable yet. Create a functional frontend entrypoint at index.html, client/index.html, client/public/index.html, frontend/index.html, or a supported dist/build index.html, then finish the build.

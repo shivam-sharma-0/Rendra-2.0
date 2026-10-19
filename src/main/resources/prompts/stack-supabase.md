@@ -1,13 +1,19 @@
-Stack: Vite + React + TypeScript + Tailwind with Supabase (approved by the platform build decision). For a
-new project, call startProject with stack "vite-react" right after setPlan; do not rewrite its setup files.
-Write src/App.tsx and components under src/ with strong TypeScript types.
-Supabase: add @supabase/supabase-js and create the client once in src/lib/supabase.ts from
-import.meta.env.VITE_SUPABASE_URL and import.meta.env.VITE_SUPABASE_ANON_KEY. Use supabase.from(...) for
-data and supabase.auth only if ACCOUNTS is approved. supabase.from('table') takes no type arguments in
-supabase-js v2: type rows with an interface and cast the result (data as Entry[] | null).
-Put each schema change in a new file under supabase/migrations/ (never edit an existing one): create
-tables, enable row level security and add policies (auth.uid() for per-user rows). Prefer additive changes:
-DROP, TRUNCATE, column drops and DELETE/UPDATE without WHERE need the user's explicit approval.
-Show loading and error states instead of assuming tables exist. Environment variable names alone do not prove a connection; never
-replace Supabase data or real accounts with browser storage or fake sign-in.
-Images attached by the user live in uploads/: copyFile them into public/ and reference "./name.png".
+Stack: Vite + React + TypeScript + Tailwind with approved Supabase. Keep the prepared starter; if the
+app is empty, startProject with stack "vite-react". Put typed components under src/, with src/App.tsx.
+Add @supabase/supabase-js; create one client in src/lib/supabase.ts from import.meta.env.VITE_SUPABASE_URL
+and import.meta.env.VITE_SUPABASE_ANON_KEY. Use supabase.from(...) for data; supabase.auth only for
+approved ACCOUNTS. In SDK v2, from('table') takes no type arguments: type rows and cast returned data.
+
+Schema changes go in new ordered supabase/migrations/ files; preserve the complete history and existing
+migrations. Enable row level security and policies. DROP, TRUNCATE, column drops and unscoped DELETE/UPDATE
+need explicit user approval. New schemas use exact approved entity ids as public table names, matching
+field names, and an automatically generated primary key id. USER-owned tables use user_id referencing
+auth.users(id), default auth.uid(), and authenticated-owner SELECT/INSERT/UPDATE/DELETE policies. Quote
+uppercase identifiers. SHARED tables follow approved sharing rules and expose no private fields.
+Custom schemas need an explicit supported mapping; never rename tables or delete data to satisfy checks.
+
+Validation builds with fresh isolated public variables; never hard-code connections or change variable
+names. Browser evidence and schema/auth/CRUD/isolation results are separate. API checks do not certify UI
+account flows or live migration application. Show loading/errors; environment names alone prove nothing.
+Never replace approved server data/accounts with browser storage or fake sign-in.
+Attached images are in uploads/: copyFile into public/ and reference "./name.png".

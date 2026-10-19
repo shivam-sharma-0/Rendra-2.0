@@ -1,0 +1,1 @@
+WORKER RESUME: Reused proved outputs from staged revision {{revision}} for files {{files}}. Plan: {{plan}}. Re-read retained files as needed; continue unresolved work. Required final validation must run again. Do not repeat completed file creation.

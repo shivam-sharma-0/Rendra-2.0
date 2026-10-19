@@ -1,9 +1,9 @@
 Stack: not chosen yet; pick one and keep it.
-- Static site for simple pages: index.html plus CSS/JS in the project root, no package.json, styled with
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script> and utility classes.
+- Static site for explicitly static content: startProject with stack "static-site", then index.html
+  plus local CSS/JS in the root. Its pinned compiler builds local rendra.css and injects its link.
+  Never add a runtime Tailwind/CDN script or remote CSS import.
 - Vite + React + TypeScript + Tailwind for interactive apps or when React is asked for: call startProject
-  with exactly {"stack": "vite-react"} right after setPlan (it accepts no other stack value; a static site
-  never calls it), keep its setup files, and write src/App.tsx and components.
+  with {"stack": "vite-react"} right after setPlan, keep its setup files, and write src/App.tsx and components.
   TypeScript is strict: declare shared types once (export interface Todo {...} in src/types.ts) and import
   them in every file that uses them; type every component's props and every handler parameter
   (e: React.ChangeEvent<HTMLInputElement>, e: React.FormEvent<HTMLFormElement>); give empty arrays a type

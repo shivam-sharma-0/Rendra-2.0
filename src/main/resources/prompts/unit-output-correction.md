@@ -1,0 +1,1 @@
+Return only the complete files object. Use exact owned paths and snapshot expectedVersion, no tools or shared/foreign/asset writes. Validator: {{reason}}. Keep the supplied import/navigation policy. This is the only correction.

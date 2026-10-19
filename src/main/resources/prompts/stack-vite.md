@@ -7,6 +7,8 @@ TypeScript is strict: declare shared types once (export interface Todo {...} in 
 them in every file that uses them; type every component's props and every handler parameter
 (e: React.ChangeEvent<HTMLInputElement>, e: React.FormEvent<HTMLFormElement>); give empty arrays a type
 (useState<Todo[]>([])); never use a name you have not declared or imported.
+Keep runtime imports at module scope. Import useState/useEffect by name before using them; React.useState
+needs a declared React namespace import. Reuse existing state and handlers rather than appending copies.
 For several pages in a new app, import { Router, Routes, Route, Link } from './router' (the starter's
 hash router, with a built-in "Page not found" page); never import react-router-dom. If package.json
 already lists a router, keep using it.
