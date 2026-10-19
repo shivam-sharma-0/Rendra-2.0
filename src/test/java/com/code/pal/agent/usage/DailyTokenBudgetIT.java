@@ -36,6 +36,34 @@ class DailyTokenBudgetIT {
     }
     private DailyTokenBudget.Usage usage() { return budget.usage(user, LocalDate.of(2026,10,10)); }
 
+    @Test
+    void optionalUsageAndVersionedPriceSurviveSettlementWithoutChangingTokenCharges() {
+        var properties = new com.code.pal.agent.config.AgentProperties();
+        var price = new com.code.pal.agent.config.AgentProperties.ModelPrice();
+        price.setRevision("fixture-only");
+        price.setInputPerMillion(new java.math.BigDecimal("2"));
+        price.setCachedInputPerMillion(new java.math.BigDecimal("0.5"));
+        price.setOutputPerMillion(new java.math.BigDecimal("4"));
+        properties.getModelPricing().put("fake:model",price);
+        budget.usePricing(new ModelCallPricing(properties));
+        try {
+            var request=request(60,1000);budget.reserve(request);budget.markSent(request.id());
+            budget.finishAttempt(request.id(),new LlmClient.Usage(12,3,8,2),"OK",null,5);
+            var row=context.getBean(JdbcTemplate.class).queryForMap(
+                    "select cached_input_tokens,reasoning_output_tokens,estimated_cost_usd,price_revision from agent_model_calls where attempt_id=?",request.id());
+            assertEquals(8,row.get("cached_input_tokens"));assertEquals(2,row.get("reasoning_output_tokens"));
+            assertEquals("fixture-only",row.get("price_revision"));
+            assertEquals(new java.math.BigDecimal("0.000024000000"),row.get("estimated_cost_usd"));
+            assertEquals(15,usage().known());
+            var rights=org.mockito.Mockito.mock(com.code.pal.project.service.ProjectService.class);
+            var summary=new com.code.pal.agent.insight.ModelUsageInsights(rights,context.getBean(JdbcTemplate.class))
+                    .forProject(user,request.context().projectId());
+            assertTrue(summary.usageComplete());assertTrue(summary.costComplete());
+            assertEquals(8L,summary.stages().getFirst().cachedInputTokens());
+            assertEquals(new java.math.BigDecimal("0.000024000000"),summary.stages().getFirst().pricedSubtotalUsd());
+        } finally { budget.usePricing(null); }
+    }
+
     @Test void concurrentReservesCannotBothSpendTheSameCapacity() throws Exception {
         var start = new CountDownLatch(1);
         try (var pool = Executors.newFixedThreadPool(2)) {

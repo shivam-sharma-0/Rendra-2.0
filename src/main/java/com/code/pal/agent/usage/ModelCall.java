@@ -17,6 +17,7 @@ import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.Instant;
 import java.util.UUID;
+import java.math.BigDecimal;
 
 /**
  * One model call in the call ledger: who it was for, why, which model, what it used and how it ended.
@@ -47,6 +48,11 @@ public class ModelCall {
     /** Tokens the provider reported (0 when it reported none, e.g. a failed or stopped call). */
     @Column(name = "prompt_tokens", nullable = false) int promptTokens;
     @Column(name = "completion_tokens", nullable = false) int completionTokens;
+    @Column(name = "cached_input_tokens") Integer cachedInputTokens;
+    @Column(name = "reasoning_output_tokens") Integer reasoningOutputTokens;
+    @Column(name = "estimated_cost_usd", precision = 30, scale = 12) BigDecimal estimatedCostUsd;
+    @Column(name = "cost_estimate_kind", length = 32) String costEstimateKind;
+    @Column(name = "price_revision", length = 80) String priceRevision;
     /** The input estimate the quota reserved against. */
     @Column(name = "estimated_input_tokens", nullable = false) int estimatedInputTokens;
     @Column(name = "max_tokens") Integer maxTokens;

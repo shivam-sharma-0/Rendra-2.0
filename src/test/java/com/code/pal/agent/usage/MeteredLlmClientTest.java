@@ -67,6 +67,19 @@ class MeteredLlmClientTest {
         assertTrue(saved.stream().allMatch(call -> call.report()==null));
         verify(policy,never()).releaseUnsent(any());
     }
+    @Test void streamErrorCodesAreNotTreatedAsUnbilledHttpRejections() {
+        try (var ignored = LlmCallContext.bind(owner)) {
+            assertThrows(LlmStreamException.class, () -> client(null,
+                    new LlmStreamException(LlmStreamException.Reason.PROVIDER_ERROR, 404, null)).chat(request));
+            assertThrows(LlmStreamException.class, () -> client(null,
+                    new LlmStreamException(LlmStreamException.Reason.PROVIDER_ERROR, 503, new LlmClient.Usage(12, 3))).chat(request));
+        }
+        assertNull(saved.get(0).report(), "HTTP-200 stream errors may already have consumed tokens");
+        assertEquals("STREAM PROVIDER_ERROR 404", saved.get(0).error());
+        assertEquals(new LlmClient.Usage(12, 3), saved.get(1).report());
+        assertEquals("FAILED", saved.get(1).outcome());
+        verify(policy, never()).releaseUnsent(any());
+    }
     @Test void brokenLedgerFailsTheCallAndRetainsItsBound() {
         doThrow(new IllegalStateException("Scripted DB failure")).when(policy).finishAttempt(any(),any(),anyString(),nullable(String.class),anyInt());
         try(var ignored=LlmCallContext.bind(owner)) { assertThrows(LlmAccountingException.class,()->client(ok,null).chat(request)); }

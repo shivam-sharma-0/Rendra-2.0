@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import com.code.pal.agent.lease.ProjectLeaseService;
 import com.code.pal.agent.llm.LlmHttpException;
+import com.code.pal.agent.llm.LlmStreamException;
 import com.code.pal.agent.llm.RetryableLlmException;
 import java.util.Locale;
 import java.util.Set;
@@ -108,7 +109,8 @@ public class MeteredLlmClient implements LlmClient {
             if(permit!=null && failed instanceof LlmHttpException)permit.completed();
             boolean rejected=failed instanceof LlmHttpException http && Set.of(400,401,403,404,405,410,413,415,422,429).contains(http.status())
                     || failed instanceof RetryableLlmException retry && retry.rateLimited();
-            finish(grant, started, "FAILED", failureCode(failed), rejected?new Usage(0,0):null);
+            Usage report = failed instanceof LlmStreamException stream ? stream.usage() : rejected ? new Usage(0,0) : null;
+            finish(grant, started, "FAILED", failureCode(failed), report);
             throw failed;
         }
         finish(grant, started, "OK", null, result.usage());
@@ -133,6 +135,8 @@ public class MeteredLlmClient implements LlmClient {
     private static String failureCode(RuntimeException failure) {
         if(failure instanceof RetryableLlmException retry && retry.rateLimited())return "HTTP 429";
         if (failure instanceof LlmHttpException http) return "HTTP " + http.status();
+        if (failure instanceof LlmStreamException stream) return "STREAM " + stream.reason()
+                + (stream.providerCode() == null ? "" : " " + stream.providerCode());
         return failure.getClass().getSimpleName(); // No upstream response bodies, prompts or credentials in the ledger.
     }
 }

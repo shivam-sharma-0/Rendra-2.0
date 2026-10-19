@@ -22,6 +22,12 @@ import java.util.List;
 public class DailyTokenBudget {
     private final JdbcTemplate jdbc;
     private final Clock clock;
+    private ModelCallPricing pricing;
+
+    @Autowired(required = false)
+    void usePricing(ModelCallPricing pricing) {
+        this.pricing = pricing;
+    }
 
     @Autowired
     public DailyTokenBudget(JdbcTemplate jdbc) {
@@ -202,6 +208,24 @@ public class DailyTokenBudget {
                         + "duration_ms=excluded.duration_ms,outcome=excluded.outcome,error=excluded.error "
                         + "where agent_model_calls.usage_known is distinct from true or agent_model_calls.outcome='UNKNOWN'",
                 Math.max(0, elapsedMs), outcome, safeError, id);
+        if (known) recordUsageDetails(id, report);
+    }
+
+    private void recordUsageDetails(UUID id, LlmClient.Usage usage) {
+        boolean priced = pricing != null && pricing.configured();
+        if (!priced && usage.cachedInputTokens() == null && usage.reasoningOutputTokens() == null) return;
+        ModelCallPricing.Estimate estimate = null;
+        if (priced) {
+            var rows = jdbc.query("select provider,model from agent_model_calls where attempt_id=?",
+                    (result, row) -> new String[] {result.getString(1), result.getString(2)}, id);
+            if (!rows.isEmpty()) estimate = pricing.estimate(rows.getFirst()[0], rows.getFirst()[1], usage);
+        }
+        jdbc.update("update agent_model_calls set cached_input_tokens=coalesce(cached_input_tokens,?), "
+                        + "reasoning_output_tokens=coalesce(reasoning_output_tokens,?), "
+                        + "estimated_cost_usd=coalesce(estimated_cost_usd,?), cost_estimate_kind=coalesce(cost_estimate_kind,?), "
+                        + "price_revision=coalesce(price_revision,?) where attempt_id=?",
+                usage.cachedInputTokens(), usage.reasoningOutputTokens(), estimate == null ? null : estimate.amountUsd(),
+                estimate == null ? null : estimate.kind(), estimate == null ? null : estimate.revision(), id);
     }
 
     /** Accounting remains conservative after cancellation, worker death, missing usage or settlement failure. */
