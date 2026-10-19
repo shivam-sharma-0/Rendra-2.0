@@ -99,7 +99,8 @@ public record BehaviorCriteria(int schema, List<BrowserAction> browser, List<Api
             pointer(a.capturePointer());
             pointer(a.assertPointer());
             if (a.tokenVariable() != null && !variables.contains(a.tokenVariable()))
-                throw new IllegalArgumentException("Unknown token variable");
+                throw new IllegalArgumentException(
+                        "Unknown token variable; use a previously captured name without dollar braces");
             if (authRequired && Set.of(ApiKind.CREATE, ApiKind.READ, ApiKind.UPDATE, ApiKind.DELETE, ApiKind.NOT_FOUND,
                     ApiKind.PERSISTENCE).contains(a.kind()) && !loginTokens.contains(a.tokenVariable()))
                 throw new IllegalArgumentException("Account acceptance requires the captured login token");

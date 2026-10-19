@@ -242,6 +242,7 @@ public class SiteBuildService {
             stack.applyBuildVariables(files, projectId, work, variables.variables(projectId));
             DependencyService.Preparation deps = dependencies.prepare(projectId, work);
             if (deps.failed()) return deps.error();
+            stack.prepareBuild(files, projectId, work);
             SandboxPort.CommandResult result = sandbox.exec(projectId, work, build.command());
             if (!result.success()) {
                 return "Build failed: " + (result.timedOut() ? "timed out" : tail(result.stdout() + "\n" + result.error()));

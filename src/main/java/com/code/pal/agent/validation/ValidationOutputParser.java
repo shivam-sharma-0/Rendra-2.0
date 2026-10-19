@@ -19,7 +19,7 @@ final class ValidationOutputParser {
     /** A JavaScript stack frame: {@code at fn (file:line:col)} or {@code at file:line:col}. */
     private static final Pattern FRAME = Pattern.compile("^at\\s.*");
     /** {@code at fn (location)}: the location is inside the parentheses. */
-    private static final Pattern FRAME_CALL = Pattern.compile("^at\\s.*?\\((.+)\\)$");
+    private static final Pattern FRAME_CALL = Pattern.compile("^at\\s.*?\\((.+)\\)(?:\\s*\\{)?$");
     private static final Pattern LOCATION_PREFIX = Pattern.compile("^(?:file:\\s*|at\\s+)", Pattern.CASE_INSENSITIVE);
     /** Rolldown/Oxc (miette) labels: {@code ╭─[ src/App.tsx:2:10 ]}, also {@code ┌─[ ... ]} and ASCII {@code ,-[ ... ]}. */
     private static final Pattern BOX_LOCATION = Pattern.compile("^[\\x{256D}\\x{250C},][\\x{2500}-]+\\[\\s*(.+?)\\s*\\]$");

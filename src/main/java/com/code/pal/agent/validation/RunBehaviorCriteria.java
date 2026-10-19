@@ -1,23 +1,25 @@
 package com.code.pal.agent.validation;
 
+import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.project.brief.ApprovedProjectMemory;
+import com.code.pal.project.capability.BuildDecisions;
+import com.code.pal.project.exception.WorkflowStageException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
+
 import java.time.OffsetDateTime;
 import java.util.HashSet;
 import java.util.List;
-import java.util.UUID;
-import com.code.pal.project.capability.BuildDecisions;
-import com.code.pal.project.exception.WorkflowStageException;
 import java.util.Objects;
-import org.springframework.beans.factory.annotation.Autowired;
+import java.util.UUID;
 
 /**
  * Internal coordinator-owned criteria; agent tools cannot write the store. Requirements remain authoritative.
  * A follow-up run without its own criteria inherits the last completed run's browser checks as regression
- * checks; the agent may only retire inherited checks (with a reason), never add or rewrite them.
+ * checks; the agent may only retire inherited advisory MODEL_SPEC checks, never blocking platform criteria.
  */
 @Service
 public final class RunBehaviorCriteria {
@@ -25,6 +27,12 @@ public final class RunBehaviorCriteria {
     private final ObjectMapper mapper;
     private final ApprovedProjectMemory memory;
     private BuildDecisions decisions;
+    private AgentProperties properties;
+
+    @Autowired(required = false)
+    public void useProperties(AgentProperties properties) {
+        this.properties = Objects.requireNonNull(properties);
+    }
 
     @Autowired
     public void useDecisions(BuildDecisions decisions) {
@@ -85,6 +93,10 @@ public final class RunBehaviorCriteria {
         var inherited = regression(ctx);
         if (inherited == null)
             throw new IllegalArgumentException("No earlier acceptance checks apply to this change");
+        if (!inherited.modelSpec()) {
+            throw new IllegalArgumentException(
+                    "Blocking regression checks cannot be retired by the generator; review and approve changed requirements instead");
+        }
         var known = inherited.browser().stream().map(BehaviorCriteria.BrowserAction::id).toList();
         if (ids == null || ids.isEmpty() || ids.size() > 24 || !known.containsAll(ids))
             throw new IllegalArgumentException("Unknown acceptance check id; current ids: " + known);
@@ -130,7 +142,11 @@ public final class RunBehaviorCriteria {
         var state = decisions.state(project);
         if (state.blocked() || state.choice() == null)
             throw new IllegalStateException("Acceptance build decisions are unavailable");
-        if (state.choice().auth() == BuildDecisions.Auth.ACCOUNTS && !criteria.authRequired())
+        // This receipt remains browser-only. The separate isolated adapter supplies required account/data evidence.
+        boolean independentSupabase = criteria.modelSpec() && state.choice().storage() == BuildDecisions.Storage.SUPABASE
+                && properties != null && properties.getSupabaseValidation().isEnabled()
+                && properties.getSandbox().isRequired() && properties.getSandbox().isRuntimeCheck();
+        if (state.choice().auth() == BuildDecisions.Auth.ACCOUNTS && !criteria.authRequired() && !independentSupabase)
             throw new IllegalArgumentException("Approved accounts require authentication acceptance");
     }
 }

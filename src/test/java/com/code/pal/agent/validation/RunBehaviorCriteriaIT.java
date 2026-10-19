@@ -65,7 +65,9 @@ class RunBehaviorCriteriaIT {
         assertNull(store.regression(context(f,edit)),"changed requirements drop inherited checks");
     }
     @Test void aRetiredCheckStaysRetiredForLaterEditsButOnlyWithAReasonAndAKnownId() {
-        var f=fixture();store.install(f.run(),f.project(),f.projection(),2,two());jdbc.update("update agent_runs set status='DONE' where id=?",f.run());
+        var f=fixture();var original=two();
+        var advisory=new BehaviorCriteria(1,original.browser(),List.of(),false,false,BehaviorCriteria.Provenance.MODEL_SPEC);
+        store.install(f.run(),f.project(),f.projection(),2,advisory);jdbc.update("update agent_runs set status='DONE' where id=?",f.run());
         var edit=followUp(f,"RUNNING");
         assertThrows(IllegalArgumentException.class,()->store.retire(context(f,edit),List.of("missing"),"renamed"));
         assertThrows(IllegalArgumentException.class,()->store.retire(context(f,edit),List.of("heading")," "));
@@ -80,6 +82,19 @@ class RunBehaviorCriteriaIT {
         jdbc.update("update agent_runs set status='DONE' where id=?",edit);
         assertEquals(List.of("menu"),store.regression(context(f,later)).browser().stream().map(BehaviorCriteria.BrowserAction::id).toList());
     }
+    @Test
+    void blockingInheritedChecksCannotBeRetiredByAModelWrittenReason() {
+        for (var provenance : java.util.Arrays.asList(null, BehaviorCriteria.Provenance.PLATFORM)) {
+            var f=fixture();var original=two();
+            store.install(f.run(),f.project(),f.projection(),2,
+                    new BehaviorCriteria(1,original.browser(),List.of(),false,false,provenance));
+            jdbc.update("update agent_runs set status='DONE' where id=?",f.run());
+            var edit=context(f,followUp(f,"RUNNING"));
+            assertThrows(IllegalArgumentException.class,()->store.retire(edit,List.of("heading"),"The user asked for this"));
+            assertEquals(2,store.regression(edit).browser().size());
+        }
+    }
+
     @Test
     void modelProvenanceSurvivesRestartAndFollowUpRetirement() {
         var f = fixture();

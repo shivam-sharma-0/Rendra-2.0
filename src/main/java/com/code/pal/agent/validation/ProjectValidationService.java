@@ -8,6 +8,8 @@ import com.code.pal.agent.stack.DependencyService;
 import com.code.pal.agent.stack.StackPack;
 import com.code.pal.agent.stack.StackPacks;
 import com.code.pal.agent.tool.AgentToolException;
+import com.code.pal.agent.runtime.ReleaseSource;
+import com.code.pal.agent.preview.FrontendArtifactCache;
 import com.code.pal.agent.workspace.ProjectFiles;
 import com.code.pal.agent.workspace.SandboxPort;
 import lombok.RequiredArgsConstructor;
@@ -46,11 +48,17 @@ public class ProjectValidationService {
      * again; the final gate reuses what the agent's own typeCheck/build calls already ran.
      */
     private final Map<UUID, RevisionResults> results = new ConcurrentHashMap<>();
+    /** Baseline source is unchanged during repairs; never reuse candidate success across source revisions. */
+    private final Map<UUID, BaselineResult> baselines = new ConcurrentHashMap<>();
     private BuildDecisions buildDecisions;
     private MernBehaviorCheck mernBehavior;
     private RunBehaviorCriteria behaviorCriteria;
     /** Production checklist; null in focused tests that construct the service directly. */
     private ProductionBaseline baseline;
+    private FrontendArtifactCache artifactCache;
+
+    @Autowired
+    public void useArtifactCache(FrontendArtifactCache cache) { artifactCache = Objects.requireNonNull(cache); }
 
     @Autowired
     public void useProductionBaseline(ProductionBaseline baseline) {
@@ -209,7 +217,7 @@ public class ProjectValidationService {
         // Only a change that type-checks and builds is worth loading in a browser.
         if (passed) {
             // A retired inherited check changes what the browser must prove without changing the source revision.
-            String criteriaKey = criteriaKey(context);
+            String criteriaKey = criteriaKey(context) + "|runtime:" + (runtime == null ? "" : runtime.coverageKey(context));
             RuntimeCheckService.Result runtimeResult = criteriaKey.equals(revisionResults(context).runtimeCriteria)
                     ? revisionResults(context).runtime : null;
             if (runtimeResult == null) {
@@ -228,14 +236,17 @@ public class ProjectValidationService {
             introduced.addAll(runtimeResult.diagnostics());
             if (runtimeResult.check().outcome() == ValidationCheck.Outcome.PASS)
                 executed.add("RUNTIME");
-            if (runtimeResult.check().blocksSuccess()) {
+            for (var runtimeCheck : runtimeResult.checks()) if (runtimeCheck.blocksSuccess()) {
                 if (runtimeResult.diagnostics().stream().anyMatch(d -> "PRE_EXISTING_RUNTIME_FAILURE".equals(d.code())))
                     terminal = true;
                 passed = false;
-                if (runtimeResult.check().outcome() == ValidationCheck.Outcome.SKIPPED) {
-                    terminal = true;
+                if (runtimeCheck.outcome() == ValidationCheck.Outcome.SKIPPED) {
+                    if (runtimeCheck.unavailable()) terminal = true;
                     introduced.add(new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR,
-                            runtimeResult.check().reason(), "runtime", "REQUIRED_CHECK_SKIPPED"));
+                            runtimeCheck.reason(), "runtime", "REQUIRED_CHECK_SKIPPED"));
+                } else if (runtimeCheck != runtimeResult.check()) {
+                    introduced.add(new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR,
+                            runtimeCheck.reason(), runtimeCheck.id().startsWith("SUPABASE_") ? "supabase-behavior" : "feature-outcome", runtimeCheck.id()));
                 }
             }
         }
@@ -344,6 +355,8 @@ public class ProjectValidationService {
     public void clear(UUID runId) {
         lastReports.remove(runId);
         results.remove(runId);
+        baselines.remove(runId);
+        if (artifactCache != null) artifactCache.clear(runId);
     }
 
     /** The comparison for this revision, run only if it has not run yet (or ended without a usable result). */
@@ -399,7 +412,7 @@ public class ProjectValidationService {
                 DependencyService.Preparation baselineDeps = dependencies.prepare(context.projectId(), baseline);
                 DependencyService.Preparation candidateDeps = dependencies.prepare(context.projectId(), candidate);
                 CommandOutcome before = baselineDeps.failed() ? notStarted(context, baseline, baselineDeps.error())
-                        : execute(context, plan, baseline);
+                        : baselineOutcome(context, plan, baseline);
                 if (candidateDeps.failed()) {
                     if (baselineDeps.failed()) {
                         // The project's own dependencies do not install either (registry down, or already broken):
@@ -456,6 +469,29 @@ public class ProjectValidationService {
         return new CommandOutcome(false, false, -1, reason, sandbox.commandPath(context.projectId(), root));
     }
 
+    private record BaselineResult(String identity, Map<List<String>, CommandOutcome> commands) {}
+
+    private CommandOutcome baselineOutcome(AgentContext context, CommandPlan plan, String root) {
+        // Includes manifests, lockfiles, configuration and all other source files. No cache is used if proof fails.
+        String identity = ReleaseSource.capture(files, context.projectId(), root);
+        BaselineResult baseline = baselines.compute(context.runId(), (id, previous) ->
+                previous != null && previous.identity().equals(identity) ? previous
+                        : new BaselineResult(identity, new ConcurrentHashMap<>()));
+        List<String> command = List.copyOf(plan.command());
+        CommandOutcome previous = baseline.commands().get(command);
+        if (previous != null) {
+            return previous;
+        }
+        CommandOutcome outcome = execute(context, plan, root);
+        // Cancelled, missing executables, timeouts and mutable-source commands are never reusable evidence.
+        if (outcome.started() && !outcome.timedOut() && outcome.exitCode() >= 0
+                && baseline.commands().size() < ValidationOperation.values().length
+                && identity.equals(ReleaseSource.capture(files, context.projectId(), root))) {
+            baseline.commands().put(command, outcome);
+        }
+        return outcome;
+    }
+
     /**
      * The command for an operation, from the live project's trusted manifest. A project's first build has
      * none, so the staged stack's fixed commands are used instead (never the staged scripts).
@@ -473,8 +509,15 @@ public class ProjectValidationService {
     }
 
     private CommandOutcome execute(AgentContext context, CommandPlan plan, String root) {
+        if (plan.operation() == ValidationOperation.BUILD) stacks.detect(files, context.projectId(), root).prepareBuild(files, context.projectId(), root);
+        StackPack artifactStack = artifactCache != null && properties.getBuildArtifacts().isEnabled() && plan.operation() == ValidationOperation.BUILD
+                ? stacks.detect(files, context.projectId(), root) : null;
+        var artifactBuild = artifactStack == null ? null : artifactStack.diagnosticBuild(files, context.projectId(), root);
+        var artifactToken = artifactBuild != null && artifactBuild.command().equals(plan.command())
+                ? artifactCache.token(context, root, artifactStack, artifactBuild) : null;
         long started = System.nanoTime();
         var result = sandbox.exec(context.projectId(), root, plan.command());
+        if (result.success() && artifactToken != null) artifactCache.capture(artifactToken, context, root, artifactStack, artifactBuild);
         log.info("validation_command runId={} operation={} root={} command=\"{}\" exitCode={} elapsedMs={}",
                 context.runId(),
                 plan.operation(), root.substring(root.lastIndexOf('/') + 1), String.join(" ", plan.command()),

@@ -61,6 +61,52 @@ class ProjectValidationServiceTest {
         assertTrue(f.changeSets.validationProgress(f.context).repairLimitExhausted());
         assertTrue(f.changeSets.hasUnvalidatedChanges(f.context));
     }
+
+    @Test
+    void aPassingPageCannotMaskAFailedIndependentCloudDataCheck() throws Exception {
+        runtime = mock(RuntimeCheckService.class);
+        when(runtime.evaluate(any())).thenReturn(new RuntimeCheckService.Result(
+                new ValidationCheck("RUNTIME", ValidationCheck.Outcome.PASS, true, "Page loaded"), List.of(), null,
+                List.of(new ValidationCheck("SUPABASE_USER_ISOLATION", ValidationCheck.Outcome.FAIL, true, "Private row leaked"))));
+        var fixture = fixture(3);
+        fixture.changeSets.create(fixture.context, "src/extra.ts", "export const value=1;");
+        var report = fixture.validation.validateAll(fixture.context);
+        assertFalse(report.changeValidationPassed());
+        assertEquals(ValidationCheck.Outcome.FAIL, report.outcome());
+        assertTrue(fixture.changeSets.hasUnvalidatedChanges(fixture.context));
+        assertFalse(fixture.changeSets.validationProgress(fixture.context).repairLimitExhausted());
+        assertTrue(report.introducedDiagnostics().stream().anyMatch(diagnostic -> diagnostic.code().equals("SUPABASE_USER_ISOLATION")));
+    }
+
+    @Test
+    void anUnavailableCloudAdapterBlocksSavedValidationAndStopsCodeRepairsEvenIfThePagePasses() throws Exception {
+        runtime = mock(RuntimeCheckService.class);
+        when(runtime.evaluate(any())).thenReturn(new RuntimeCheckService.Result(
+                new ValidationCheck("RUNTIME", ValidationCheck.Outcome.PASS, true, "Page loaded"), List.of(), null,
+                List.of(new ValidationCheck("SUPABASE_BEHAVIOUR", ValidationCheck.Outcome.SKIPPED, true, "Adapter unavailable"))));
+        var fixture = fixture(3);
+        fixture.changeSets.create(fixture.context, "src/extra.ts", "export const value=1;");
+        var report = fixture.validation.validateAll(fixture.context);
+        assertFalse(report.changeValidationPassed());
+        assertEquals(ValidationCheck.Outcome.SKIPPED, report.outcome());
+        assertTrue(fixture.changeSets.hasUnvalidatedChanges(fixture.context));
+        assertTrue(fixture.changeSets.validationProgress(fixture.context).repairLimitExhausted());
+    }
+
+    @Test
+    void changedCloudApprovalInvalidatesBrowserEvidenceWhileExactRevisionCompilerResultsRemainReusable() throws Exception {
+        runtime = mock(RuntimeCheckService.class);
+        when(runtime.coverageKey(any())).thenReturn("approval-one", "approval-two");
+        when(runtime.evaluate(any())).thenReturn(new RuntimeCheckService.Result(
+                new ValidationCheck("RUNTIME", ValidationCheck.Outcome.PASS, true, "Page loaded"), List.of()));
+        var fixture = fixture(3);
+        fixture.changeSets.create(fixture.context, "src/extra.ts", "export const value=1;");
+        assertTrue(fixture.validation.validateAll(fixture.context).changeValidationPassed());
+        int compilerCommands = executionCount();
+        assertTrue(fixture.validation.validateAll(fixture.context).changeValidationPassed());
+        assertEquals(compilerCommands, executionCount());
+        verify(runtime, times(2)).evaluate(fixture.context);
+    }
     @Test void failingUiStillChecksIndependentApiAndDoesNotBlamePassingBackend() throws Exception {
         runtime=mock(RuntimeCheckService.class);
         when(runtime.evaluate(any())).thenReturn(new RuntimeCheckService.Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.FAIL,true,"UI failed"),List.of(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,"Missing task row","runtime","BROWSER_ACCEPTANCE_FAILED"))));
@@ -128,8 +174,23 @@ class ProjectValidationServiceTest {
 
         fixture.changeSets.create(fixture.context, "src/more.ts", "export const y = 2;\n");
         assertTrue(fixture.validation.validateAll(fixture.context).changeValidationPassed());
-        assertEquals(4, executionCount(), "a new revision is validated again");
+        assertEquals(3, executionCount(), "the new candidate is validated; identical baseline evidence is reused");
         verify(runtime, times(2)).evaluate(any());
+    }
+
+    @Test
+    void baselineReuseInvalidatesForChangedSourceAndRunCleanup() throws Exception {
+        var fixture = fixture(6);
+        fixture.changeSets.create(fixture.context, "src/one.ts", "export const one=1;");
+        assertTrue(fixture.validation.run(fixture.context, ValidationOperation.TYPE_CHECK, null).changeValidationPassed());
+        assertEquals(2, executionCount());
+        fixture.project.write("validate.cjs", fixture.project.read("validate.cjs") + "\n// changed live configuration");
+        fixture.changeSets.create(fixture.context, "src/two.ts", "export const two=2;");
+        assertTrue(fixture.validation.run(fixture.context, ValidationOperation.TYPE_CHECK, null).changeValidationPassed());
+        assertEquals(4, executionCount(), "changed baseline source must run again");
+        fixture.validation.clear(fixture.context.runId());
+        assertTrue(fixture.validation.run(fixture.context, ValidationOperation.TYPE_CHECK, null).changeValidationPassed());
+        assertEquals(6, executionCount(), "cleanup drops all reusable run evidence");
     }
 
     @Test

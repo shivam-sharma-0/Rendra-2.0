@@ -11,6 +11,18 @@ class ValidationOutputParserTest {
     private static final String ROOT = "/workspace/.codepal/changesets/run/candidate-build";
 
     @Test
+    void nodeAsyncFramesWithAnOpeningBraceCannotHideTheActualUnlocatedError() {
+        String output = """
+                Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'fixture-plugin' imported from vite.config.ts
+                    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:681:26) {
+                  code: 'ERR_MODULE_NOT_FOUND'
+                }
+                """;
+        assertTrue(ValidationOutputParser.parse(output, ROOT, ValidationOperation.BUILD).isEmpty());
+        assertTrue(ValidationOutputParser.summary(output, ROOT).contains("Cannot find package 'fixture-plugin'"));
+    }
+
+    @Test
     void viteErrorsKeepTheProblemAndDropTheStackTrace() {
         // Shape of a real `vite build` failure captured from an agent run.
         String output = """
