@@ -139,6 +139,11 @@ export function useProjectWorkspace(id: string) {
   }, [mergeSteps])
 
   const onRealtime = useCallback((message: RealtimeMessage) => {
+    if (message.type === 'PROJECT_UPDATED') {
+      const updated = message.payload as Project | undefined
+      if (updated?.id === id) setProject(updated)
+      return
+    }
     if (message.type === 'CONNECTED') {
       refreshMessages()
       void refreshTimeline().catch(() => undefined)
@@ -248,6 +253,10 @@ export function useProjectWorkspace(id: string) {
         const known = new Set(previous.map((m) => m.id))
         return [...previous, ...created.filter((m) => !known.has(m.id))]
       })
+      // A requirements intake creates only the user message. Refresh its stage even if realtime was missed.
+      if (mode === 'BUILD' && created.length === 1 && created[0].role === 'USER') {
+        void projectApi.get(id).then((updated) => setProject((current) => current?.id === updated.id ? updated : current)).catch(() => undefined)
+      }
       window.setTimeout(() => { void refreshTimeline().catch(() => undefined) }, 350)
     } catch (error) {
       // The suggestion owns this error. A failed click must not replace the user's draft.

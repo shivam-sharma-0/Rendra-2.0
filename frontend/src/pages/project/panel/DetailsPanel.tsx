@@ -30,15 +30,16 @@ function ProcessRail({ stage }: { stage?: Project['lifecycleStage'] }) {
 
 /** The requirements interview's answers. */
 function RequirementSummary({ session }: { session: RequirementSession }) {
-  const answered = session.questions.filter((q) => q.selectedOption || q.otherText).length
+  const questions = session.questions.filter((q) => !q.key.startsWith('platform_'))
+  const answered = questions.filter((q) => q.selectedOption || q.otherText).length
   return (
     <section className="pv-card pv-reqs">
       <header>
         <b>{session.status === 'APPROVED' ? 'Requirements approved' : 'Questions answered'}</b>
-        <small>{answered} of {session.questions.length} answered</small>
+        <small>{questions.length ? `${answered} of ${questions.length} answered` : 'Standard setup prepared'}</small>
       </header>
       <dl>
-        {session.questions.map((q) => {
+        {questions.map((q) => {
           const answer = q.otherText || q.options.find((o) => o.id === q.selectedOption)?.label
           return <div key={q.id}><dt>{q.prompt}</dt><dd className={answer ? undefined : 'is-waiting'}>{answer ?? 'Waiting for an answer'}</dd></div>
         })}

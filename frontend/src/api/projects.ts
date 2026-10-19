@@ -133,6 +133,7 @@ export type RequirementQuestion = {
 export type RequirementSession = {
   id: string | null; projectId: string; status: RequirementStatus; questions: RequirementQuestion[]
   complete: boolean; approvedAt: string | null; revision: number; processing: boolean; artifactStatus: 'NONE' | 'PENDING' | 'READY' | 'SUPERSEDED'; reviewStatus: 'NONE' | 'PROCESSING' | 'MODEL' | 'FALLBACK'
+  review?: { goal: string; pages: string[]; features: { id: string; description: string; checkPlanned: boolean }[]; answersChanged: boolean } | null
 }
 export type DatabaseSnapshot = { provider: string; database: string; reachable: boolean; collections: string[]; error: string | null; checkedAt: string }
 

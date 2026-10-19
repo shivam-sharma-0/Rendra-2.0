@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { requirementsApi, type Project, type RequirementSession } from '../../api/projects'
 import { needsRequirementInterview } from './runUtils'
+import { hasUnansweredSetup } from '../../lib/requirements'
 
 /**
  * The requirements interview for a project in the REQUIREMENTS stage: starts it once, records
@@ -71,6 +72,10 @@ export function useRequirements(id: string, project: Project | null, setProject:
 
   const skipRequirements = useCallback(async () => {
     if (!requirements) return
+    if (hasUnansweredSetup(requirements)) {
+      setRequirementsError('Choose the required application setup before using Skip all.')
+      return
+    }
     setRequirementsBusy(true)
     setRequirementsError('')
     try {
