@@ -128,6 +128,22 @@ class PreloadedEditFilesTest {
     }
 
     @Test
+    void explicitReadOnlyInspectionProvidesWholeSourceButStillOmitsCredentials() {
+        String body = "export function increment(value) { return value + 1; }";
+        project.write("src/counter.ts", body);
+        project.write("src/config.ts", "const password = 'private-test-value'");
+        var chat = new AgentContext(project.projectId, 7L, ProjectType.CHAT, ".", project.files);
+        String before = project.files.version(project.projectId, ".", "src/counter.ts");
+
+        var result = service.preloadedReadOnlyFiles(chat, "Explain the counter", List.of("src/counter.ts", "src/config.ts"), 4_000);
+
+        assertEquals(Map.of("src/counter.ts", before), result.versions());
+        assertTrue(result.text().contains(body));
+        assertFalse(result.text().contains("private-test-value"));
+        assertEquals(before, project.files.version(project.projectId, ".", "src/counter.ts"));
+    }
+
+    @Test
     void embeddedCredentialsBinaryAndInvalidUtf8AreOmittedAsWholeFiles() {
         project.write("src/config.ts", "export const apiKey = 'sk-" + "x".repeat(32) + "'");
         project.write("src/login.tsx", "const password = 'sensitive-fixture-value'");

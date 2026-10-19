@@ -124,11 +124,12 @@ class AgentSelfRepairTest {
                 case 3 -> tool("patch-bad", "patchFile", "{\"path\":\"src/App.tsx\",\"expectedVersion\":\""+initial+"\",\"oldText\":\"OK\",\"newText\":\"BROKEN\"}");
                 case 4 -> tool("check-1", "runTypeCheck", "{}");
                 case 5 -> {
-                    assertTrue(request.messages().getLast().content().contains("TS2307"));
-                    yield tool("read-2", "readFile", "{\"path\":\"src/App.tsx\"}");
+                    assertTrue(request.messages().stream().anyMatch(message -> message.content() != null && message.content().contains("TS2307")));
+                    assertTrue(request.messages().getLast().content().contains("BROKEN"));
+                    assertTrue(request.messages().getLast().content().contains(broken));
+                    yield tool("patch-fix", "patchFile", "{\"path\":\"src/App.tsx\",\"expectedVersion\":\""+broken+"\",\"oldText\":\"BROKEN\",\"newText\":\"DARK\"}");
                 }
-                case 6 -> tool("patch-fix", "patchFile", "{\"path\":\"src/App.tsx\",\"expectedVersion\":\""+broken+"\",\"oldText\":\"BROKEN\",\"newText\":\"DARK\"}");
-                case 7 -> tool("validate", "validateChanges", "{}");
+                case 6 -> tool("validate", "validateChanges", "{}");
                 default -> {
                     String answer="Updated and validated src/App.tsx."; delta.accept(answer);
                     yield new LlmResult(answer,null,List.of(),new Usage(1,1),"stop");

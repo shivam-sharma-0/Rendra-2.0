@@ -12,6 +12,8 @@ import java.util.Map;
 import com.code.pal.project.capability.BuildDecisions;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.code.pal.agent.prompt.PromptLoader;
+import com.code.pal.agent.prompt.PromptLoader.Prompt;
 
 /**
  * Writes a {@link Starter}'s tested setup files into a new project, so the model never hand-writes the
@@ -35,12 +37,7 @@ public class StartProjectTool implements AgentTool {
 
     @Override
     public String description() {
-        return "Set up a new app from a tested starter: \"vite-react\" (Vite + React + TypeScript + Tailwind) or \"mern\" "
-                + "(that app in client/ plus an Express + MongoDB API in server/). Writes package.json with versions that work "
-                + "together, a tested package-lock.json and runtime metadata, tsconfig.json, vite.config.ts, index.html, src/main.tsx, src/index.css and src/router.tsx (a hash router for several pages) (for mern also "
-                + "server/package.json, server/tsconfig.json and server/src/index.ts with /api/health and the database "
-                + "connection). Call it once, after setPlan, in a project without package.json; then write src/App.tsx and the "
-                + "rest. Never write these setup files yourself; only add a package to package.json when the app needs one.";
+        return PromptLoader.load(Prompt.TOOL_START_PROJECT);
     }
 
     @Override
@@ -51,7 +48,7 @@ public class StartProjectTool implements AgentTool {
         return Map.of(
                 "type", "object",
                 "properties", Map.of(
-                        "stack", Map.of("type", "string", "enum", List.of("vite-react", "mern")),
+                        "stack", Map.of("type", "string", "enum", List.of("static-site", "vite-react", "mern")),
                         "title", Map.of("type", "string", "description", "The page title, e.g. the app's name")),
                 "required", List.of("stack"));
     }
@@ -60,12 +57,15 @@ public class StartProjectTool implements AgentTool {
     public Object execute(Map<String, Object> args, AgentContext context) {
         Object stack = args.get("stack");
         Starter requested = Starter.of(stack == null ? "" : stack.toString())
-                .orElseThrow(() -> new IllegalArgumentException("stack must be \"vite-react\" or \"mern\""));
+                .orElseThrow(() -> new IllegalArgumentException("Unknown supported starter stack"));
         // The approved storage decides the stack: a new MERN scaffold needs explicitly approved MERN storage.
         var state = buildDecisions == null ? null : buildDecisions.state(context.projectId());
         var choice = state == null ? null : state.choice();
         Starter starter = requested == Starter.MERN && (choice == null || choice.storage() != BuildDecisions.Storage.MERN)
                 ? Starter.VITE_REACT : requested;
+        if (starter == Starter.STATIC_SITE && choice != null && choice.storage() == BuildDecisions.Storage.SUPABASE) {
+            throw new IllegalArgumentException("Connected Supabase applications require the vite-react starter");
+        }
         if (buildDecisions != null) buildDecisions.requireStarter(context.projectId(), starter.id());
         for (String manifest : MANIFESTS) {
             if (context.files().exists(context.projectId(), context.root(), manifest)) {

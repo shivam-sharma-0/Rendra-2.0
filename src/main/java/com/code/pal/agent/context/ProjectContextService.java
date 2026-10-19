@@ -103,6 +103,10 @@ public class ProjectContextService {
         return new EditFilePreloader(properties, objectMapper).load(context, request, identifiedTargets, remainingChars);
     }
 
+    public PreloadedFiles preloadedReadOnlyFiles(AgentContext context, String request, Collection<String> identifiedTargets, int remainingChars) {
+        return new EditFilePreloader(properties, objectMapper).inspect(context, request, identifiedTargets, remainingChars);
+    }
+
     /**
      * Maps the project files under {@code root} (a BUILD run's staging area, or {@code "."} for the
      * project itself). Heavy and internal folders are never walked.

@@ -1,6 +1,8 @@
 package com.code.pal.agent.change;
 
 import com.code.pal.agent.domain.AgentRun;
+import com.code.pal.agent.prompt.PromptLoader;
+import com.code.pal.agent.prompt.PromptLoader.Prompt;
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.repository.AgentRunRepository;
 import com.code.pal.agent.tool.AgentContext;
@@ -1043,10 +1045,8 @@ public class ChangeSetService {
         if (set.resumedPlan == null)
             return null;
         context.plan().restore(set.resumedPlan);
-        return "WORKER RESUME: Reused proved outputs from staged revision " + set.revision + " for files " + set.touched
-                +
-                ". Plan: " + set.resumedPlan
-                + ". Re-read retained files as needed; continue unresolved work. Required final validation must run again. Do not repeat completed file creation.";
+        return PromptLoader.load(Prompt.RESUME_PLAN).replace("{{revision}}", Integer.toString(set.revision))
+                .replace("{{files}}", set.touched.toString()).replace("{{plan}}", set.resumedPlan.toString());
     }
 
     public boolean requeueCheckpoint(AgentRun run) {

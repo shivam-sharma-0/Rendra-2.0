@@ -20,6 +20,7 @@ import com.code.pal.message.service.impl.MessageServiceImpl;
 import com.code.pal.project.brief.ApprovedProjectMemory;
 import com.code.pal.project.domain.*;
 import com.code.pal.project.service.ProjectService;
+import com.code.pal.project.requirement.BuildRequestIntake;
 import com.code.pal.realtime.RealtimeService;
 import com.code.pal.shared.security.AuthPrincipal;
 import com.code.pal.shared.usage.AgentTurnAdmission;
@@ -161,6 +162,7 @@ class FailedDraftIT {
         @Bean RealtimeService realtime(){return mock(RealtimeService.class);}
         @Bean AgentTurnAdmission admission(){return mock(AgentTurnAdmission.class);}
         @Bean MessageSequence sequence(){return new MessageSequence();}
+        @Bean BuildRequestIntake buildIntake(){return mock(BuildRequestIntake.class);}
         @Bean AgentDispatchService dispatcher(){return mock(AgentDispatchService.class);}
         @Bean JpaRepositoryFactoryBean<FileChangeRepository,FileChange,UUID> fileChanges(EntityManagerFactory factory){var r=new JpaRepositoryFactoryBean<FileChangeRepository,FileChange,UUID>(FileChangeRepository.class);r.setEntityManager(SharedEntityManagerCreator.createSharedEntityManager(factory));r.setTransactionManager("transactionManager");return r;}
     }

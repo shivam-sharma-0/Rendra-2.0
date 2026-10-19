@@ -73,4 +73,27 @@ class FailureExplanationTest {
         assertTrue(FailureExplanation.failure(AgentFailureReason.AGENT_FAILED, false, "x").contains(FailureExplanation.NOTHING_SAVED));
         assertTrue(FailureExplanation.failure(AgentFailureReason.AGENT_FAILED, true, "x").startsWith("Your code changes were saved"));
     }
+
+    @Test
+    void exhaustedRepairsUseTheLastFailedValidationInsteadOfAnOpaqueRepairLimit() {
+        var diagnostic = new ProjectDiagnostic("client/src/App.tsx", 4, 2, DiagnosticSeverity.ERROR,
+                "Task row did not appear", "browser", "BROWSER_ACCEPTANCE_FAILED");
+        String text = FailureExplanation.failure(AgentFailureReason.USER_REVIEW_REQUIRED, false, "Repair limit reached",
+                report(true, List.of(diagnostic),
+                        new ValidationCheck("TYPE_CHECK", ValidationCheck.Outcome.PASS, true, ""),
+                        new ValidationCheck("RUNTIME", ValidationCheck.Outcome.FAIL, true, "")));
+
+        assertTrue(text.contains("did not behave as approved"), text);
+        assertTrue(text.contains("Task row did not appear"), text);
+        assertFalse(text.contains("client/src/App.tsx"), "paths stay in Details");
+    }
+
+    @Test
+    void unsupportedIndependentFeatureCoverageIsVisibleEvenWhenAdvisoryScenariosPassed() {
+        String note = FailureExplanation.unconfirmedBehaviour(report(true, List.of(),
+                new ValidationCheck("APPROVED_BEHAVIOUR", ValidationCheck.Outcome.PASS, false, "Model scenarios passed"),
+                new ValidationCheck("FEATURE_COVERAGE", ValidationCheck.Outcome.SKIPPED, false, "custom_workflow")));
+        assertTrue(note.contains("do not yet have independent outcome coverage"));
+        assertFalse(note.contains("custom_workflow"), "Feature ids stay in Details");
+    }
 }

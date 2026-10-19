@@ -5,6 +5,8 @@ import com.code.pal.agent.tool.AgentTool;
 import com.code.pal.agent.validation.RunBehaviorCriteria;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
+import com.code.pal.agent.prompt.PromptLoader;
+import com.code.pal.agent.prompt.PromptLoader.Prompt;
 
 import java.util.List;
 import java.util.Map;
@@ -20,8 +22,7 @@ public class RetireAcceptanceCheckTool implements AgentTool {
     }
 
     public String description() {
-        return "Retire earlier approved acceptance checks that the user's current request intentionally changes or removes "
-                + "(for example a renamed heading or a removed feature). Never use it to hide a bug; returns the remaining ids.";
+        return PromptLoader.load(Prompt.TOOL_RETIRE_ACCEPTANCE);
     }
 
     public boolean parallelSafe() {

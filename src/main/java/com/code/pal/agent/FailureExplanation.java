@@ -42,8 +42,17 @@ final class FailureExplanation {
     }
 
     static String failure(AgentFailureReason reason, boolean codeSaved, String reviewMessage) {
+        return failure(reason, codeSaved, reviewMessage, null);
+    }
+
+    static String failure(AgentFailureReason reason, boolean codeSaved, String reviewMessage,
+            ValidationReport lastReport) {
         if (codeSaved) {
             return "Your code changes were saved. Preview preparation failed; the saved code is available.";
+        }
+        if (reason == AgentFailureReason.USER_REVIEW_REQUIRED && "Repair limit reached".equals(reviewMessage)
+                && lastReport != null && !lastReport.changeValidationPassed()) {
+            return validation(lastReport);
         }
         return switch (reason) {
             case USER_REVIEW_REQUIRED -> reviewMessage;
@@ -63,13 +72,16 @@ final class FailureExplanation {
         if (report == null) {
             return "";
         }
-        return report.checks().stream()
+        String modelNote = report.checks().stream()
                 .filter(check -> APPROVED_BEHAVIOUR.equals(check.id()) && check.outcome() == ValidationCheck.Outcome.FAIL)
                 .findFirst()
                 .map(check -> "\n\nBuild saved; some requested behaviour could not be confirmed"
                         + (check.reason().isBlank() ? "" : " (" + bounded(check.reason()) + ")")
                         + ". Open Details to see which checks did not pass.")
                 .orElse("");
+        boolean uncovered = report.checks().stream().anyMatch(check -> check.id().equals("FEATURE_COVERAGE")
+                && check.outcome() == ValidationCheck.Outcome.SKIPPED);
+        return modelNote + (uncovered ? "\n\nSome requested features do not yet have independent outcome coverage. Review them in the preview; Details lists the gaps." : "");
     }
 
     private static String bounded(String text) {

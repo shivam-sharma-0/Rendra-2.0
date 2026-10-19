@@ -54,6 +54,27 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class SmartReplyTest {
+    @Test
+    void aProjectQuestionGetsTheActualInlineLogicInOneReadOnlyCall() {
+        var fixture = new Fixture(ProjectType.BUILD, "How does the counter work?");
+        String source = "<!doctype html><button id='increment'>Add</button><output id='count'>0</output>"
+                + "<script>let count = 0; document.querySelector('#increment').onclick = () => "
+                + "document.querySelector('#count').textContent = ++count;</script>";
+        fixture.workspace.write("index.html", source);
+        String before = fixture.workspace.files.version(fixture.workspace.projectId, ".", "index.html");
+
+        var result = fixture.run("The click handler increments count and updates the output.");
+
+        assertEquals(RunStatus.DONE, result.status());
+        assertEquals(ProjectType.CHAT, fixture.run.getMode());
+        assertEquals(1, fixture.calls.size());
+        assertTrue(fixture.context().contains("textContent = ++count;"), "A file map cannot replace its complete source");
+        assertTrue(fixture.context().contains(before));
+        assertEquals(before, fixture.workspace.files.version(fixture.workspace.projectId, ".", "index.html"));
+        assertTrue(fixture.calls.getFirst().tools().stream().noneMatch(tool -> tool.name().equals("patchFile")));
+        fixture.noWrites();
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"dashboard looks great", "website is beautiful, thanks", "app is slow", "blog"})
     void ambiguousAppMentionsUseOneReadOnlyDecisionWithoutStartingABuild(String prompt) {
