@@ -41,6 +41,32 @@ class ContractPlannerTest {
     @Test void aSingleJsonFenceDoesNotSpendACorrectionCall() {
         var calls=new AtomicInteger();assertEquals(contract,planner.plan(input,model,r->{calls.incrementAndGet();return reply("```json\n"+mapper.writeValueAsString(contract)+"\n```");}));assertEquals(1,calls.get());
     }
+    @Test void mechanicalDuplicateUnitRepairDoesNotSpendACorrectionCall() {
+        var c=ContractFixtures.mern();Map<String,Object> proposal=mapper.readValue(mapper.writeValueAsString(c),Map.class);
+        var units=(List<Map<String,Object>>)proposal.get("units");units.add(new LinkedHashMap<>(units.getFirst()));
+        var fresh=new ContractPlanner.Input(c.id(),"Build Items","Approved","Map",
+                new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits());
+        var calls=new AtomicInteger();
+        assertEquals(c,planner.plan(fresh,model,request->{calls.incrementAndGet();return reply(mapper.writeValueAsString(proposal));}));
+        assertEquals(1,calls.get());
+    }
+    @Test void uniqueOversizedActionsStillUseOneModelCorrection() {
+        var c=ContractFixtures.mern();Map<String,Object> proposal=mapper.readValue(mapper.writeValueAsString(c),Map.class);
+        Map<String,Object> acceptance=(Map<String,Object>)proposal.get("acceptance");
+        var browser=(List<Map<String,Object>>)acceptance.get("browser");
+        for(int index=1;index<=24;index++){
+            var action=new LinkedHashMap<>(browser.getFirst());action.put("id","optional_"+index);browser.add(action);
+        }
+        var fresh=new ContractPlanner.Input(c.id(),"Build Items","Approved","Map",
+                new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits());
+        var calls=new AtomicInteger();
+        assertEquals(c,planner.plan(fresh,model,request->{
+            if(calls.incrementAndGet()==1)return reply(mapper.writeValueAsString(proposal));
+            assertTrue(request.messages().getLast().content().contains("required account, CRUD"));
+            return reply(mapper.writeValueAsString(c));
+        }));
+        assertEquals(2,calls.get());
+    }
     @Test void trailingObjectsAndProseAreRejectedWithoutRelaxingAuthorityChecks() {
         for(String body:List.of(mapper.writeValueAsString(contract)+"{}","Here is the plan: "+mapper.writeValueAsString(contract))){var calls=new AtomicInteger();assertThrows(IllegalArgumentException.class,()->planner.plan(input,model,r->{calls.incrementAndGet();return reply(body);}));assertEquals(2,calls.get());}
     }

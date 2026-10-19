@@ -8,6 +8,45 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ContractAcceptanceCompilerTest {
     final ObjectMapper mapper=new ObjectMapper();
+    @Test void exactDuplicateChecksAndUnitsAreRemovedWithoutLosingCrudCoverage() {
+        var original=ContractFixtures.mern();Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        var units=(List<Map<String,Object>>)data.get("units");units.add(new LinkedHashMap<>(units.getFirst()));
+        Map<String,Object> acceptance=(Map<String,Object>)data.get("acceptance");
+        var browser=(List<Object>)acceptance.get("browser");browser.add(browser.getFirst());
+        var api=(List<Object>)acceptance.get("api");api.add(api.getLast());
+        var repaired=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),BuildContract.class);
+        assertEquals(original, repaired);
+        assertTrue(repaired.acceptance().crudRequired());
+        assertTrue(repaired.acceptance().api().stream().anyMatch(step->step.kind()==BehaviorCriteria.ApiKind.DELETE));
+    }
+    @Test void distinctDuplicateUnitIdsAreRenumberedOnlyWithUnambiguousPathOwners() {
+        var original=ContractFixtures.mern();Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        var units=(List<Map<String,Object>>)data.get("units");
+        units.getLast().put("id","data");units.getLast().put("dependsOn",List.of());
+        ((List<Map<String,Object>>)data.get("routes")).getFirst().put("owner","data");
+        var repaired=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),BuildContract.class);
+        assertEquals(List.of("data","data_2"),repaired.units().stream().map(BuildContract.Unit::id).toList());
+        assertEquals("data_2",repaired.routes().getFirst().owner());
+        assertEquals("data",repaired.api().getFirst().owner());
+        assertEquals(original.acceptance(),repaired.acceptance());
+    }
+    @Test void ambiguousUnitDependenciesAndUniqueOverflowStillNeedModelCorrection() {
+        var original=ContractFixtures.mern();Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        var units=(List<Map<String,Object>>)data.get("units");units.getLast().put("id","data");
+        ((List<Map<String,Object>>)data.get("routes")).getFirst().put("owner","data");
+        var unresolved=ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper);
+        assertThrows(RuntimeException.class,()->mapper.readValue(unresolved,BuildContract.class));
+
+        data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        Map<String,Object> acceptance=(Map<String,Object>)data.get("acceptance");
+        var browser=(List<Map<String,Object>>)acceptance.get("browser");
+        for(int index=1;index<=24;index++){
+            var action=new LinkedHashMap<>(browser.getFirst());action.put("id","optional_"+index);browser.add(action);
+        }
+        String oversized=mapper.writeValueAsString(data);
+        assertThrows(RuntimeException.class,()->ContractAcceptanceCompiler.completeCollections(oversized,mapper));
+        assertEquals(25,((List<?>)((Map<?,?>)data.get("acceptance")).get("browser")).size());
+    }
     @Test void missingResponsibilitiesUseExistingOwnersWithoutGrantingFilesOrDroppingChecks(){
         var original=ContractFixtures.mern();Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
         for(Object value:(List<?>)data.get("units"))((Map<String,Object>)value).put("acceptanceIds",List.of());

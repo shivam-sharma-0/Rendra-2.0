@@ -15,15 +15,17 @@ final class ContractAcceptanceCompiler {
         Map<String, Object> data = mapper.readValue(content, Map.class);
         if (!"MERN".equals(data.get("stack")))
             return content;
+        boolean changed = removeExactDuplicates(data);
+        changed |= resolveUnambiguousUnitIds(data);
         var criteria = mapper.convertValue(data.get("acceptance"), BehaviorCriteria.class);
         if (!criteria.crudRequired())
-            return content;
+            return changed ? mapper.writeValueAsString(data) : content;
         var checks = new ArrayList<>(criteria.api());
         var ids = new HashSet<String>();
         checks.forEach(step -> ids.add(step.id()));
         criteria.browser().forEach(step -> ids.add(step.id()));
         List<Map<String, Object>> units = (List<Map<String, Object>>) data.get("units");
-        boolean changed = removeCoordinatorOwnedPaths(units);
+        changed |= removeCoordinatorOwnedPaths(units);
         for (Object value : (List<?>) data.get("api")) {
             var api = mapper.convertValue(value, BuildContract.Api.class);
             if (!api.method().equals("GET") || api.path().contains(":") || !api.responseType().endsWith("[]")
@@ -92,6 +94,88 @@ final class ContractAcceptanceCompiler {
         data.put("acceptance", new BehaviorCriteria(criteria.schema(), criteria.browser(), checks,
                 criteria.authRequired(), criteria.crudRequired()));
         return mapper.writeValueAsString(data);
+    }
+
+    /** Only identical checks are expendable: unique actions have no reliable optional marker. */
+    @SuppressWarnings("unchecked")
+    private static boolean removeExactDuplicates(Map<String, Object> data) {
+        Map<String, Object> acceptance = (Map<String, Object>) data.get("acceptance");
+        boolean changed = false;
+        for (String kind : List.of("browser", "api")) {
+            List<Object> checks = (List<Object>) acceptance.get(kind);
+            var distinct = new ArrayList<>(new LinkedHashSet<>(checks));
+            if (distinct.size() != checks.size()) {
+                acceptance.put(kind, distinct);
+                changed = true;
+            }
+        }
+        List<Map<String, Object>> units = (List<Map<String, Object>>) data.get("units");
+        var distinctUnits = new ArrayList<>(new LinkedHashSet<>(units));
+        if (distinctUnits.size() != units.size()) {
+            data.put("units", distinctUnits);
+            changed = true;
+        }
+        return changed;
+    }
+
+    /** Renumber only when every reference to a duplicate unit can be resolved from an exact owned path. */
+    @SuppressWarnings("unchecked")
+    private static boolean resolveUnambiguousUnitIds(Map<String, Object> data) {
+        List<Map<String, Object>> units = (List<Map<String, Object>>) data.get("units");
+        var counts = new LinkedHashMap<String, Integer>();
+        var used = new HashSet<String>();
+        for (var unit : units) {
+            String id = (String) unit.get("id");
+            counts.merge(id, 1, Integer::sum);
+            used.add(id);
+        }
+        boolean changed = false;
+        for (var group : counts.entrySet()) {
+            String id = group.getKey();
+            if (group.getValue() < 2 || id == null || id.length() > 44
+                    || units.stream().anyMatch(unit -> ((List<?>) unit.get("dependsOn")).contains(id))
+                    || data.get("batches") instanceof List<?> batches && batches.stream().anyMatch(batch ->
+                            ((List<?>) ((Map<String, Object>) batch).get("unitIds")).contains(id)))
+                continue;
+            var candidates = units.stream().filter(unit -> id.equals(unit.get("id"))).toList();
+            var names = new IdentityHashMap<Map<String, Object>, String>();
+            var pathOwners = new HashMap<String, String>();
+            boolean safe = true;
+            for (int index = 0; index < candidates.size(); index++) {
+                String proposed = id;
+                if (index > 0) {
+                    int suffix = index + 1;
+                    proposed = id + "_" + suffix;
+                    while (used.contains(proposed) && proposed.length() <= 48)
+                        proposed = id + "_" + ++suffix;
+                    if (proposed.length() > 48) { safe = false; break; }
+                }
+                names.put(candidates.get(index), proposed);
+                for (String path : (List<String>) candidates.get(index).get("ownedPaths"))
+                    if (pathOwners.putIfAbsent(path, proposed) != null) safe = false;
+            }
+            if (!safe) continue;
+            var owners = new ArrayList<Map.Entry<Map<String, Object>, String>>();
+            for (String kind : List.of("routes", "api", "assets")) {
+                String pathKey = switch (kind) {
+                    case "routes" -> "componentPath";
+                    case "api" -> "routerPath";
+                    default -> "destination";
+                };
+                for (var value : (List<Map<String, Object>>) data.get(kind)) {
+                    if (!id.equals(value.get("owner"))) continue;
+                    String owner = pathOwners.get(value.get(pathKey));
+                    if (owner == null) safe = false;
+                    else owners.add(Map.entry(value, owner));
+                }
+            }
+            if (!safe) continue;
+            names.forEach((unit, name) -> unit.put("id", name));
+            owners.forEach(owner -> owner.getKey().put("owner", owner.getValue()));
+            used.addAll(names.values());
+            changed = true;
+        }
+        return changed;
     }
 
     @SuppressWarnings("unchecked")
