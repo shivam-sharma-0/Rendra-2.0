@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio appointments</title></head>
+<body>
+<main class="app-container app-section app-stack">
+  <header><p class="app-muted">STUDIO / APPOINTMENTS</p><h1 class="text-4xl font-semibold">Make room for your next idea.</h1><p class="app-muted">A private browser demo for checking local styles, form feedback and saved state.</p></header>
+  <div class="app-grid">
+    <section class="app-card app-stack"><h2>Book a session</h2>
+      <form id="booking" class="app-stack">
+        <label class="app-field">Your name<input id="name" name="name" required autocomplete="name"></label>
+        <label class="app-field">Session<select id="session"><option>Design consultation</option><option>Project review</option></select></label>
+        <button class="app-button" type="submit">Save appointment</button>
+        <output id="status" aria-live="polite"></output>
+      </form>
+    </section>
+    <section class="app-card app-stack"><h2>Your appointments</h2><ul id="appointments"></ul><p class="app-muted">Saved on this browser for the fixture only.</p></section>
+  </div>
+</main>
+<script>
+  const list = document.querySelector('#appointments');
+  let appointments = JSON.parse(localStorage.getItem('fixture-appointments') || '[]');
+  function render() {
+    list.replaceChildren(...appointments.map(value => { const item = document.createElement('li'); item.textContent = value; return item; }));
+  }
+  document.querySelector('#booking').addEventListener('submit', event => {
+    event.preventDefault();
+    appointments.push(document.querySelector('#name').value + ' — ' + document.querySelector('#session').value);
+    localStorage.setItem('fixture-appointments', JSON.stringify(appointments));
+    render();
+    document.querySelector('#status').textContent = 'Appointment saved';
+  });
+  render();
+</script>
+</body></html>

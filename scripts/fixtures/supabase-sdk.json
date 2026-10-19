@@ -1,0 +1,7 @@
+{
+  "package": "@supabase/supabase-js",
+  "version": "2.58.0",
+  "integrity": "sha512-Tm1RmQpoAKdQr4/8wiayGti/no+If7RtveVZjHR8zbO7hhQjmPW2Ok5ZBPf1MGkt5c+9R85AVMsTfSaqAP1sUg==",
+  "browserArtifact": "package/dist/umd/supabase.js",
+  "browserImage": "codepal-browser:efeb16a78e4c"
+}

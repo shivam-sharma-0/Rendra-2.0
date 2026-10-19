@@ -1,0 +1,12 @@
+[
+  { "id": 1, "name": "greeting", "prompt": "Hi", "expected": "CHAT" },
+  { "id": 2, "name": "how-work", "prompt": "how do you work?", "expected": "CHAT" },
+  { "id": 3, "name": "project-question", "prompt": "How does the counter on this page work?", "expected": "CHAT" },
+  { "id": 4, "name": "bug-report", "prompt": "page is blank", "expected": "BUILD" },
+  { "id": 5, "name": "small-edit", "prompt": "Change the heading to Benchmark Counter. Preserve the Increment button, #increment and #count behavior.", "expected": "BUILD" },
+  { "id": 6, "name": "new-static", "prompt": "Build a polished static website for Solar Bakery, a synthetic bakery. Include a responsive hero headed Solar Bakery, a menu section id=menu, and a Contact link to #contact with a contact section id=contact. Use static HTML/CSS, no framework, accounts, backend or database. Add a working mobile menu if navigation collapses. It should be ready to preview and publish.", "expected": "BUILD", "storage": "NONE", "fresh": true },
+  { "id": 7, "name": "new-vite-multi-page", "prompt": "Build a React/Vite multi-page fitness app for fictional Solar Fitness. Routes /, /classes and /contact; visible navigation links to Classes and Contact. Classes lists Yoga. Contact has labelled fields id=name, id=email, id=message and a Send button id=send; submitting valid values displays Message received in id=contact-status without a backend. Use browser-only state, no accounts or external services. Responsive and ready to preview and publish.", "expected": "BUILD", "storage": "BROWSER", "fresh": true },
+  { "id": 8, "name": "new-todo-browser-substitute", "prompt": "Build a React/Vite Todo app using browser localStorage only, with no login, backend or cloud dependency. This is the browser-storage benchmark substitute until Phase 7. Provide a labelled input id=task-title, button id=add-task, task rows data-task, completion checkboxes and per-task buttons data-delete. Add, complete and delete must persist across page reloads. Show loading/empty/error states and make it responsive and publishable.", "expected": "BUILD", "storage": "BROWSER", "fresh": true },
+  { "id": 9, "name": "plan-then-build-this", "prompt": "Add a Reset button id=reset to the existing counter that resets #count to 0. Preserve increment behavior. Plan the change first.", "expected": "PLAN", "requirePlanReuse": true },
+  { "id": 10, "name": "unclear-offer-accept", "prompt": "a modern look", "expected": "BUILD" }
+]

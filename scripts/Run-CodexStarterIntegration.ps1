@@ -27,6 +27,7 @@ try {
     foreach($codexFile in @('package.json','tsconfig.json','vite.config.ts','index.html','src/main.tsx','src/index.css')) {
         Copy-Item -LiteralPath (Join-Path $codexRoot "src/main/resources/starters/vite-react/$codexFile") -Destination (Join-Path $codexOwned "vite/$codexFile")
     }
+    Copy-Item -LiteralPath (Join-Path $codexRoot 'src/main/resources/starters/design-system.css') -Destination "$codexOwned/vite/src/design-system.css"
     foreach($codexFile in @('package.json','tsconfig.json','src/index.ts')) {
         Copy-Item -LiteralPath (Join-Path $codexRoot "src/main/resources/starters/mern/server/$codexFile") -Destination (Join-Path $codexOwned "server/$codexFile")
     }

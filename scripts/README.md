@@ -99,3 +99,97 @@ button. Rejected Build this clicks have one local alert and leave the composer a
 `MISTRAL_INCLUDE_STREAM_USAGE` defaults false pending a live compatibility check;
 `NVIDIA_INCLUDE_STREAM_USAGE` remains true. These provider-specific switches do not
 guarantee that every provider attempt will report usage; benchmark unknown totals remain explicit.
+
+## Independent native outcome gate (fixture verified 2026-10-17)
+
+`node --test scripts/Test-FeatureOutcomes.mjs` exercises the bounded outcome protocol with fake page state;
+it does not run native DOM. The separate `./scripts/Run-CodexFeatureOutcomes.ps1` uses cached isolated
+Chromium with synthetic native contact-form/browser-CRUD fixtures, including routed navigation and broken controls.
+It mounts the current probe/relay/outcome modules read-only, uses no backend/provider/customer data,
+and writes owned evidence under `target/codex-outcome-it` with label-verified container cleanup.
+Do not enable `AGENT_FEATURE_OUTCOMES_ENABLED` based on the Node protocol pass alone. Focused Java
+and actual native-DOM gates remain required; ten real positive/negative Chromium cases now pass with
+cleanup verified. This is authored-fixture evidence; generated-app rollout still needs its gate. See
+the agent-generation implementation progress file for exact receipts and remaining scope.
+
+## Supabase SDK/browser boundary
+
+`./scripts/Run-CodexSupabaseSdk.ps1` obtains only an integrity-pinned SDK browser artifact with npm lifecycle
+scripts disabled, then runs real native signup/login/reload/server-data actions in offline Chromium against
+fresh labelled Supabase services. It also requires a broken-delete negative control. Fixture policy is
+`scripts/fixtures/supabase-sdk.json`; no customer credentials/target are accepted. Prepared assets and reports
+remain under a unique `target/codex-supabase-sdk-it` directory, with owned container cleanup. The focused
+Java gate can also include `SupabaseCrashRecoveryIT` (`codepal.supabase.it=true`) to kill its own JVM and
+prove orphan cleanup; its lease ownership is controlled, not a distributed lease-expiry proof.
+
+## Isolated current-candidate benchmark
+
+After current all-`*Test` verification, use `Run-AgentBenchmark.ps1 -VerificationDirectory <verified-output>
+-IsolatedClasses -GenerationImprovements -CandidateId <12-hex-id>` to select that output's `classes` instead
+of development `target/classes`. The harness freezes that class tree in its owned evidence directory and
+verifies SHA-256 manifests before/after copying, so a later compilation cannot alter the running candidate.
+It records bytecode/source identity, excludes test classes from Boot and retains the existing fresh sanitized
+DB/workspace/port/cleanup boundaries and FREE provider routes.
+This mode can coexist with development processes; default legacy launch keeps its stop-process precondition.
+Candidate reports have an exclusive suffix and never overwrite historical output. The optional improvement
+flag is scoped to the synthetic backend and enables native outcomes, compact tools and bounded run artifacts;
+it does not enable structured/parallel execution or normal deployment rollout.
+
+`Run-RealDevE2E.ps1 -Scenario mern -VerificationDirectory <verified-output> -IsolatedClasses` uses the same
+frozen production-only class selection, FREE routes and pre-Boot synthetic sanitization for a fresh
+generated backend/frontend scenario. A benchmark also retains run steps and bounded failed-draft bodies
+before its disposable database is removed, so validation failures remain inspectable after cleanup.
+
+`Run-CodexNativeCompiler.ps1 -Source <owned-synthetic-stage>` checks native dependency recovery without a
+provider call. It accepts only a retained `codepal-codex-e2e/codex_e2e_<id>/<project>/.codepal/changesets/...`
+stage, copies into a fresh owned Linux volume, installs with scripts disabled, then compiles in a separate
+network-disabled container. Logs, image identity and cleanup receipt stay under `target/codex-native-it`.
+
+`Run-RealDevE2E.ps1 -ViteGeneration -IsolatedClasses -GenerationImprovements -VerificationDirectory <verified-output>`
+selects only the shared multi-page Vite and browser Todo journeys (7/8) for focused generation verification.
+It requires both saved builds, READY previews, real browser actions and publish capability; it retains the
+physical usage ledger and exact owned project/run evidence. It does not issue a complete ten-journey report.
+The real provider call remains subject to explicit approval for platform prompts/tool schemas and synthetic
+generated source sent to Mistral/NVIDIA; local protocol/compiler/Chromium gates do not substitute for it.
+
+The owner-selected PLAN route is `openrouter:nvidia/nemotron-3-ultra-550b-a55b:free`, configured by
+`AGENT_MODEL_PLAN` / `AGENT_MODEL_FREE_PLAN`; coding stays on BUILD routes. Synthetic harness overrides
+pin this planner to `https://openrouter.ai/api/v1`, alongside its existing fixed coding destinations.
+`Run-RealDevE2E.ps1 -PlanningIntake -IsolatedClasses -VerificationDirectory <verified-output>` tests only
+product intake: a reported successful plan on that primary or its explicit configured Mistral fallback,
+within two ordered attempts, no redundant questions, automatic MERN and multiple planned pages.
+Both route entries live in `fixtures/planner-intake.json`; coding routes are never inferred as planners.
+Any failed attempt remains in the physical ledger, including UNKNOWN usage. It never approves, generates or publishes an app.
+The same sanitized DB/frozen classes/owned cleanup and physical ledger evidence apply. A passing intake
+does not certify app generation, authentication or backend publishing; API/MERN publishing is still gated.
+The physical ledger export includes safe call outcome/error code and duration. A missing plan or failed
+final attempt keeps the gate red. A successful fallback does not turn an earlier UNKNOWN into reported
+usage or a complete monetary-cost certificate.
+
+The fresh `-Scenario mern -IsolatedClasses` fixture now uses `fullStackPrompt` from that same resource:
+private accounts, dashboard/task details/settings routes, persistent backend data and complete UI states.
+It refuses redundant questions, absent automatic MERN/accounts or missing multipage scope. It requires
+saved code/READY preview, retains the actual project usage summary, and checks existing API/browser gates.
+It does not certify the still-unsupported full-stack publishing capability.
+
+`-Scenario mern -PersonalTodo -IsolatedClasses` uses the original natural personal-Todo prompt as a
+separate baseline: automatic server storage, either valid inferred auth choice, actual saved API/browser/CRUD/restart
+and READY proof, plus at least three routes in the saved build contract. Detailed intake review may be
+unavailable; final app proof remains required. The default account-backed `-Scenario mern` gate retains
+its separate stricter intake/account checks and results. Intake usage is exported even before generation;
+an intake stop is never masked by a missing build.json read.
+
+`-TracePlanning` is an optional diagnostic for `-IsolatedClasses` only. It preserves generated synthetic
+planning replies in the owned ignored evidence directory through a loopback relay to the same fixed
+OpenRouter and Mistral endpoints. It never records request bodies, credentials/headers or reasoning, and the owned
+relay process stops during fixture cleanup. This must not be used with customer data. Contract planning
+defaults to plain JSON; `AGENT_PLANNING_CONTRACT_TOOL_ENABLED=false` leaves native tools opt-in, and
+`AGENT_PLANNING_CORRECTION_FALLBACK=true` can use another explicit PLAN route for the existing correction slot.
+Current defaults use Ultra first and existing Mistral Codestral second; `AGENT_PLANNING_SCHEMA_PROVIDERS=mistral`
+permits schema output there. An unsupported alternate never inherits the previous provider's response format.
+Planning and unit-output corrections have distinct ledger purposes; coding repair keeps its existing transport policy.
+
+`node scripts/Test-RequirementDialog.cjs` and `node --test scripts/Test-RequirementsHook.cjs` exercise the
+actual UI callbacks with controlled hook state: inferred setup stays hidden, unresolved setup cannot be
+accepted by Skip all, approval uses the saved revision, and missing detailed planning is not shown as ready.
+These are offline component/hook checks, not browser, backend or generated-app certificates.

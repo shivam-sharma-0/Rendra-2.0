@@ -23,6 +23,8 @@ module.exports = function browserCheck(projectRoot, actions, owner, index) {
   }).trim();
   const linuxSite = command(['wslpath', '-u', site]);
   const probe = command(['wslpath', '-u', path.join(__dirname, '../src/main/resources/sandbox/browser/probe.mjs')]);
+  const relay = command(['wslpath', '-u', path.join(__dirname, '../src/main/resources/sandbox/browser/relay.mjs')]);
+  const outcomes = command(['wslpath', '-u', path.join(__dirname, '../src/main/resources/sandbox/browser/outcomes.mjs')]);
   const image = command(['docker', 'image', 'inspect', 'codepal-browser:efeb16a78e4c', '--format', '{{.Id}}']);
   if (!/^sha256:[a-f0-9]{64}$/.test(image)) throw Error('Cached browser image unavailable');
   const raw = command(['docker', 'run', '--rm', '--name', owner + '-browser-' + index,
@@ -30,6 +32,8 @@ module.exports = function browserCheck(projectRoot, actions, owner, index) {
     '--cpus', '1', '--memory', '512m', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
     '--mount', 'type=bind,source=' + linuxSite + ',target=/site,readonly',
     '--mount', 'type=bind,source=' + probe + ',target=/opt/codepal/probe.mjs,readonly',
+    '--mount', 'type=bind,source=' + relay + ',target=/opt/codepal/relay.mjs,readonly',
+    '--mount', 'type=bind,source=' + outcomes + ',target=/opt/codepal/outcomes.mjs,readonly',
     '--entrypoint', 'node', image, '/opt/codepal/probe.mjs', '/site', '300',
     Buffer.from(JSON.stringify({ schema: 1, actions })).toString('base64')]);
   const report = JSON.parse(raw.split('\n').filter(line => line.startsWith('{')).at(-1));

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en" data-fixture-defect="__DEFECT__">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Native outcome fixture</title>
+<style>body{font:16px system-ui;margin:0;background:#f5f6f8;color:#182238}main{max-width:48rem;margin:auto;padding:1.5rem}section{background:white;padding:1.25rem;margin-bottom:1rem;border-radius:.75rem}form,label{display:grid;gap:.5rem}form{gap:1rem}input,textarea,button{font:inherit;padding:.6rem;min-width:0}li{margin:.75rem 0;overflow-wrap:anywhere}li button{margin-left:.5rem}h1,h2{line-height:1.2}</style></head>
+<body><main><h1>Native outcome fixture</h1>
+<section><h2>Contact</h2><form data-rendra-feature="contact" id="contact">
+<label>Name<input name="name" required></label><label>Email<input name="email" type="email" required></label>
+<label>Message<textarea name="message" required></textarea></label><button type="submit">Send message</button>
+<p role="status" data-state="idle" id="feedback"></p></form></section>
+<section data-rendra-feature="tasks"><h2>Tasks</h2><form id="tasks"><label>Task title<input name="title" required></label>
+<button type="submit">Save task</button></form><ul id="items" aria-label="Saved tasks"></ul></section>
+</main><script>
+const defect=document.documentElement.dataset.fixtureDefect;
+if(defect==='routed-contact'||defect==='external-contact-link'){
+  const section=document.querySelector('#contact').closest('section');section.hidden=true;
+  const link=document.createElement('a');link.dataset.rendraFeatureLink='contact';link.textContent='Contact';
+  link.href=defect==='routed-contact'?'#/contact':'https://example.invalid/contact';
+  link.addEventListener('click',event=>{event.preventDefault();section.hidden=false;});
+  document.querySelector('main').prepend(link);
+}
+document.querySelector('#contact').addEventListener('submit',event=>{
+  event.preventDefault();
+  if(defect==='no-feedback')return;
+  const status=document.querySelector('#feedback');
+  status.dataset.state=defect==='loading-only'?'pending':'success';
+  status.textContent=defect==='loading-only'?'Sending...':'Message received';
+  status.hidden=defect==='hidden-feedback';
+});
+let records=[];try{records=JSON.parse(localStorage.getItem('fixture-items')||'[]');}catch{}
+let editing=null;
+const form=document.querySelector('#tasks');
+const titleControl=form.querySelector('input');
+if(defect==='missing-field-name')titleControl.removeAttribute('name');
+function render(){
+  const list=document.querySelector('#items');list.replaceChildren();
+  for(const record of records){
+    const item=document.createElement('li');
+    const text=document.createElement('span');text.textContent=record.title;item.append(text);
+    for(const action of ['edit','delete']){
+      const button=document.createElement('button');button.type='button';button.dataset.rendraAction=action;
+      button.textContent=action==='edit'?'Edit':'Delete';
+      button.addEventListener('click',()=>{
+        if(action==='edit'){editing=record.id;titleControl.value=record.title;return;}
+        if(defect!=='broken-delete')records=records.filter(value=>value.id!==record.id);
+        save();render();
+      });item.append(button);
+    }list.append(item);
+  }
+}
+function save(){if(defect!=='no-persistence')localStorage.setItem('fixture-items',JSON.stringify(records));}
+form.addEventListener('submit',event=>{
+  event.preventDefault();const title=titleControl.value;
+  if(editing){if(defect!=='broken-update')records=records.map(record=>record.id===editing?{...record,title}:record);}
+  else records.push({id:crypto.randomUUID(),title});
+  editing=null;form.reset();save();render();
+});render();
+</script></body></html>

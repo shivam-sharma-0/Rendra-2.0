@@ -3,8 +3,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const browserCheck = require('./AgentBenchmarkBrowser.cjs');
 const { createBenchmarkApi } = require('./AgentBenchmarkAuth.cjs');
+const definitions = require('./fixtures/agent-benchmark-journeys.json');
+const { retainRunEvidence } = require('./AgentRunEvidence.cjs');
 
 const [base, workspace, evidence] = process.argv.slice(2);
+const viteGeneration = process.argv[5] === 'vite-generation';
+const selectedDefinitions = viteGeneration ? definitions.filter(definition => [7, 8].includes(definition.id)) : definitions;
 if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base)) throw Error('Owned loopback backend required');
 const owner = path.basename(evidence);
 if (!/^codex_e2e_[a-f0-9]{12}$/.test(owner)) throw Error('Owned evidence directory required');
@@ -22,22 +26,6 @@ const action = (id, kind, selector, value) => ({ id, kind, selector, value });
 const counterActions = [action('counter', 'ASSERT_TEXT', 'h1', 'Counter'), action('increment', 'CLICK', '#increment'),
   action('count', 'ASSERT_TEXT', '#count', '1')];
 const counter = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Counter</title></head><body><main id="app"><h1>Counter</h1><button id="increment">Increment</button><output id="count">0</output></main><script>document.querySelector("#increment").onclick=()=>document.querySelector("#count").textContent=Number(document.querySelector("#count").textContent)+1</script></body></html>';
-const staticPrompt = 'Build a polished static website for Solar Bakery, a synthetic bakery. Include a responsive hero headed Solar Bakery, a menu section id=menu, and a Contact link to #contact with a contact section id=contact. Use static HTML/CSS, no framework, accounts, backend or database. Add a working mobile menu if navigation collapses. It should be ready to preview and publish.';
-const vitePrompt = 'Build a React/Vite multi-page fitness app for fictional Solar Fitness. Routes /, /classes and /contact; visible navigation links to Classes and Contact. Classes lists Yoga. Contact has labelled fields id=name, id=email, id=message and a Send button id=send; submitting valid values displays Message received in id=contact-status without a backend. Use browser-only state, no accounts or external services. Responsive and ready to preview and publish.';
-const todoPrompt = 'Build a React/Vite Todo app using browser localStorage only, with no login, backend or cloud dependency. This is the browser-storage benchmark substitute until Phase 7. Provide a labelled input id=task-title, button id=add-task, task rows data-task, completion checkboxes and per-task buttons data-delete. Add, complete and delete must persist across page reloads. Show loading/empty/error states and make it responsive and publishable.';
-const definitions = [
-  { id: 1, name: 'greeting', prompt: 'Hi', expected: 'CHAT' },
-  { id: 2, name: 'how-work', prompt: 'how do you work?', expected: 'CHAT' },
-  { id: 3, name: 'project-question', prompt: 'How does the counter on this page work?', expected: 'CHAT' },
-  { id: 4, name: 'bug-report', prompt: 'page is blank', expected: 'BUILD' },
-  { id: 5, name: 'small-edit', prompt: 'Change the heading to Benchmark Counter. Preserve the Increment button, #increment and #count behavior.', expected: 'BUILD' },
-  { id: 6, name: 'new-static', prompt: staticPrompt, expected: 'BUILD', storage: 'NONE', fresh: true },
-  { id: 7, name: 'new-vite-multi-page', prompt: vitePrompt, expected: 'BUILD', storage: 'BROWSER', fresh: true },
-  { id: 8, name: 'new-todo-browser-substitute', prompt: todoPrompt, expected: 'BUILD', storage: 'BROWSER', fresh: true },
-  { id: 9, name: 'plan-then-build-this', prompt: 'Add a Reset button id=reset to the existing counter that resets #count to 0. Preserve increment behavior. Plan the change first.', expected: 'PLAN' },
-  // A vague request: the model may offer a concrete change; accepting it must post the user's own words and build.
-  { id: 10, name: 'unclear-offer-accept', prompt: 'a modern look', expected: 'BUILD' },
-];
 
 function sourceProof(root) {
   const files = {};
@@ -68,7 +56,7 @@ async function waitRun(record, messageId) {
         await pause(500);
         continue;
       }
-      const steps = await api(`/api/projects/${record.projectId}/agent-runs/${run.id}/steps`);
+      const steps = await retainRunEvidence(api, record.projectId, run, evidence);
       for (const step of steps.filter(value => value.type === 'ASK_USER' || value.activity?.kind === 'ASK_USER')) {
         let payload;
         try { payload = typeof step.data === 'string' ? JSON.parse(step.data) : step.data; } catch { payload = null; }
@@ -199,7 +187,7 @@ async function stopActive(record) {
 (async () => {
   await client.signup();
   workspaceId = (await api('/api/workspaces'))[0].id;
-  for (const definition of definitions) {
+  for (const definition of selectedDefinitions) {
     const start = Date.now();
     const record = { journey: definition.id, name: definition.name, startedAt: new Date(start).toISOString(),
       projectId: null, routingCorrect: false, turns: [], questionPrompts: new Set(),
@@ -229,6 +217,7 @@ async function stopActive(record) {
         record.planSourceUnchanged = sourceProof(root) === record.originalProof && !result.run.codeSavedAt;
         const offer = result.reply?.suggestedAction;
         if (!offer) throw Error('PLAN reply has no Build this action');
+        record.planProposalId = offer.proposalId;
         if (result.run.planAvailable) {
           const plan = await api(`/api/projects/${project.id}/agent-runs/${result.run.id}/plan`);
           record.planContractId = plan?.id;
@@ -258,6 +247,11 @@ async function stopActive(record) {
       console.log(JSON.stringify({ journey: record.journey, routingCorrect: record.routingCorrect,
         acceptance: record.acceptance.passed, wallMs: record.wallMs }));
     }
+  }
+  if (viteGeneration) {
+    const passed = journeys.length === 2 && journeys.every(record => record.routingCorrect && record.acceptance.passed);
+    save('vite-generation', {schema:1, owner, journeyIds:selectedDefinitions.map(definition => definition.id), passed});
+    if (!passed) throw Error('Vite generation did not pass both actual saved-app browser journeys');
   }
 })().catch(error => {
   save('benchmark-failure', { error: error.message }); console.error(error.message); process.exitCode = 1;

@@ -1,0 +1,5 @@
+{
+  "reportFilePattern": "^\\d{4}-\\d{2}-\\d{2}-[a-f0-9]{12}(-structured)?(-candidate-[a-f0-9]{12})?\\.json$",
+  "failedDraftWaitMs": 10000,
+  "failedDraftPollMs": 200
+}

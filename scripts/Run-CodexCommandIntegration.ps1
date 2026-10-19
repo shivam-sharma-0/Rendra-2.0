@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidatePattern('^[A-Za-z0-9_,.]+$')][string]$Tests='CommandIsolationIT')
+param([ValidatePattern('^[A-Za-z0-9_,.#]+$')][string]$Tests='CommandIsolationIT')
 $ErrorActionPreference='Stop'
 $codexRoot=[System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $codexProject='codepal-codex-command-it-'+[Guid]::NewGuid().ToString('N').Substring(0,12)
