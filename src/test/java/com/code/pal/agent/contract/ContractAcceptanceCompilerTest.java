@@ -9,6 +9,58 @@ import static org.junit.jupiter.api.Assertions.*;
 class ContractAcceptanceCompilerTest {
     final ObjectMapper mapper=new ObjectMapper();
 
+    @Test void missingRouteValuesUseOnlyAnExplicitDeclaredTargetOrTheImmediateLink() {
+        for (String missing : Arrays.asList(null, "", "  ")) {
+            var data = routeProposal();
+            var action = new LinkedHashMap<String, Object>();
+            action.put("id", "ui_login_success"); action.put("kind", "ASSERT_ROUTE");
+            action.put("selector", "/"); action.put("value", missing);
+            ((Map<String, Object>) data.get("acceptance")).put("browser", List.of(action));
+            var compiled = mapper.readValue(ContractAcceptanceCompiler.completeCollections(
+                    mapper.writeValueAsString(data), mapper), BuildContract.class);
+            assertEquals("/", compiled.acceptance().browser().getFirst().value());
+        }
+        var data = routeProposal();
+        ((Map<String, Object>) data.get("acceptance")).put("browser", List.of(
+                Map.of("id", "open", "kind", "CLICK", "selector", "a[href='#/tasks/123']"),
+                Map.of("id", "route", "kind", "ASSERT_ROUTE", "value", "")));
+        var compiled = mapper.readValue(ContractAcceptanceCompiler.completeCollections(
+                mapper.writeValueAsString(data), mapper), BuildContract.class);
+        assertEquals("/tasks/123", compiled.acceptance().browser().getLast().value());
+    }
+
+    @Test void ambiguousRedirectsExternalLinksAndInterveningActionsNeverGuessARoute() {
+        var data = routeProposal();
+        for (String selector : List.of("button[data-action='login']", "a[href='/login'],a[href='/signup']",
+                "a[href='https://external.example.invalid/login']", "a[href='/unknown']")) {
+            ((Map<String, Object>) data.get("acceptance")).put("browser", List.of(
+                    Map.of("id", "login", "kind", "CLICK", "selector", selector),
+                    Map.of("id", "ui_login_success", "kind", "ASSERT_ROUTE", "value", "")));
+            assertThrows(RuntimeException.class, () -> ContractAcceptanceCompiler.completeCollections(
+                    mapper.writeValueAsString(data), mapper));
+        }
+        ((Map<String, Object>) data.get("acceptance")).put("browser", List.of(
+                Map.of("id", "login", "kind", "CLICK", "selector", "a[href='/login']"),
+                Map.of("id", "conflict", "kind", "ASSERT_ROUTE", "selector", "/signup", "value", "")));
+        assertThrows(RuntimeException.class, () -> ContractAcceptanceCompiler.completeCollections(
+                mapper.writeValueAsString(data), mapper));
+        ((Map<String, Object>) data.get("acceptance")).put("browser", List.of(
+                Map.of("id", "open", "kind", "CLICK", "selector", "a[href='/login']"),
+                Map.of("id", "fill", "kind", "FILL", "selector", "input[name='email']", "value", "fixture@example.invalid"),
+                Map.of("id", "route", "kind", "ASSERT_ROUTE", "value", "")));
+        assertThrows(RuntimeException.class, () -> ContractAcceptanceCompiler.completeCollections(
+                mapper.writeValueAsString(data), mapper));
+    }
+
+    private Map<String, Object> routeProposal() {
+        Map<String, Object> data = mapper.readValue(mapper.writeValueAsString(ContractFixtures.mern()), Map.class);
+        var routes = (List<Map<String, Object>>) data.get("routes");
+        for (String path : List.of("/login", "/signup", "/tasks/:id"))
+            routes.add(Map.of("path", path, "componentPath", "client/src/App.tsx", "owner", "ui"));
+        ((List<Map<String, Object>>) data.get("units")).getLast().put("acceptanceIds", List.of());
+        return data;
+    }
+
     @Test void optionalPreferencesTrimWithoutDroppingRoutesOrAnyAccountCrudEvidence() {
         var data = preferenceProposal();
         var originalApi = mapper.writeValueAsString(((Map<?, ?>) data.get("acceptance")).get("api"));

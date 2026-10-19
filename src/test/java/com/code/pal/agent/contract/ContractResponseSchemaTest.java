@@ -10,6 +10,23 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ContractResponseSchemaTest {
     final ObjectMapper mapper=new ObjectMapper();
+
+    @Test void routeAssertionsRequireAValueWhileClicksStillPermitNull() {
+        var c = ContractFixtures.mern();
+        var input = new ContractPlanner.Input(c.id(), "Tasks", "Approved", "Map",
+                new BuildDecisions.Choice(1, c.storage(), c.auth(), null), c.limits());
+        var schema = mapper.readTree(ContractResponseSchema.planner(input, mapper).schema());
+        var variants = schema.at("/properties/acceptance/properties/browser/items/anyOf");
+        assertEquals(2, variants.size());
+        var route = variants.get(0);
+        assertEquals("ASSERT_ROUTE", route.at("/properties/kind/const").asString());
+        assertEquals("string", route.at("/properties/value/type").asString());
+        assertEquals(1, route.at("/properties/value/minLength").asInt());
+        assertEquals("^/", route.at("/properties/value/pattern").asString());
+        assertTrue(mapper.convertValue(route.path("required"), List.class).contains("value"));
+        assertFalse(mapper.convertValue(variants.get(1).at("/properties/kind/enum"), List.class).contains("ASSERT_ROUTE"));
+        assertEquals("null", variants.get(1).at("/properties/value/anyOf/1/type").asString());
+    }
     @Test void plannerGrammarBindsAuthorityAndTypesWithoutReplacingBackendValidation() {
         var c=ContractFixtures.mern();var input=new ContractPlanner.Input(c.id(),"Tasks","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits());
         var schema=mapper.readTree(ContractResponseSchema.planner(input,mapper).schema());

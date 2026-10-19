@@ -189,6 +189,19 @@ final class ContractResponseSchema {
         schema.put("properties", fields);
         schema.put("required", required);
         schema.put("additionalProperties", false);
+        if (clazz == BehaviorCriteria.BrowserAction.class) {
+            var routeFields = new LinkedHashMap<>(fields);
+            routeFields.put("kind", Map.of("type", "string", "const", "ASSERT_ROUTE"));
+            routeFields.put("value", Map.of("type", "string", "minLength", 1, "maxLength", 512, "pattern", "^/"));
+            var route = new LinkedHashMap<>(schema);
+            route.put("properties", routeFields);
+            var otherFields = new LinkedHashMap<>(fields);
+            otherFields.put("kind", Map.of("type", "string", "enum", Arrays.stream(BehaviorCriteria.BrowserKind.values())
+                    .filter(kind -> kind != BehaviorCriteria.BrowserKind.ASSERT_ROUTE).map(Enum::name).toList()));
+            var other = new LinkedHashMap<>(schema);
+            other.put("properties", otherFields);
+            return new LinkedHashMap<>(Map.of("anyOf", List.of(route, other)));
+        }
         return schema;
     }
 }

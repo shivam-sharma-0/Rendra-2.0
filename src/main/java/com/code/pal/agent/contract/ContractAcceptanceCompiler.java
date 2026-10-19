@@ -17,6 +17,7 @@ final class ContractAcceptanceCompiler {
             "(?i)\\b(task|todo|item|title|edit|delete|complete|search|filter|account|auth|password|email)\\b");
     private static final Pattern CONTROL_ATTRIBUTE = Pattern.compile(
             "\\[(?:name|data-(?:pref|preference|action|testid))\\s*=\\s*['\"]([^'\"]+)['\"]\\]");
+    private static final Pattern HREF = Pattern.compile("\\[href\\s*=\\s*['\"]([^'\"]*)['\"]\\]");
     private ContractAcceptanceCompiler() {
     }
 
@@ -51,9 +52,10 @@ final class ContractAcceptanceCompiler {
     @SuppressWarnings("unchecked")
     static String completeCollections(String content, ObjectMapper mapper, String requiredScope) {
         Map<String, Object> data = mapper.readValue(content, Map.class);
+        boolean changed = fillRouteValues(data);
         if (!"MERN".equals(data.get("stack")))
-            return content;
-        boolean changed = removeExactDuplicates(data);
+            return changed ? mapper.writeValueAsString(data) : content;
+        changed |= removeExactDuplicates(data);
         changed |= resolveUnambiguousUnitIds(data);
         changed |= trimOptionalBrowserChecks(data, requiredScope);
         var criteria = mapper.convertValue(data.get("acceptance"), BehaviorCriteria.class);
@@ -133,6 +135,49 @@ final class ContractAcceptanceCompiler {
         data.put("acceptance", new BehaviorCriteria(criteria.schema(), criteria.browser(), checks,
                 criteria.authRequired(), criteria.crudRequired()));
         return mapper.writeValueAsString(data);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean fillRouteValues(Map<String, Object> data) {
+        if (!(data.get("acceptance") instanceof Map<?, ?> acceptance)
+                || !(acceptance.get("browser") instanceof List<?> browser)
+                || !(data.get("routes") instanceof List<?> routes)) return false;
+        var declared = routes.stream().filter(value -> value instanceof Map<?, ?>)
+                .map(value -> ((Map<?, ?>) value).get("path")).filter(value -> value instanceof String)
+                .map(String.class::cast).filter(path -> path.matches("/[A-Za-z0-9_/:.-]{0,120}")
+                        && !path.contains("..") && !path.contains("//")).toList();
+        boolean changed = false;
+        for (int index = 0; index < browser.size(); index++) {
+            if (!(browser.get(index) instanceof Map<?, ?> raw) || !"ASSERT_ROUTE".equals(raw.get("kind"))
+                    || raw.get("value") != null && (!(raw.get("value") instanceof String text) || !text.isBlank())
+                    || !(raw.get("id") instanceof String id) || !id.matches("[A-Za-z0-9_-]{1,64}")) continue;
+            var candidates = new LinkedHashSet<String>();
+            if (raw.get("selector") instanceof String target && (target.startsWith("/") || target.startsWith("#/"))
+                    && !addRouteCandidate(candidates, target, declared)) continue;
+            boolean unknownHref = false;
+            if (index > 0 && browser.get(index - 1) instanceof Map<?, ?> previous
+                    && "CLICK".equals(previous.get("kind")) && previous.get("selector") instanceof String selector) {
+                var hrefs = HREF.matcher(selector);
+                while (hrefs.find()) unknownHref |= !addRouteCandidate(candidates, hrefs.group(1), declared);
+            }
+            if (unknownHref || candidates.size() != 1) continue;
+            String route = candidates.iterator().next();
+            ((Map<String, Object>) raw).put("value", route);
+            log.info("planner_route_assertion_filled id={} step={} value={}", id, index + 1, route);
+            changed = true;
+        }
+        return changed;
+    }
+
+    private static boolean addRouteCandidate(Set<String> candidates, Object value, List<String> declared) {
+        if (!(value instanceof String text)) return false;
+        String path = text.startsWith("#/") ? text.substring(1) : text;
+        if (path.matches("/[A-Za-z0-9_/.-]{0,120}") && !path.contains("..") && !path.contains("//")
+                && declared.stream().anyMatch(shape -> BuildContract.matchesApiPath(shape, path))) {
+            candidates.add(path);
+            return true;
+        }
+        return false;
     }
 
     /** Fail closed: unknown actions and required scope stay intact for the existing model correction. */

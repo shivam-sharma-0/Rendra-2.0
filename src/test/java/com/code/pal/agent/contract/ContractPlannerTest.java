@@ -47,6 +47,23 @@ class ContractPlannerTest {
         assertEquals("api create step 2 CREATE: method is invalid; must be GET, POST, PUT, PATCH or DELETE", feedback);
         assertFalse(feedback.contains("PRIVATE_INVALID_METHOD"));
     }
+
+    @Test void anExplicitMisplacedRouteIsFilledWithoutSpendingAModelCorrection() {
+        var c = ContractFixtures.mern();
+        Map<String, Object> proposal = mapper.readValue(mapper.writeValueAsString(c), Map.class);
+        ((Map<String, Object>) proposal.get("acceptance")).put("browser", List.of(
+                Map.of("id", "ui", "kind", "ASSERT_ROUTE", "selector", "/", "value", "")));
+        var fresh = new ContractPlanner.Input(c.id(), "Build Items", "Approved", "Map",
+                new BuildDecisions.Choice(1, c.storage(), c.auth(), null), c.limits());
+        var calls = new AtomicInteger();
+        var result = planner.plan(fresh, model, request -> {
+            calls.incrementAndGet(); return reply(mapper.writeValueAsString(proposal));
+        });
+        assertEquals(1, calls.get());
+        assertEquals("/", result.acceptance().browser().getFirst().value());
+        assertEquals(c.acceptance().api(), result.acceptance().api());
+        assertEquals(c.limits(), result.limits());
+    }
     @Test void freshRootOwnershipUsesTheExistingCorrectionBudget(){
         var c=ContractFixtures.mern();Map<String,Object> bad=mapper.readValue(mapper.writeValueAsString(c),Map.class);
         var units=(List<Map<String,Object>>)bad.get("units");units.getLast().put("ownedPaths",List.of("client/src/Items.tsx"));
