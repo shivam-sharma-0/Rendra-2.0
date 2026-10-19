@@ -8,6 +8,98 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ContractAcceptanceCompilerTest {
     final ObjectMapper mapper=new ObjectMapper();
+
+    @Test void optionalPreferencesTrimWithoutDroppingRoutesOrAnyAccountCrudEvidence() {
+        var data = preferenceProposal();
+        var originalApi = mapper.writeValueAsString(((Map<?, ?>) data.get("acceptance")).get("api"));
+        var compiled = mapper.readValue(ContractAcceptanceCompiler.completeCollections(
+                mapper.writeValueAsString(data), mapper, "Build task CRUD with settings navigation"), BuildContract.class);
+        assertEquals(23, compiled.acceptance().browser().size());
+        assertTrue(compiled.acceptance().browser().stream().anyMatch(action -> action.id().equals("settings_route")));
+        assertEquals(originalApi, mapper.writeValueAsString(compiled.acceptance().api()));
+        assertTrue(compiled.acceptance().authRequired());
+        assertTrue(compiled.acceptance().crudRequired());
+        assertFalse(compiled.units().stream().flatMap(unit -> unit.acceptanceIds().stream())
+                .anyMatch(id -> id.equals("pref_save")));
+    }
+
+    @Test void requiredPreferencesAndUnknownScopeAreNeverAssumedOptional() {
+        String proposal = mapper.writeValueAsString(preferenceProposal());
+        for (String scope : Arrays.asList(null, "Persist the selected theme after reload",
+                "{\"requestedScope\":{\"features\":[{\"description\":\"Save user preferences\"}]}}"))
+            assertThrows(RuntimeException.class, () -> ContractAcceptanceCompiler.completeCollections(proposal, mapper, scope));
+    }
+
+    @Test void designPaletteDoesNotMakeOptionalPreferencesRequiredButApprovedFeaturesDo() {
+        String proposal = mapper.writeValueAsString(preferenceProposal());
+        String paletteOnly = "{\"requestedScope\":{\"theme\":{\"accent\":\"#123456\"},\"features\":[]}}";
+        var compiled = mapper.readValue(ContractAcceptanceCompiler.completeCollections(
+                proposal, mapper, "Build task CRUD with settings navigation", paletteOnly), BuildContract.class);
+        assertEquals(23, compiled.acceptance().browser().size());
+        String required = "{\"requestedScope\":{\"theme\":{},\"features\":[{\"description\":\"Persist theme choice\"}]}}";
+        assertThrows(RuntimeException.class, () -> ContractAcceptanceCompiler.completeCollections(
+                proposal, mapper, "Build tasks", required));
+        assertThrows(RuntimeException.class, () -> ContractAcceptanceCompiler.completeCollections(
+                proposal, mapper, "Build tasks", "{\"theme\":{\"preference\":\"Persist selected mode\"}}"));
+    }
+
+    @Test void optionalChecksCannotHideRequiredOverflowOrUnknownSettingActions() {
+        var data = preferenceProposal();
+        var browser = (List<Map<String, Object>>) ((Map<?, ?>) data.get("acceptance")).get("browser");
+        browser.add(Map.of("id", "required_search", "kind", "FILL", "selector", "input[name='search']", "value", "task"));
+        browser.add(Map.of("id", "required_filter", "kind", "CLICK", "selector", "button[data-filter='active']"));
+        String requiredOverflow = mapper.writeValueAsString(data);
+        assertThrows(RuntimeException.class, () -> ContractAcceptanceCompiler.completeCollections(
+                requiredOverflow, mapper, "Search and filter tasks"));
+
+        data = preferenceProposal();
+        browser = (List<Map<String, Object>>) ((Map<?, ?>) data.get("acceptance")).get("browser");
+        browser.get(23).put("selector", "button[data-action='delete-account']");
+        browser.get(24).put("selector", "button[data-action='unknown']");
+        String unknownActions = mapper.writeValueAsString(data);
+        assertThrows(RuntimeException.class, () -> ContractAcceptanceCompiler.completeCollections(
+                unknownActions, mapper, "Build tasks with settings navigation"));
+    }
+
+    @Test void duplicateAssertionsAreRemovedOnlyWithoutAnInterveningStateChange() {
+        var data = preferenceProposal();
+        var acceptance = (Map<String, Object>) data.get("acceptance");
+        var browser = new ArrayList<Map<String, Object>>();
+        for (int i = 0; i < 25; i++)
+            browser.add(new LinkedHashMap<>(Map.of("id", i == 0 ? "ui_created" : "duplicate_" + i,
+                    "kind", "ASSERT_TEXT", "selector", "[data-task]", "value", "Created task")));
+        acceptance.put("browser", browser);
+        ((List<Map<String, Object>>) data.get("units")).getLast().put("acceptanceIds",
+                browser.stream().map(action -> action.get("id")).toList());
+        var compiled = mapper.readValue(ContractAcceptanceCompiler.completeCollections(
+                mapper.writeValueAsString(data), mapper), BuildContract.class);
+        assertEquals(1, compiled.acceptance().browser().size());
+        assertEquals("ui_created", compiled.acceptance().browser().getFirst().id());
+
+        browser.get(1).putAll(Map.of("kind", "FILL", "selector", "input[name='title']", "value", "Edited task"));
+        for (int i = 3; i < browser.size(); i++) browser.get(i).put("value", "Required evidence " + i);
+        assertThrows(RuntimeException.class, () -> ContractAcceptanceCompiler.completeCollections(
+                mapper.writeValueAsString(data), mapper));
+    }
+
+    private Map<String, Object> preferenceProposal() {
+        var original = ContractFixtures.accounts();
+        Map<String, Object> data = mapper.readValue(mapper.writeValueAsString(original), Map.class);
+        var browser = new ArrayList<Map<String, Object>>();
+        for (int i = 0; i < 22; i++)
+            browser.add(new LinkedHashMap<>(Map.of("id", "required_" + i, "kind", "ASSERT_TEXT",
+                    "selector", "#required-" + i, "value", "Required evidence " + i)));
+        browser.add(new LinkedHashMap<>(Map.of("id", "settings_route", "kind", "ASSERT_ROUTE", "value", "/settings")));
+        browser.add(new LinkedHashMap<>(Map.of("id", "pref_theme", "kind", "SELECT", "selector", "select[name='theme']", "value", "dark")));
+        browser.add(new LinkedHashMap<>(Map.of("id", "pref_save", "kind", "CLICK", "selector", "button[data-action='save-preferences']")));
+        browser.add(new LinkedHashMap<>(Map.of("id", "pref_saved", "kind", "ASSERT_TEXT", "selector", "[data-testid='prefs-saved']", "value", "Saved")));
+        ((Map<String, Object>) data.get("acceptance")).put("browser", browser);
+        ((List<Map<String, Object>>) data.get("routes")).add(new LinkedHashMap<>(Map.of(
+                "path", "/settings", "componentPath", "client/src/App.tsx", "owner", "ui")));
+        ((List<Map<String, Object>>) data.get("units")).getLast().put("acceptanceIds",
+                browser.stream().map(action -> action.get("id")).toList());
+        return data;
+    }
     @Test void exactDuplicateChecksAndUnitsAreRemovedWithoutLosingCrudCoverage() {
         var original=ContractFixtures.mern();Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
         var units=(List<Map<String,Object>>)data.get("units");units.add(new LinkedHashMap<>(units.getFirst()));
@@ -41,7 +133,8 @@ class ContractAcceptanceCompilerTest {
         Map<String,Object> acceptance=(Map<String,Object>)data.get("acceptance");
         var browser=(List<Map<String,Object>>)acceptance.get("browser");
         for(int index=1;index<=24;index++){
-            var action=new LinkedHashMap<>(browser.getFirst());action.put("id","optional_"+index);browser.add(action);
+            var action=new LinkedHashMap<>(browser.getFirst());action.put("id","required_"+index);
+            action.put("value","Required evidence "+index);browser.add(action);
         }
         String oversized=mapper.writeValueAsString(data);
         assertThrows(RuntimeException.class,()->ContractAcceptanceCompiler.completeCollections(oversized,mapper));

@@ -55,7 +55,8 @@ class ContractPlannerTest {
         Map<String,Object> acceptance=(Map<String,Object>)proposal.get("acceptance");
         var browser=(List<Map<String,Object>>)acceptance.get("browser");
         for(int index=1;index<=24;index++){
-            var action=new LinkedHashMap<>(browser.getFirst());action.put("id","optional_"+index);browser.add(action);
+            var action=new LinkedHashMap<>(browser.getFirst());action.put("id","required_"+index);
+            action.put("value","Required evidence "+index);browser.add(action);
         }
         var fresh=new ContractPlanner.Input(c.id(),"Build Items","Approved","Map",
                 new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits());
@@ -66,6 +67,25 @@ class ContractPlannerTest {
             return reply(mapper.writeValueAsString(c));
         }));
         assertEquals(2,calls.get());
+    }
+
+    @Test void redundantEvidenceOverTheCapDoesNotSpendAModelCorrection() {
+        var c = ContractFixtures.mern();
+        Map<String, Object> proposal = mapper.readValue(mapper.writeValueAsString(c), Map.class);
+        var browser = (List<Map<String, Object>>) ((Map<?, ?>) proposal.get("acceptance")).get("browser");
+        for (int i = 0; i < 24; i++) {
+            var duplicate = new LinkedHashMap<>(browser.getFirst());
+            duplicate.put("id", "duplicate_" + i);
+            browser.add(duplicate);
+        }
+        var calls = new AtomicInteger();
+        var fresh = new ContractPlanner.Input(c.id(), "Build Items", "Approved", "Map",
+                new BuildDecisions.Choice(1, c.storage(), c.auth(), null), c.limits());
+        assertEquals(c, planner.plan(fresh, model, request -> {
+            calls.incrementAndGet();
+            return reply(mapper.writeValueAsString(proposal));
+        }));
+        assertEquals(1, calls.get());
     }
     @Test void trailingObjectsAndProseAreRejectedWithoutRelaxingAuthorityChecks() {
         for(String body:List.of(mapper.writeValueAsString(contract)+"{}","Here is the plan: "+mapper.writeValueAsString(contract))){var calls=new AtomicInteger();assertThrows(IllegalArgumentException.class,()->planner.plan(input,model,r->{calls.incrementAndGet();return reply(body);}));assertEquals(2,calls.get());}

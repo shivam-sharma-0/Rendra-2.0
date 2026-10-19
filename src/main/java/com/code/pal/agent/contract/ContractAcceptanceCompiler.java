@@ -3,20 +3,59 @@ package com.code.pal.agent.contract;
 import com.code.pal.agent.validation.BehaviorCriteria;
 import tools.jackson.databind.ObjectMapper;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /** Completes bounded MERN acceptance ownership and removes unit claims on coordinator-owned files.
  * It adds no endpoint, permission, implementation or acceptance check beyond the existing CRUD fixture. */
+@lombok.extern.slf4j.Slf4j
 final class ContractAcceptanceCompiler {
+    private static final Set<String> REQUIRED_UI_IDS = Set.of("ui_add", "ui_created", "ui_edit", "ui_edited",
+            "ui_complete", "ui_completed", "ui_delete", "ui_deleted", "ui_reload", "ui_persisted");
+    private static final Pattern PREFERENCE = Pattern.compile(
+            "(?i)\\b(theme|compact|density|sort|preferences?|prefs?|appearance|dark|light)\\b");
+    private static final Pattern CORE_BEHAVIOR = Pattern.compile(
+            "(?i)\\b(task|todo|item|title|edit|delete|complete|search|filter|account|auth|password|email)\\b");
+    private static final Pattern CONTROL_ATTRIBUTE = Pattern.compile(
+            "\\[(?:name|data-(?:pref|preference|action|testid))\\s*=\\s*['\"]([^'\"]+)['\"]\\]");
     private ContractAcceptanceCompiler() {
     }
 
     @SuppressWarnings("unchecked")
     static String completeCollections(String content, ObjectMapper mapper) {
+        return completeCollections(content, mapper, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    static String completeCollections(String content, ObjectMapper mapper, String request, String approved) {
+        String behavior = approved;
+        try {
+            var scope = new LinkedHashMap<String, Object>(mapper.readValue(approved, Map.class));
+            removeDesignPalette(scope);
+            if (scope.get("requestedScope") instanceof Map<?, ?> requested) {
+                var requestedBehavior = new LinkedHashMap<>((Map<String, Object>) requested);
+                removeDesignPalette(requestedBehavior);
+                scope.put("requestedScope", requestedBehavior);
+            }
+            behavior = mapper.writeValueAsString(scope);
+        } catch (RuntimeException legacyScope) { /* Retain the full text when structured scope is unavailable. */ }
+        return completeCollections(content, mapper, request + "\n" + behavior);
+    }
+
+    private static void removeDesignPalette(Map<String, Object> scope) {
+        if (scope.get("theme") instanceof Map<?, ?> palette
+                && Set.of("background", "foreground", "accent", "muted", "radius", "spacing", "font")
+                        .containsAll(palette.keySet()))
+            scope.remove("theme");
+    }
+
+    @SuppressWarnings("unchecked")
+    static String completeCollections(String content, ObjectMapper mapper, String requiredScope) {
         Map<String, Object> data = mapper.readValue(content, Map.class);
         if (!"MERN".equals(data.get("stack")))
             return content;
         boolean changed = removeExactDuplicates(data);
         changed |= resolveUnambiguousUnitIds(data);
+        changed |= trimOptionalBrowserChecks(data, requiredScope);
         var criteria = mapper.convertValue(data.get("acceptance"), BehaviorCriteria.class);
         if (!criteria.crudRequired())
             return changed ? mapper.writeValueAsString(data) : content;
@@ -96,7 +135,66 @@ final class ContractAcceptanceCompiler {
         return mapper.writeValueAsString(data);
     }
 
-    /** Only identical checks are expendable: unique actions have no reliable optional marker. */
+    /** Fail closed: unknown actions and required scope stay intact for the existing model correction. */
+    @SuppressWarnings("unchecked")
+    private static boolean trimOptionalBrowserChecks(Map<String, Object> data, String requiredScope) {
+        var acceptance = (Map<String, Object>) data.get("acceptance");
+        var browser = (List<Map<String, Object>>) acceptance.get("browser");
+        if (browser.size() <= 24) return false;
+        boolean optionalPreferences = requiredScope != null
+                && requiredScope.chars().allMatch(value -> value < 128)
+                && !PREFERENCE.matcher(requiredScope.replace('_', ' ')
+                        .replaceAll("([a-z])([A-Z])", "$1 $2")).find();
+        var preferenceRoutes = new HashSet<String>();
+        for (var route : (List<Map<String, Object>>) data.get("routes"))
+            if (Set.of("/settings", "/preferences").contains(route.get("path")))
+                preferenceRoutes.add((String) route.get("path"));
+        var kept = new ArrayList<Map<String, Object>>();
+        var dropped = new ArrayList<String>();
+        var ids = new HashSet<String>();
+        var seenAssertions = new HashSet<List<Object>>();
+        boolean onPreferences = false;
+        for (var action : browser) {
+            String kind = Objects.toString(action.get("kind"), "");
+            String selector = Objects.toString(action.get("selector"), "");
+            String id = Objects.toString(action.get("id"), "");
+            boolean assertion = Set.of("ASSERT_TEXT", "ASSERT_COUNT", "ASSERT_EXISTS", "ASSERT_ROUTE").contains(kind);
+            // An invalid identity cannot be repaired into a valid contract by removing its action.
+            if (!id.matches("[A-Za-z0-9_-]{1,64}") || !ids.add(id)) return false;
+            var signature = Arrays.asList(action.get("kind"), action.get("selector"), action.get("value"));
+            boolean duplicate = assertion && seenAssertions.contains(signature) && !REQUIRED_UI_IDS.contains(id);
+            boolean preference = optionalPreferences && onPreferences && !REQUIRED_UI_IDS.contains(id)
+                    && Set.of("SELECT", "CLICK", "ASSERT_TEXT", "ASSERT_COUNT", "ASSERT_EXISTS").contains(kind)
+                    && CONTROL_ATTRIBUTE.matcher(selector).results()
+                            .anyMatch(match -> PREFERENCE.matcher(match.group(1)).find())
+                    && !CORE_BEHAVIOR.matcher(selector).find()
+                    && !CORE_BEHAVIOR.matcher(id.replace('_', ' ')).find();
+            if (duplicate || preference) {
+                dropped.add(id);
+            } else {
+                kept.add(action);
+            }
+            // Even a removed mutation is a barrier: never dedupe evidence across a state change.
+            if (assertion) seenAssertions.add(signature); else seenAssertions.clear();
+            if (kind.equals("ASSERT_ROUTE"))
+                onPreferences = preferenceRoutes.contains(action.get("value"));
+            else if (!assertion && !preference)
+                onPreferences = false; // Unknown click/fill/reload may navigate or start a required flow.
+        }
+        if (kept.size() > 24 || dropped.isEmpty()) return false;
+        acceptance.put("browser", kept);
+        var removedIds = new HashSet<>(dropped);
+        kept.forEach(action -> removedIds.remove(action.get("id")));
+        for (var unit : (List<Map<String, Object>>) data.get("units")) {
+            var assigned = new ArrayList<>((List<String>) unit.get("acceptanceIds"));
+            assigned.removeIf(removedIds::contains);
+            unit.put("acceptanceIds", assigned);
+        }
+        log.info("planner_optional_browser_checks_dropped ids={} before={} after={}", dropped, browser.size(), kept.size());
+        return true;
+    }
+
+    /** Exact repeats are safe to remove even when approved scope is unavailable. */
     @SuppressWarnings("unchecked")
     private static boolean removeExactDuplicates(Map<String, Object> data) {
         Map<String, Object> acceptance = (Map<String, Object>) data.get("acceptance");
@@ -106,6 +204,14 @@ final class ContractAcceptanceCompiler {
             var distinct = new ArrayList<>(new LinkedHashSet<>(checks));
             if (distinct.size() != checks.size()) {
                 acceptance.put(kind, distinct);
+                if (kind.equals("browser")) {
+                    var seen = new HashSet<Object>();
+                    var ids = checks.stream().filter(check -> !seen.add(check))
+                            .filter(check -> check instanceof Map<?, ?>).map(check -> ((Map<?, ?>) check).get("id"))
+                            .filter(id -> id instanceof String text && text.matches("[A-Za-z0-9_-]{1,64}"))
+                            .limit(24).toList();
+                    log.info("planner_duplicate_browser_checks_dropped ids={} count={}", ids, checks.size() - distinct.size());
+                }
                 changed = true;
             }
         }

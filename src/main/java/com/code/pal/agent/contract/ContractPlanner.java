@@ -143,7 +143,8 @@ public final class ContractPlanner {
                         "routes", "types", "models", "api", "assets", "envNames", "units", "acceptance")))
                     throw new IllegalArgumentException("Contract fields are missing or unknown");
                 content = mapper.writeValueAsString(object);
-                content = ContractAcceptanceCompiler.completeCollections(content, mapper);
+                content = ContractAcceptanceCompiler.completeCollections(content, mapper,
+                        input.request(), input.approvedRequirements());
                 // A parsed, bounded proposal lets the one correction repair the specific defect instead
                 // of inventing a different plan with new defects. It remains untrusted data and is revalidated.
                 proposal = boundedProposal(content);
