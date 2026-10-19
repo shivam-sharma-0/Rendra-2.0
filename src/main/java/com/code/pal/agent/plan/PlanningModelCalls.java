@@ -24,14 +24,14 @@ public final class PlanningModelCalls {
         this.nanoTime = nanoTime;
     }
 
-    /** One existing schema-correction slot may use another explicitly configured planning route. */
+    /** Correction uses the configured planning priority, including its healthy primary. */
     public ModelSelection schemaCorrectionRoute(ModelSelection primary) {
         var policy = properties.getPlanning();
         var routes = properties.planningRoutes();
         if (!policy.isCorrectionFallback() || policy.getMaxRouteAttempts() < 2 || !routes.contains(primary))
             return primary;
         return routes.stream().limit(Math.clamp(policy.getMaxRouteAttempts(), 1, 3))
-                .filter(route -> !route.equals(primary)).filter(properties::available).findFirst().orElse(primary);
+                .filter(properties::available).findFirst().orElse(primary);
     }
 
     public LlmClient.LlmResult execute(LlmClient.LlmRequest request,

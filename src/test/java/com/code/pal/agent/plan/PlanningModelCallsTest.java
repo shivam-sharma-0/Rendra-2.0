@@ -130,6 +130,8 @@ class PlanningModelCallsTest {
         var calls = new PlanningModelCalls(properties);
         var primary = new AgentProperties.ModelSelection("openrouter", "primary");
         var secondary = new AgentProperties.ModelSelection("nvidia", "secondary");
+        assertEquals(primary, calls.schemaCorrectionRoute(primary));
+        properties.markModelUnavailable(primary);
         assertEquals(secondary, calls.schemaCorrectionRoute(primary));
         properties.markModelUnavailable(secondary);
         assertEquals(primary, calls.schemaCorrectionRoute(primary)); // Third route is outside the configured bound.
@@ -142,7 +144,22 @@ class PlanningModelCallsTest {
         properties.setBillingMode(AgentProperties.BillingMode.FREE);
         assertEquals(primary, calls.schemaCorrectionRoute(primary)); // Paid pool is not available in FREE mode.
         var freePrimary = new AgentProperties.ModelSelection("openrouter", "free-primary");
-        assertEquals(new AgentProperties.ModelSelection("nvidia", "free-secondary"), calls.schemaCorrectionRoute(freePrimary));
+        assertEquals(freePrimary, calls.schemaCorrectionRoute(freePrimary));
+    }
+
+    @Test void correctionKeepsCodestralFirstForBothBillingModesAndWhenItAnsweredThePlan() {
+        properties.getProviders().put("mistral", new AgentProperties.Provider());
+        var routes = List.of("mistral:codestral-latest", "openrouter:ultra", "nvidia:super");
+        properties.getModels().setPlan(routes);
+        properties.getModels().setFreePlan(routes);
+        properties.getPlanning().setMaxRouteAttempts(3);
+        var codestral = new AgentProperties.ModelSelection("mistral", "codestral-latest");
+        for (var mode : AgentProperties.BillingMode.values()) {
+            properties.setBillingMode(mode);
+            var planner = new PlanningModelCalls(properties);
+            assertEquals(codestral, planner.schemaCorrectionRoute(codestral));
+            assertEquals(codestral, planner.schemaCorrectionRoute(new AgentProperties.ModelSelection("openrouter", "ultra")));
+        }
     }
 
     @Test void failedRoutesAreNotRepeatedAndAnUnrelatedCodingPoolIsNeverUsed() {

@@ -156,11 +156,11 @@ class ContractPlannerTest {
         }));
     }
 
-    @Test void malformedPrimaryUsesOnlyTheConfiguredPlannerForTheExistingCorrectionSlot() {
+    @Test void malformedAlternateReturnsToTheConfiguredPrimaryForTheExistingCorrectionSlot() {
         var properties = new AgentProperties();
         properties.getProviders().put("mistral", new AgentProperties.Provider());
         properties.getPlanning().setSchemaProviders(Set.of("mistral"));
-        properties.getModels().setPlan(List.of("openrouter:primary", "mistral:secondary"));
+        properties.getModels().setPlan(List.of("mistral:secondary", "openrouter:primary"));
         var primary = new AgentProperties.ModelSelection("openrouter", "primary");
         var routes = new ArrayList<String>();
         assertEquals(contract, new ContractPlanner(mapper, properties).plan(input, primary, request -> {
