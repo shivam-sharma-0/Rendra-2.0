@@ -41,7 +41,7 @@ final class ContractAcceptanceCompiler {
             }
             behavior = mapper.writeValueAsString(scope);
         } catch (RuntimeException legacyScope) { /* Retain the full text when structured scope is unavailable. */ }
-        return completeCollections(content, mapper, request + "\n" + behavior);
+        return compileCollections(content, mapper, request + "\n" + behavior, approved);
     }
 
     private static void removeDesignPalette(Map<String, Object> scope) {
@@ -53,8 +53,14 @@ final class ContractAcceptanceCompiler {
 
     @SuppressWarnings("unchecked")
     static String completeCollections(String content, ObjectMapper mapper, String requiredScope) {
+        return compileCollections(content, mapper, requiredScope, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String compileCollections(String content, ObjectMapper mapper, String requiredScope, String approved) {
         Map<String, Object> data = mapper.readValue(content, Map.class);
         boolean changed = fillRouteValues(data);
+        changed |= ContractDependencies.normalize(data, approved, mapper);
         if (!"MERN".equals(data.get("stack")))
             return changed ? mapper.writeValueAsString(data) : content;
         changed |= removeExactDuplicates(data);
