@@ -65,9 +65,10 @@ final class ContractAcceptanceCompiler {
             return changed ? mapper.writeValueAsString(data) : content;
         changed |= removeExactDuplicates(data);
         changed |= resolveUnambiguousUnitIds(data);
-        List<Map<String, Object>> units = (List<Map<String, Object>>) data.get("units");
-        changed |= removeCoordinatorOwnedPaths(units);
+        changed |= removeCoordinatorOwnedPaths((List<Map<String, Object>>) data.get("units"));
         // Before the collection insertion and responsibility loop below: both read api.owner.
+        changed |= synthesizeRouterUnits(data);
+        List<Map<String, Object>> units = (List<Map<String, Object>>) data.get("units");
         changed |= alignOwnersToFiles(data, true);
         changed |= alignOwnersToFiles(data, false);
         changed |= trimOptionalBrowserChecks(data, requiredScope);
@@ -339,6 +340,77 @@ final class ContractAcceptanceCompiler {
             changed = true;
         }
         return changed;
+    }
+
+    /** A router file no unit owns gets one dedicated server unit (the valid-sample shape), never a page unit's grant.
+     * Mongo models come from the coordinator models module, so the unit owns only the router file. */
+    @SuppressWarnings("unchecked")
+    private static boolean synthesizeRouterUnits(Map<String, Object> data) {
+        if (!(data.get("api") instanceof List<?> entries) || !(data.get("units") instanceof List<?> declared)
+                || !(data.get("limits") instanceof Map<?, ?> limits) || !(limits.get("modelCalls") instanceof Number calls))
+            return false;
+        var unitIds = new HashSet<String>();
+        var owned = new ArrayList<String>();
+        for (Object value : declared) {
+            if (!(value instanceof Map<?, ?> unit) || !(unit.get("id") instanceof String id)
+                    || !(unit.get("ownedPaths") instanceof List<?> paths)) return false;
+            unitIds.add(id);
+            for (Object path : paths) if (path instanceof String file) owned.add(file.toLowerCase(Locale.ROOT));
+        }
+        var groups = new LinkedHashMap<String, List<Map<String, Object>>>();
+        for (Object value : entries) {
+            if (!(value instanceof Map<?, ?> entry) || !(entry.get("routerPath") instanceof String file)) return false;
+            groups.computeIfAbsent(file, key -> new ArrayList<>()).add((Map<String, Object>) entry);
+        }
+        var units = new ArrayList<Object>(declared);
+        for (var group : groups.entrySet()) {
+            String file = group.getKey(), lower = file.toLowerCase(Locale.ROOT);
+            var members = group.getValue();
+            if (!(members.getFirst().get("routerExport") instanceof String id)
+                    || !(members.getFirst().get("basePath") instanceof String base)
+                    || !base.matches("/api(?:/[A-Za-z0-9_/-]{1,100})?") || base.matches("/api/auth(?:/.*)?")
+                    || members.stream().anyMatch(entry -> !id.equals(entry.get("routerExport"))
+                            || !base.equals(entry.get("basePath")) || entry.get("owner") != null
+                            && !(entry.get("owner") instanceof String owner && unitIds.contains(owner))
+                            || !(entry.get("path") instanceof String path) || path.matches("/api/auth(?:/.*)?"))
+                    || !file.startsWith("server/src/") || !file.endsWith(".ts")
+                    || lower.startsWith("server/src/rendra/") || lower.startsWith("client/src/rendra/")
+                    || BuildContract.reserved(file, BuildContract.Stack.MERN) || !valid(() -> BuildContract.canonical(file))
+                    || owned.stream().anyMatch(path -> path.equals(lower) || path.startsWith(lower + "/")
+                            || lower.startsWith(path + "/"))
+                    || unitIds.contains(id) || !valid(() -> BuildContract.identifier(id))
+                    || units.size() + 1 > 12 || units.size() + 2 > calls.intValue())
+                continue;
+            var labels = members.stream().map(entry -> entry.get("id")).filter(label ->
+                    label instanceof String text && text.matches("[A-Za-z0-9_/:.-]{1,120}")).limit(24).toList();
+            var previous = members.stream().map(entry -> entry.get("owner")).filter(owner ->
+                    owner instanceof String text && text.matches("[A-Za-z0-9_-]{1,64}")).distinct().toList();
+            var unit = new LinkedHashMap<String, Object>();
+            unit.put("id", id);
+            unit.put("objective", "Implement " + id + " Express router for " + base);
+            unit.put("ownedPaths", List.of(file));
+            unit.put("imports", List.of());
+            unit.put("dependsOn", List.of());
+            unit.put("acceptanceIds", List.of());
+            units.add(unit);
+            unitIds.add(id);
+            owned.add(lower);
+            members.forEach(entry -> entry.put("owner", id));
+            log.info("planner_server_unit_synthesized routerPath={} unit={} ids={} previous={}",
+                    file.matches("[A-Za-z0-9_./-]{1,240}") ? file : "<unsafe>", id, labels, previous);
+        }
+        if (units.size() == declared.size()) return false;
+        data.put("units", units);
+        return true;
+    }
+
+    private static boolean valid(Runnable check) {
+        try {
+            check.run();
+            return true;
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
     }
 
     /** api/route owners are routing metadata, never a grant: point them at the one unit listing their exact file.

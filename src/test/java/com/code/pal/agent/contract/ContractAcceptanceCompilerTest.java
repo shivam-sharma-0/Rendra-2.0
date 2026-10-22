@@ -327,7 +327,8 @@ class ContractAcceptanceCompilerTest {
     @Test void unownedSharedReservedCaseVariantOrInconsistentRoutersAndUndeclaredOwnersAreNotAligned() {
         var original=ContractFixtures.mern();
         var cases=new ArrayList<java.util.function.Consumer<Map<String,Object>>>();
-        cases.add(data->units(data).getFirst().put("ownedPaths",List.of("server/src/models/item.ts")));
+        // Unowned router without model-call budget for a synthesized server unit.
+        cases.add(data->{units(data).getFirst().put("ownedPaths",List.of("server/src/models/item.ts"));data.put("limits",limits(3));});
         cases.add(data->units(data).getLast().put("ownedPaths",List.of("client/src/App.tsx","server/src/items.ts")));
         cases.add(data->units(data).getFirst().put("ownedPaths",List.of("server/src/Items.ts")));
         cases.add(data->{units(data).getFirst().put("ownedPaths",List.of("server/src/index.ts"));
@@ -350,6 +351,60 @@ class ContractAcceptanceCompilerTest {
         assertEquals(proposal,ContractAcceptanceCompiler.completeCollections(proposal,mapper));
     }
 
+    @Test void unownedRouterGetsOneDedicatedServerUnitInsteadOfAPageGrant() {
+        // Batch 05/10/13/14 shape: no unit owns the router and endpoint owners are split across calling pages.
+        var original=ContractFixtures.mern();Map<String,Object> data=unownedRouter(original);
+        api(data).get(1).remove("owner");
+        var paths=units(data).stream().map(unit->unit.get("ownedPaths")).toList();
+
+        var compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),BuildContract.class);
+        var server=compiled.units().getLast();
+        assertEquals(new BuildContract.Unit("itemsRouter","Implement itemsRouter Express router for /api/items",
+                List.of("server/src/items.ts"),List.of(),List.of(),server.acceptanceIds()),server);
+        assertEquals(paths,compiled.units().stream().limit(3).map(BuildContract.Unit::ownedPaths).toList());
+        assertEquals(Set.of("itemsRouter"),compiled.api().stream().map(BuildContract.Api::owner).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(original.acceptance(),compiled.acceptance());
+        assertTrue(server.acceptanceIds().containsAll(List.of("create","read","update","restart","delete","missing")));
+        assertTrue(compiled.units().stream().noneMatch(unit->unit.dependsOn().contains("itemsRouter")));
+    }
+
+    @Test void ambiguousProtectedOrOverBudgetUnownedRoutersAreNotGivenAServerUnit() {
+        var original=ContractFixtures.mern();
+        var cases=new ArrayList<java.util.function.Consumer<Map<String,Object>>>();
+        cases.add(data->units(data).get(1).put("id","itemsRouter"));
+        cases.add(data->units(data).getFirst().put("ownedPaths",List.of("server/src/Items.ts")));
+        cases.add(data->units(data).getFirst().put("ownedPaths",List.of("server/src")));
+        cases.add(data->api(data).forEach(api->api.put("routerPath","server/src/index.ts")));
+        cases.add(data->api(data).forEach(api->api.put("routerPath","server/src/rendra/items.ts")));
+        cases.add(data->api(data).forEach(api->api.put("routerPath","client/src/items.ts")));
+        cases.add(data->api(data).getFirst().put("routerExport","otherRouter"));
+        cases.add(data->api(data).getFirst().put("basePath","/api"));
+        cases.add(data->api(data).get(1).put("owner","EditItem"));
+        cases.add(data->api(data).forEach(api->{api.put("basePath","/api/auth");api.put("path",((String)api.get("path")).replace("/api/items","/api/auth"));}));
+        cases.add(data->data.put("limits",limits(4)));
+        cases.add(data->{for(int i=units(data).size();i<12;i++)units(data).add(new LinkedHashMap<>(Map.of("id","extra"+i,"objective","Implement extra",
+                "ownedPaths",List.of("client/src/Extra"+i+".tsx"),"imports",List.of(),"dependsOn",List.of(),"acceptanceIds",List.of())));});
+        for(var mutation:cases){
+            Map<String,Object> data=unownedRouter(original);mutation.accept(data);
+            var units=units(data).stream().map(unit->unit.get("id")).toList();
+            var owners=api(data).stream().map(api->api.get("owner")).toList();
+            Map<String,Object> result=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
+            assertEquals(units,units(result).stream().map(unit->unit.get("id")).toList());
+            assertEquals(owners,api(result).stream().map(api->api.get("owner")).toList());
+            assertThrows(RuntimeException.class,()->mapper.readValue(mapper.writeValueAsString(result),BuildContract.class));
+        }
+    }
+
+    private Map<String,Object> unownedRouter(BuildContract original){
+        Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        units(data).forEach(unit->unit.put("acceptanceIds",List.of()));
+        units(data).getFirst().put("ownedPaths",List.of("client/src/pages/Home.tsx"));
+        units(data).add(new LinkedHashMap<>(Map.of("id","page","objective","Implement page","ownedPaths",List.of("client/src/pages/Edit.tsx"),
+                "imports",List.of(),"dependsOn",List.of(),"acceptanceIds",List.of())));
+        api(data).stream().filter(api->Set.of("GET","PUT").contains(api.get("method"))).forEach(api->api.put("owner","page"));
+        return data;
+    }
+    private static Map<String,Object> limits(int modelCalls){return Map.of("modelCalls",modelCalls,"toolCalls",40,"outputTokens",8192,"timeoutMs",60000);}
     private static List<Map<String,Object>> units(Map<String,Object> data){return (List<Map<String,Object>>)data.get("units");}
     private static List<Map<String,Object>> api(Map<String,Object> data){return (List<Map<String,Object>>)data.get("api");}
 }
