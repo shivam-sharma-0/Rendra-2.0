@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {"name": "personal-todo", "repeats": 10, "promptFixture": "scripts/fixtures/planner-intake.json"},
+    {"name": "notes", "repeats": 3, "prompt": "Build a complete personal notes application with private user accounts. Include a notes dashboard, a note detail/editor page and sign-up/sign-in pages with working navigation. Users can create, view, edit and delete their notes, search and filter by tags, and retain saved notes after refresh and server restart. Include the frontend pages, backend APIs, persistent database and ownership checks, with responsive accessible UI and useful loading, empty, validation and error states. Choose sensible defaults without redundant discovery questions."},
+    {"name": "expenses", "repeats": 3, "prompt": "Build a complete personal expense tracker with private user accounts. Include a summary dashboard, expense list, expense detail/editor and sign-up/sign-in pages. Users can create, view, edit and delete expenses with amount, date, category and description, search and filter expenses, and retain records after refresh and server restart. Include all required frontend pages, backend APIs, persistent database and account ownership. Provide a responsive accessible UI with sensible loading, empty, validation and error states. Choose sensible defaults without redundant discovery questions."},
+    {"name": "blog-admin", "repeats": 3, "prompt": "Build a complete simple blog with an admin area. Include public post list and post detail pages, sign-up/sign-in and an authenticated admin dashboard with post creation and editing. Authors can create, view, edit, publish and delete their own posts; readers can search and filter published posts. Keep all saved posts after refresh and server restart. Include the frontend pages, backend APIs, persistent database, and ownership checks preventing authors from editing another author's posts. Provide responsive accessible UI and useful loading, empty, validation and error states. Choose sensible defaults without redundant discovery questions."},
+    {"name": "short-todo", "repeats": 2, "prompt": "make me a todo app with login"},
+    {"name": "short-notes", "repeats": 2, "prompt": "notes app bana do jisme tags ho"},
+    {"name": "short-expenses", "repeats": 2, "prompt": "I need an app to track my monthly expenses"}
+  ]
+}

@@ -1,5 +1,28 @@
 # Smart-agent verification
 
+## Planner-only batch (no app or sandbox)
+
+After the full offline `*Test` gate compiles current sources, run:
+
+```powershell
+.\scripts\Run-PlannerBatch.ps1 -VerificationDirectory target/agent-generation-gate-20261019
+```
+
+The synthetic fixture samples personal Todo 10 times, detailed notes/expenses/blog-admin prompts 3 times each,
+and three short natural prompts (as real users type them) twice each: 25 samples.
+Both current primary routes must be the owner-approved FREE `mistral:codestral-latest`.
+The script uses the production streaming client with one transmission per call and no route fallback,
+correction, generation, database, application boot, preview or sandbox. Credentials load in memory from
+the existing configuration/environment and ignored secrets file; only Codestral's key is loaded.
+Requirements use current resource prompts and RequirementDraft; approved capabilities are MERN/accounts
+for every sample. Planner requests are captured directly from ContractPlanner and each returned proposal
+passes its real offline validation, both raw and with all deterministic normalizers enabled.
+`target/planner-batch-*/report.json` records per-call provider tokens, latency, characters, first rejection
+rule/location and normalizer events; synthetic response artifacts stay ignored. 429/provider failures
+remain separate from contract rejections and do not count as returned proposals. No retries hide them.
+The rejection summary counts first blockers, not every latent defect. Valid contracts prove planning
+only; generated code/READY/browser/CRUD/CHAT still require the separate E2E gate.
+
 ## S0: nine-journey benchmark (Claude executes)
 
 From the single inner `Code-Pal` repository, after independently compiling the intended source:
