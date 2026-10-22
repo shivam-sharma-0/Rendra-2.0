@@ -66,6 +66,7 @@ final class ContractAcceptanceCompiler {
         changed |= removeExactDuplicates(data);
         changed |= resolveUnambiguousUnitIds(data);
         changed |= removeCoordinatorOwnedPaths((List<Map<String, Object>>) data.get("units"));
+        changed |= mergeUnitsSharingFiles(data);
         // Before the collection insertion and responsibility loop below: both read api.owner.
         changed |= synthesizeRouterUnits(data);
         List<Map<String, Object>> units = (List<Map<String, Object>>) data.get("units");
@@ -340,6 +341,132 @@ final class ContractAcceptanceCompiler {
             changed = true;
         }
         return changed;
+    }
+
+    /** Units listing the same exact file collapse into the first declared one, which inherits their files, edges,
+     * checks and api/route owners. Protected files, v2 batches, unsafe edges and large merges stay for the validator. */
+    @SuppressWarnings("unchecked")
+    private static boolean mergeUnitsSharingFiles(Map<String, Object> data) {
+        if (data.get("batches") != null && !(data.get("batches") instanceof List<?> batches && batches.isEmpty())
+                || !(data.get("units") instanceof List<?> declared) || !(data.get("routes") instanceof List<?> routes)
+                || !(data.get("api") instanceof List<?> api)
+                || data.get("assets") != null && !(data.get("assets") instanceof List<?>))
+            return false;
+        int size = declared.size();
+        var parent = new int[size];
+        var firstOwner = new HashMap<String, Integer>();
+        var ids = new HashSet<String>();
+        for (int i = 0; i < size; i++) {
+            if (!(declared.get(i) instanceof Map<?, ?> unit) || !(unit.get("id") instanceof String id) || !ids.add(id)
+                    || !(unit.get("objective") instanceof String) || !strings(unit.get("ownedPaths"))
+                    || !strings(unit.get("imports")) || !strings(unit.get("dependsOn"))
+                    || unit.get("acceptanceIds") != null && !strings(unit.get("acceptanceIds")))
+                return false;
+            parent[i] = i;
+            for (Object path : (List<?>) unit.get("ownedPaths")) {
+                Integer prior = firstOwner.putIfAbsent((String) path, i);
+                int a = root(parent, i), b = prior == null ? a : root(parent, prior);
+                parent[Math.max(a, b)] = Math.min(a, b);
+            }
+        }
+        var groups = new LinkedHashMap<Integer, List<Map<String, Object>>>();
+        for (int i = 0; i < size; i++)
+            groups.computeIfAbsent(root(parent, i), key -> new ArrayList<>()).add((Map<String, Object>) declared.get(i));
+        var units = new ArrayList<Map<String, Object>>((List<Map<String, Object>>) declared);
+        var assets = data.get("assets") instanceof List<?> declaredAssets ? declaredAssets : List.of();
+        boolean changed = false;
+        for (var members : groups.values()) {
+            if (members.size() < 2) continue;
+            var group = new LinkedHashSet<String>();
+            members.forEach(unit -> group.add((String) unit.get("id")));
+            String survivor = group.getFirst();
+            Set<String> paths = new LinkedHashSet<>(), imports = new LinkedHashSet<>(), checks = new LinkedHashSet<>(),
+                    shared = new LinkedHashSet<>(), dependencies = new LinkedHashSet<>(), objectives = new LinkedHashSet<>();
+            for (var unit : members) {
+                for (String path : (List<String>) unit.get("ownedPaths")) if (!paths.add(path)) shared.add(path);
+                imports.addAll((List<String>) unit.get("imports"));
+                checks.addAll((List<String>) unit.getOrDefault("acceptanceIds", List.of()));
+                dependencies.addAll((List<String>) unit.get("dependsOn"));
+                objectives.add(((String) unit.get("objective")).strip().replaceFirst("[.;\\s]+$", ""));
+            }
+            dependencies.removeAll(group);
+            String objective = String.join("; ", objectives);
+            // A member's own self-edge is a model error, not an intra-group edge the merge may drop.
+            if (paths.size() > 6 || imports.size() > 20 || checks.size() > 48 || dependencies.size() > 12
+                    || objective.isBlank() || objective.length() > 1400
+                    || members.stream().anyMatch(unit -> ((List<?>) unit.get("dependsOn")).contains(unit.get("id")))
+                    || paths.stream().map(path -> path.toLowerCase(Locale.ROOT)).distinct().count() != paths.size()
+                    || paths.stream().anyMatch(ContractAcceptanceCompiler::protectedPath)
+                    || assets.stream().anyMatch(asset -> asset instanceof Map<?, ?> value
+                            && group.contains(value.get("owner")) && !survivor.equals(value.get("owner"))))
+                continue;
+            var graph = new LinkedHashMap<String, Set<String>>();
+            for (var unit : units) {
+                String id = (String) unit.get("id");
+                if (group.contains(id)) graph.put(survivor, dependencies);
+                else graph.put(id, remap((List<String>) unit.get("dependsOn"), group, survivor));
+            }
+            if (!acyclic(graph)) continue;
+            for (var unit : units)
+                if (!group.contains(unit.get("id")) && ((List<?>) unit.get("dependsOn")).stream().anyMatch(group::contains))
+                    unit.put("dependsOn", new ArrayList<>(graph.get(unit.get("id"))));
+            var first = members.getFirst();
+            first.put("objective", objective);
+            first.put("ownedPaths", new ArrayList<>(paths));
+            first.put("imports", new ArrayList<>(imports));
+            first.put("dependsOn", new ArrayList<>(dependencies));
+            first.put("acceptanceIds", new ArrayList<>(checks));
+            for (Object value : routes) remapOwner(value, group, survivor);
+            for (Object value : api) remapOwner(value, group, survivor);
+            units.removeIf(unit -> unit != first && group.contains(unit.get("id")));
+            var merged = group.stream().skip(1).map(id -> id.matches("[A-Za-z0-9_-]{1,64}") ? id : "<unsafe>").toList();
+            log.info("planner_units_merged unit={} merged={} paths={}",
+                    survivor.matches("[A-Za-z0-9_-]{1,64}") ? survivor : "<unsafe>", merged,
+                    shared.stream().filter(path -> path.matches("[A-Za-z0-9_./-]{1,240}")).limit(6).toList());
+            changed = true;
+        }
+        if (changed) data.put("units", units);
+        return changed;
+    }
+
+    private static boolean strings(Object value) {
+        return value instanceof List<?> list && list.stream().allMatch(item -> item instanceof String);
+    }
+
+    private static int root(int[] parent, int index) {
+        while (parent[index] != index) index = parent[index];
+        return index;
+    }
+
+    private static boolean protectedPath(String path) {
+        String lower = path.toLowerCase(Locale.ROOT);
+        return lower.startsWith("client/src/rendra/") || lower.startsWith("server/src/rendra/")
+                || BuildContract.reserved(path, BuildContract.Stack.MERN)
+                || path.equalsIgnoreCase(StaticAssets.MARKER) || path.equalsIgnoreCase("rendra.css");
+    }
+
+    private static Set<String> remap(List<String> dependencies, Set<String> group, String survivor) {
+        var result = new LinkedHashSet<String>();
+        dependencies.forEach(id -> result.add(group.contains(id) ? survivor : id));
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void remapOwner(Object value, Set<String> group, String survivor) {
+        if (value instanceof Map<?, ?> entry && group.contains(entry.get("owner")))
+            ((Map<String, Object>) entry).put("owner", survivor);
+    }
+
+    /** Unknown dependency ids are left for the validator; only declared edges can form a cycle. */
+    private static boolean acyclic(Map<String, Set<String>> graph) {
+        var done = new HashSet<String>();
+        while (done.size() < graph.size()) {
+            var wave = graph.entrySet().stream().filter(node -> !done.contains(node.getKey()) && node.getValue().stream()
+                    .allMatch(id -> done.contains(id) || !graph.containsKey(id))).map(Map.Entry::getKey).toList();
+            if (wave.isEmpty()) return false;
+            done.addAll(wave);
+        }
+        return true;
     }
 
     /** A router file no unit owns gets one dedicated server unit (the valid-sample shape), never a page unit's grant.

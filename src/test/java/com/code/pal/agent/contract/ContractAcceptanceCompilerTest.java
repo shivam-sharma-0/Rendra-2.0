@@ -329,7 +329,9 @@ class ContractAcceptanceCompilerTest {
         var cases=new ArrayList<java.util.function.Consumer<Map<String,Object>>>();
         // Unowned router without model-call budget for a synthesized server unit.
         cases.add(data->{units(data).getFirst().put("ownedPaths",List.of("server/src/models/item.ts"));data.put("limits",limits(3));});
-        cases.add(data->units(data).getLast().put("ownedPaths",List.of("client/src/App.tsx","server/src/items.ts")));
+        // Shared router that the unit merge leaves alone (over its 6-file cap).
+        cases.add(data->units(data).getLast().put("ownedPaths",List.of("client/src/App.tsx","server/src/items.ts","client/src/A.tsx",
+                "client/src/B.tsx","client/src/C.tsx","client/src/D.tsx","client/src/E.tsx")));
         cases.add(data->units(data).getFirst().put("ownedPaths",List.of("server/src/Items.ts")));
         cases.add(data->{units(data).getFirst().put("ownedPaths",List.of("server/src/index.ts"));
                 api(data).forEach(api->api.put("routerPath","server/src/index.ts"));});
@@ -402,6 +404,82 @@ class ContractAcceptanceCompilerTest {
         units(data).add(new LinkedHashMap<>(Map.of("id","page","objective","Implement page","ownedPaths",List.of("client/src/pages/Edit.tsx"),
                 "imports",List.of(),"dependsOn",List.of(),"acceptanceIds",List.of())));
         api(data).stream().filter(api->Set.of("GET","PUT").contains(api.get("method"))).forEach(api->api.put("owner","page"));
+        return data;
+    }
+    @Test void unitsSharingAPageComponentMergeIntoTheFirstDeclaredUnit() {
+        // Batch 03/16 shape: two page units list one shared component and one depends on the other.
+        var original=ContractFixtures.mern();Map<String,Object> data=sharedComponent(original);
+        units(data).add(new LinkedHashMap<>(Map.of("id","other","objective","Implement other","ownedPaths",List.of("client/src/Other.tsx"),
+                "imports",List.of("client/src/List.tsx"),"dependsOn",List.of("list","ui"),"acceptanceIds",List.of())));
+
+        var compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),BuildContract.class);
+        assertEquals(List.of("data","ui","other"),compiled.units().stream().map(BuildContract.Unit::id).toList());
+        var ui=compiled.units().get(1);
+        assertEquals(new BuildContract.Unit("ui","Implement ui; Show the list",List.of("client/src/App.tsx","client/src/List.tsx"),
+                List.of("server/src/items.ts"),List.of("data"),List.of("ui","listed")),ui);
+        assertEquals(List.of("ui"),compiled.units().getLast().dependsOn());
+        assertEquals(List.of("ui","ui"),compiled.routes().stream().map(BuildContract.Route::owner).toList());
+        assertEquals(original.acceptance().api(),compiled.acceptance().api());
+    }
+
+    @Test void routerSharedAcrossPageUnitsMergesWithTheRouterOwnerAndKeepsEveryCheck() {
+        // Batch 07/22 shape: the router and a component are each listed by two units; api owners follow the merge.
+        var original=ContractFixtures.mern();Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        units(data).getLast().put("ownedPaths",List.of("client/src/App.tsx","client/src/List.tsx"));
+        units(data).add(new LinkedHashMap<>(Map.of("id","list","objective","Fetch the list.","ownedPaths",
+                List.of("client/src/List.tsx","server/src/items.ts"),"imports",List.of(),"dependsOn",List.of(),"acceptanceIds",List.of())));
+        api(data).stream().filter(api->Set.of("GET","PUT").contains(api.get("method"))).forEach(api->api.put("owner","list"));
+
+        var compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),BuildContract.class);
+        var unit=compiled.units().getFirst();
+        assertEquals(1,compiled.units().size());
+        assertEquals(List.of("server/src/items.ts","client/src/App.tsx","client/src/List.tsx"),unit.ownedPaths());
+        assertEquals("Implement data; Implement ui; Fetch the list",unit.objective());
+        assertEquals(List.of(),unit.dependsOn());
+        assertEquals(Set.of("data"),compiled.api().stream().map(BuildContract.Api::owner).collect(java.util.stream.Collectors.toSet()));
+        assertEquals("data",compiled.routes().getFirst().owner());
+        assertEquals(original.acceptance(),compiled.acceptance());
+        assertTrue(unit.acceptanceIds().containsAll(original.acceptance().api().stream().map(BehaviorCriteria.ApiStep::id).toList()));
+    }
+
+    @Test void protectedLargeCaseVariantBatchedCyclicSelfDependentOrAssetOwningGroupsAreNotMerged() {
+        var original=ContractFixtures.mern();
+        var cases=new ArrayList<java.util.function.Consumer<Map<String,Object>>>();
+        for(String path:List.of("client/src/rendra/List.tsx","server/src/rendra/list.ts",StaticAssets.MARKER,"rendra.css"))
+            cases.add(data->{units(data).get(1).put("ownedPaths",List.of("client/src/App.tsx",path));units(data).getLast().put("ownedPaths",List.of(path));
+                ((List<Map<String,Object>>)data.get("routes")).getLast().put("componentPath",path);});
+        cases.add(data->units(data).getLast().put("ownedPaths",List.of("client/src/List.tsx","client/src/A.tsx","client/src/B.tsx",
+                "client/src/C.tsx","client/src/D.tsx","client/src/E.tsx")));
+        cases.add(data->{units(data).get(1).put("ownedPaths",List.of("client/src/App.tsx","client/src/List.tsx","client/src/Form.tsx"));
+                units(data).getLast().put("ownedPaths",List.of("client/src/List.tsx","client/src/form.tsx"));});
+        cases.add(data->data.put("batches",List.of(Map.of("id","b1","unitIds",List.of("data","ui","list")))));
+        cases.add(data->{units(data).getLast().put("dependsOn",List.of("other"));units(data).add(new LinkedHashMap<>(Map.of("id","other",
+                "objective","Implement other","ownedPaths",List.of("client/src/Other.tsx"),"imports",List.of(),"dependsOn",List.of("ui"),"acceptanceIds",List.of())));});
+        cases.add(data->units(data).getLast().put("dependsOn",List.of("list")));
+        cases.add(data->data.put("assets",List.of(Map.of("source","assets/logo.png","destination","client/src/List.tsx",
+                "fingerprint","sha256:"+"a".repeat(64),"owner","list"))));
+        for(var mutation:cases){
+            Map<String,Object> data=sharedComponent(original);mutation.accept(data);
+            var units=units(data).stream().map(unit->unit.get("id")).toList();
+            var owners=((List<Map<String,Object>>)data.get("routes")).stream().map(route->route.get("owner")).toList();
+            Map<String,Object> result=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
+            assertEquals(units,units(result).stream().map(unit->unit.get("id")).toList());
+            assertEquals(owners,((List<Map<String,Object>>)result.get("routes")).stream().map(route->route.get("owner")).toList());
+            assertThrows(RuntimeException.class,()->mapper.readValue(mapper.writeValueAsString(result),BuildContract.class));
+        }
+    }
+
+    private Map<String,Object> sharedComponent(BuildContract original){
+        Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        units(data).getLast().put("ownedPaths",List.of("client/src/App.tsx","client/src/List.tsx"));
+        units(data).add(new LinkedHashMap<>(Map.of("id","list","objective","Show the list.","ownedPaths",List.of("client/src/List.tsx"),
+                "imports",List.of("server/src/items.ts"),"dependsOn",List.of("ui","data"),"acceptanceIds",List.of("listed"))));
+        var browser=new ArrayList<Object>((List<?>)((Map<String,Object>)data.get("acceptance")).get("browser"));
+        browser.add(Map.of("id","listed","kind","ASSERT_EXISTS","selector","#list"));
+        ((Map<String,Object>)data.get("acceptance")).put("browser",browser);
+        var routes=new ArrayList<Object>((List<?>)data.get("routes"));
+        routes.add(new LinkedHashMap<>(Map.of("path","/list","componentPath","client/src/List.tsx","owner","list")));
+        data.put("routes",routes);
         return data;
     }
     private static Map<String,Object> limits(int modelCalls){return Map.of("modelCalls",modelCalls,"toolCalls",40,"outputTokens",8192,"timeoutMs",60000);}
