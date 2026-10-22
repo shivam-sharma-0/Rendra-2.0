@@ -99,6 +99,7 @@ import com.code.pal.agent.context.ToolResultMemory;
 import com.code.pal.agent.contract.BatchBudget;
 import com.code.pal.agent.contract.ContractCoordinator;
 import com.code.pal.agent.contract.ContractModelCalls;
+import com.code.pal.agent.contract.ModelOutputProgress;
 import com.code.pal.agent.llm.LlmLogicalCall;
 import com.code.pal.agent.contract.StaticAssets;
 import com.code.pal.agent.contract.ApprovedBehaviourSetup;
@@ -797,8 +798,14 @@ public class AgentRunner implements AgentRuntime {
             }
             return response;
         };
+        var progress = new ModelOutputProgress(props, objectMapper, repeated -> {
+            log.warn("model_no_progress runId={} provider={} model={} wastedCalls={}", run.getId(),
+                    repeated.route().provider(), repeated.route().model(), repeated.wastedCalls());
+            events.emit(run, AgentStepType.STATUS, "Model output made no progress", Map.of(
+                    "provider", repeated.route().provider(), "model", repeated.route().model(), "wastedCalls", repeated.wastedCalls()));
+        });
         Function<LlmRequest, LlmResult> checkedCall = request -> structuredCall(run, structuredRuntime, structuredDeadline,
-                request, attempt);
+                request, routed -> progress.call(routed, attempt));
         Runnable beforeIo = () -> {
             requireNotCancelled(run);
             requireBeforeDeadline(structuredDeadline);
