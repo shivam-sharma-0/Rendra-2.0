@@ -45,6 +45,11 @@ function collectProposal() {
     };
 }
 
+function allowedModels(manifest, provider) {
+    return [...manifest.routes, ...(manifest.chatRoutes || [])]
+        .filter(route => route.provider === provider).map(route => route.model);
+}
+
 async function main() {
     const directory = path.resolve(process.argv[2] || '');
     const root = path.resolve(__dirname, '../target/real-e2e');
@@ -52,11 +57,11 @@ async function main() {
             || !fs.statSync(directory).isDirectory()) throw Error('Owned synthetic evidence directory required');
     const manifest = require('./fixtures/planner-intake.json');
     const routes = new Map([
-        ['/api/v1/chat/completions', { provider: 'openrouter', model: manifest.routes.find(route => route.provider === 'openrouter')?.model,
+        ['/api/v1/chat/completions', { provider: 'openrouter', models: allowedModels(manifest, 'openrouter'),
             url: 'https://openrouter.ai/api/v1/chat/completions' }],
-        ['/mistral/v1/chat/completions', { provider: 'mistral', model: manifest.routes.find(route => route.provider === 'mistral')?.model,
+        ['/mistral/v1/chat/completions', { provider: 'mistral', models: allowedModels(manifest, 'mistral'),
             url: 'https://api.mistral.ai/v1/chat/completions' }],
-        ['/nvidia/v1/chat/completions', { provider: 'nvidia', model: manifest.routes.find(route => route.provider === 'nvidia')?.model,
+        ['/nvidia/v1/chat/completions', { provider: 'nvidia', models: allowedModels(manifest, 'nvidia'),
             url: 'https://integrate.api.nvidia.com/v1/chat/completions' }]
     ]);
     let sequence = 0;
@@ -65,9 +70,10 @@ async function main() {
         response.once('close', () => { if (!response.writableEnded) abort.abort(); });
         let trace;
         let provider;
+        let model;
         try {
             const route = routes.get(request.url);
-            if (request.method !== 'POST' || !route?.model) {
+            if (request.method !== 'POST' || !route?.models.length) {
                 response.writeHead(404).end(); return;
             }
             provider = route.provider;
@@ -80,10 +86,11 @@ async function main() {
             }
             const body = Buffer.concat(chunks);
             const data = JSON.parse(body.toString('utf8'));
-            if (data.model !== route.model || data.stream !== true || !request.headers.authorization) {
+            if (!route.models.includes(data.model) || data.stream !== true || !request.headers.authorization) {
                 response.writeHead(400).end(); return;
             }
             trace = collectProposal();
+            model = data.model;
             const upstream = await fetch(route.url, {
                 method: 'POST', redirect: 'error', signal: AbortSignal.any([abort.signal, AbortSignal.timeout(120000)]),
                 headers: { 'content-type': 'application/json', authorization: request.headers.authorization }, body
@@ -101,7 +108,7 @@ async function main() {
             response.end();
         } finally {
             if (trace) fs.writeFileSync(path.join(directory, `synthetic-planner-${++sequence}.json`),
-                JSON.stringify({ provider, ...trace.finish() }, null, 2), { flag: 'wx' });
+                JSON.stringify({ provider, model, ...trace.finish() }, null, 2), { flag: 'wx' });
         }
     });
     server.listen(0, '127.0.0.1');
@@ -109,5 +116,5 @@ async function main() {
     fs.writeFileSync(path.join(directory, 'planner-trace-ready.json'), JSON.stringify({ port: server.address().port }), { flag: 'wx' });
 }
 
-module.exports = { collectProposal };
+module.exports = { collectProposal, allowedModels };
 if (require.main === module) main().catch(() => { console.error('Synthetic planner tracing failed'); process.exitCode = 1; });
