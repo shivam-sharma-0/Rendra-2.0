@@ -23,6 +23,20 @@ remain separate from contract rejections and do not count as returned proposals.
 The rejection summary counts first blockers, not every latent defect. Valid contracts prove planning
 only; generated code/READY/browser/CRUD/CHAT still require the separate E2E gate.
 
+To measure a validator/normalizer change without new model calls, replay an earlier batch:
+
+```powershell
+.\scripts\Run-PlannerBatch.ps1 -Replay target/planner-batch-r1 -OutputDirectory target/planner-replay-r1-fix1
+```
+
+Replay loads no configuration or credentials and makes zero model calls. For each sample with a saved
+planner result it rebuilds the original planner input (same fixture prompt, saved contract id, approved
+requirements from the saved requirements result, MERN/accounts, limits and root path), re-runs the raw and
+normalized validation with the current code and writes a new `report.json` with `replayOf` and each
+sample's `original` outcome/signature. `REPLAY_SAMPLE ... CHANGED` lines mark samples whose outcome or
+first-blocker signature moved. Samples without a saved proposal (429/provider failure) are carried over.
+Use the same `-Fixture` as the original batch.
+
 ## S0: nine-journey benchmark (Claude executes)
 
 From the single inner `Code-Pal` repository, after independently compiling the intended source:

@@ -4,6 +4,7 @@ import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.llm.*;
 import com.code.pal.project.capability.BuildDecisions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.*;
@@ -60,6 +61,45 @@ class PlannerBatchHarnessTest {
         assertTrue(PlannerBatchHarness.rateLimited(RetryableLlmException.rateLimited(0)));
         assertTrue(PlannerBatchHarness.rateLimited(new LlmStreamException(LlmStreamException.Reason.PROVIDER_ERROR, 429, null)));
         assertFalse(PlannerBatchHarness.rateLimited(new LlmHttpException(503, "unavailable")));
+    }
+
+    @Test void replayRevalidatesSavedProposalsWithTheSavedContractIdAndCarriesOverFailedCalls(@TempDir Path batch) throws Exception {
+        var contract = ContractFixtures.accounts();
+        Map<String, Object> proposal = mapper.readValue(mapper.writeValueAsString(contract), Map.class);
+        var removed = new HashSet<Object>();
+        ((List<Map<String, Object>>) ((Map<String, Object>) proposal.get("acceptance")).get("api"))
+                .removeIf(step -> step.get("kind").toString().startsWith("AUTH_") && removed.add(step.get("id")));
+        for (var unit : (List<Map<String, Object>>) proposal.get("units"))
+            ((List<Object>) unit.get("acceptanceIds")).removeIf(removed::contains);
+        var usage = new LlmClient.Usage(10, 20);
+        Files.writeString(batch.resolve("fixture.json"), "{\"cases\":[{\"name\":\"items\",\"repeats\":2,\"prompt\":\"Items\"}]}");
+        Files.writeString(batch.resolve("01-items-1-requirements.json"), mapper.writeValueAsString(new LlmClient.LlmResult(
+                "```json\n{\"questions\":[],\"spec\":{\"title\":\"Items\",\"pages\":[],\"features\":[]}}\n```", null, List.of(), usage, "stop")));
+        Files.writeString(batch.resolve("01-items-1-planner.json"), mapper.writeValueAsString(
+                new LlmClient.LlmResult(mapper.writeValueAsString(proposal), null, List.of(), usage, "stop")));
+        Files.writeString(batch.resolve("report.json"), mapper.writeValueAsString(Map.of("samples", List.of(
+                Map.of("id", "01-items-1", "case", "items", "requirements", Map.of("status", "OK"), "contractId", contract.id(),
+                        "planning", Map.of("status", "OK"), "normalized", Map.of("valid", false, "signature", "old"), "outcome", "REJECTED"),
+                Map.of("id", "02-items-2", "case", "items", "requirements", Map.of("status", "OK"),
+                        "planning", Map.of("status", "RATE_LIMIT"), "outcome", "RATE_LIMIT")))));
+        Path output = Files.createDirectories(batch.resolve("replay"));
+
+        var report = PlannerBatchHarness.replay(mapper, batch, batch.resolve("fixture.json"), output);
+
+        assertEquals(batch.toString(), report.get("replayOf")); assertEquals(0, report.get("correctionCalls"));
+        assertEquals(2, report.get("attemptedSamples")); assertEquals(1L, report.get("proposals"));
+        assertEquals(1L, report.get("validAfterNormalization")); assertEquals(1L, report.get("rateLimitSamples"));
+        var samples = (List<Map<String, Object>>) report.get("samples");
+        var replayed = samples.getFirst();
+        assertEquals("VALID", replayed.get("outcome"));
+        assertEquals(Map.of("outcome", "REJECTED", "signature", "old"), replayed.get("original"));
+        assertEquals(false, ((Map<String, Object>) replayed.get("raw")).get("valid"));
+        assertTrue(((List<String>) ((Map<String, Object>) replayed.get("normalized")).get("normalizationEvents")).stream()
+                .anyMatch(event -> event.startsWith("acceptance_auth_setup_inserted")));
+        assertEquals(true, ((Map<String, Object>) replayed.get("requirements")).get("draftCaptured"));
+        assertEquals("RATE_LIMIT", samples.getLast().get("outcome")); assertFalse(samples.getLast().containsKey("normalized"));
+        assertEquals(report.get("validAfterNormalization"), mapper.readTree(Files.readString(output.resolve("report.json")))
+                .path("validAfterNormalization").asLong());
     }
 
     @Test void shippedBatchContainsDetailedAndShortNaturalPrompts() throws Exception {

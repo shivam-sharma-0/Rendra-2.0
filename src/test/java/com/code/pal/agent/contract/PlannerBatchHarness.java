@@ -18,6 +18,7 @@ import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.core.env.PropertiesPropertySource;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.io.ClassPathResource;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -43,11 +44,21 @@ public final class PlannerBatchHarness {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 2) throw new IllegalArgumentException("Expected fixture and new output directory");
-        Path output = Path.of(args[1]).toAbsolutePath().normalize();
+        boolean replay = args.length == 4 && args[0].equals("--replay");
+        if (args.length != 2 && !replay)
+            throw new IllegalArgumentException("Expected fixture and new output directory, or --replay <batch> <fixture> <output>");
+        Path output = Path.of(args[args.length - 1]).toAbsolutePath().normalize();
         Path target = Path.of("target").toAbsolutePath().normalize();
         if (!output.startsWith(target) || output.equals(target) || Files.exists(output))
             throw new IllegalArgumentException("Use a new evidence directory under target");
+        if (replay) {
+            Path batch = Path.of(args[1]).toAbsolutePath().normalize();
+            if (!Files.isRegularFile(batch.resolve("report.json"))) throw new IllegalArgumentException("Replay needs a batch report.json");
+            // Saved outputs only: no configuration, credentials, client or model call.
+            Files.createDirectories(output);
+            replay(new ObjectMapper(), batch, Path.of(args[2]), output);
+            return;
+        }
         var properties = configuration();
         var client = new OpenAiCompatibleLlmClient(properties, new ObjectMapper());
         Files.createDirectories(output);
@@ -88,8 +99,7 @@ public final class PlannerBatchHarness {
         int sequence = 0;
         for (var item : cases) {
             String name = item.path("name").asString();
-            String prompt = item.has("promptFixture") ? mapper.readTree(Files.readString(Path.of(item.path("promptFixture").asString())))
-                    .path("prompt").asString() : item.path("prompt").asString();
+            String prompt = prompt(mapper, item);
             int repeats = item.path("repeats").asInt();
             if (!name.matches("[a-z-]{1,40}") || prompt.isBlank() || repeats < 1 || repeats > 10)
                 throw new IllegalArgumentException("Invalid bounded synthetic case");
@@ -116,6 +126,27 @@ public final class PlannerBatchHarness {
         var requirements = new LinkedHashMap<String, Object>(); sample.put("requirements", requirements);
         var result = invoke(request, CallPurpose.REQUIREMENTS, requirements, id + "-requirements");
         if (result == null) { sample.put("outcome", requirements.get("status")); return; }
+        var input = plannerInput(mapper, UUID.randomUUID(), prompt, result, requirements);
+        sample.put("contractId", input.id());
+        var planner = new ContractPlanner(mapper, properties);
+        LlmClient.LlmRequest prepared = prepare(planner, input, properties.planningRoutes().getFirst());
+        var planning = new LinkedHashMap<String, Object>(); sample.put("planning", planning);
+        var proposal = invoke(prepared, CallPurpose.PLANNER, planning, id + "-planner");
+        if (proposal == null) { sample.put("outcome", planning.get("status")); return; }
+        Map<String, Object> raw = inspect(planner, input, proposal, false);
+        Map<String, Object> normalized = inspect(planner, input, proposal, true);
+        sample.put("raw", raw); sample.put("normalized", normalized);
+        sample.put("outcome", Boolean.TRUE.equals(normalized.get("valid")) ? "VALID" : "REJECTED");
+    }
+
+    static String prompt(ObjectMapper mapper, JsonNode item) throws IOException {
+        return item.has("promptFixture") ? mapper.readTree(Files.readString(Path.of(item.path("promptFixture").asString())))
+                .path("prompt").asString() : item.path("prompt").asString();
+    }
+
+    /** Live and replay share this planner input; only the contract id differs (fresh vs saved). */
+    static ContractPlanner.Input plannerInput(ObjectMapper mapper, UUID contractId, String prompt, LlmClient.LlmResult result,
+            Map<String, Object> requirements) {
         String draft = null;
         try {
             var root = mapper.readTree(ModelJson.unfenced(result.content()));
@@ -131,19 +162,48 @@ public final class PlannerBatchHarness {
                 "answers", List.of(Map.of("question", "Where should data be saved?", "answer", "App backend + MongoDB"),
                         Map.of("question", "Should people sign in with real accounts?", "answer", "Real accounts"))));
         var approved = new ApprovedProjectMemory.Approved(UUID.randomUUID(), 0, answers, "", draft);
-        var input = new ContractPlanner.Input(UUID.randomUUID(), prompt, ApprovedProductScope.planningRequirements(approved, mapper),
+        return new ContractPlanner.Input(contractId, prompt, ApprovedProductScope.planningRequirements(approved, mapper),
                 String.join("\n", Starter.MERN.files("Synthetic planner batch").keySet()), choice,
                 new BuildContract.Limits(60, 150, 8192, 900000), "client/src/App.tsx");
-        sample.put("contractId", input.id());
-        var planner = new ContractPlanner(mapper, properties);
-        LlmClient.LlmRequest prepared = prepare(planner, input, properties.planningRoutes().getFirst());
-        var planning = new LinkedHashMap<String, Object>(); sample.put("planning", planning);
-        var proposal = invoke(prepared, CallPurpose.PLANNER, planning, id + "-planner");
-        if (proposal == null) { sample.put("outcome", planning.get("status")); return; }
-        Map<String, Object> raw = inspect(planner, input, proposal, false);
-        Map<String, Object> normalized = inspect(planner, input, proposal, true);
-        sample.put("raw", raw); sample.put("normalized", normalized);
-        sample.put("outcome", Boolean.TRUE.equals(normalized.get("valid")) ? "VALID" : "REJECTED");
+    }
+
+    /** Re-validates saved proposals with the current validator and normalizers; samples without one are carried over. */
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> replay(ObjectMapper mapper, Path batch, Path fixture, Path output) throws IOException {
+        var prompts = new HashMap<String, String>();
+        for (var item : mapper.readTree(Files.readString(fixture)).path("cases")) prompts.put(item.path("name").asString(), prompt(mapper, item));
+        var report = new LinkedHashMap<String, Object>();
+        List<Map<String, Object>> samples = new ArrayList<>();
+        report.put("schemaVersion", 1); report.put("correctionCalls", 0); report.put("replayOf", batch.toString());
+        report.put("scope", "offline replay of saved planner outputs with the current validator and normalizers; no model calls");
+        report.put("samples", samples);
+        var planner = new ContractPlanner(mapper);
+        for (var saved : mapper.readTree(Files.readString(batch.resolve("report.json"))).path("samples")) {
+            Map<String, Object> sample = mapper.convertValue(saved, LinkedHashMap.class);
+            samples.add(sample);
+            String id = saved.path("id").asString();
+            Path proposal = batch.resolve(id + "-planner.json");
+            if (!"OK".equals(saved.path("planning").path("status").asString()) || !Files.isRegularFile(proposal)) continue;
+            String prompt = prompts.get(saved.path("case").asString());
+            if (prompt == null) throw new IllegalArgumentException("Replay case is missing from the fixture: " + id);
+            var requirements = mapper.readValue(Files.readString(batch.resolve(id + "-requirements.json")), LlmClient.LlmResult.class);
+            var input = plannerInput(mapper, UUID.fromString(saved.path("contractId").asString()), prompt, requirements,
+                    (Map<String, Object>) sample.get("requirements"));
+            var result = mapper.readValue(Files.readString(proposal), LlmClient.LlmResult.class);
+            var original = new LinkedHashMap<String, Object>();
+            original.put("outcome", sample.get("outcome"));
+            original.put("signature", saved.path("normalized").path("signature").asString(null));
+            sample.put("original", original); sample.put("raw", inspect(planner, input, result, false));
+            var normalized = inspect(planner, input, result, true); sample.put("normalized", normalized);
+            sample.put("outcome", Boolean.TRUE.equals(normalized.get("valid")) ? "VALID" : "REJECTED");
+            boolean changed = !Objects.equals(original.get("outcome"), sample.get("outcome"))
+                    || !Objects.equals(original.get("signature"), normalized.get("signature"));
+            System.out.println("REPLAY_SAMPLE " + id + " " + sample.get("outcome") + (changed ? " CHANGED " : " ")
+                    + Objects.toString(normalized.get("signature"), ""));
+        }
+        summarize(report, samples);
+        Files.writeString(output.resolve("report.json"), mapper.writerWithDefaultPrettyPrinter().writeValueAsString(report));
+        return report;
     }
 
     private static final class Prepared extends RuntimeException {
