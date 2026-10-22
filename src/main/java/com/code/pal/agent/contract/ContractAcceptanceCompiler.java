@@ -1,5 +1,7 @@
 package com.code.pal.agent.contract;
 
+import com.code.pal.agent.validation.AccountAcceptance;
+
 import com.code.pal.agent.validation.BehaviorCriteria;
 import tools.jackson.databind.ObjectMapper;
 import java.util.*;
@@ -58,6 +60,7 @@ final class ContractAcceptanceCompiler {
         changed |= removeExactDuplicates(data);
         changed |= resolveUnambiguousUnitIds(data);
         changed |= trimOptionalBrowserChecks(data, requiredScope);
+        changed |= AccountAcceptance.normalize(data, mapper);
         var criteria = mapper.convertValue(data.get("acceptance"), BehaviorCriteria.class);
         if (!criteria.crudRequired())
             return changed ? mapper.writeValueAsString(data) : content;

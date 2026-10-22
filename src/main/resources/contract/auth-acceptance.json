@@ -1,0 +1,7 @@
+[
+  {"id":"platform_signup","kind":"AUTH_SIGNUP","method":"POST","path":"/api/auth/signup","body":"{\"email\":\"${fixtureEmail}\",\"password\":\"${fixturePassword}\"}","status":201},
+  {"id":"platform_login","kind":"AUTH_LOGIN","method":"POST","path":"/api/auth/login","body":"{\"email\":\"${fixtureEmail}\",\"password\":\"${fixturePassword}\"}","status":200,"captureVariable":"platformLoginToken","capturePointer":"/token"},
+  {"id":"platform_wrong_password","kind":"AUTH_REJECT","method":"POST","path":"/api/auth/login","body":"{\"email\":\"${fixtureEmail}\",\"password\":\"${invalidToken}\"}","status":401},
+  {"id":"platform_missing_token","kind":"AUTH_REJECT","method":"GET","status":401},
+  {"id":"platform_invalid_token","kind":"AUTH_INVALID","method":"GET","tokenVariable":"invalidToken","status":401}
+]

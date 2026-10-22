@@ -20,6 +20,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -256,10 +257,14 @@ public class RuntimeCheckService {
             inherited = criteria != null;
         }
         var actions = criteria == null ? List.<BehaviorCriteria.BrowserAction>of() : criteria.browser();
-        String acceptance = objectMapper.writeValueAsString(Map.of("schema", 1, "actions", actions));
-        String smokeAcceptance = outcomePlan.definitions().isEmpty() ? null
-                : objectMapper.writeValueAsString(featureOutcomes.browserData(outcomePlan, List.of()));
         boolean mern = "mern".equals(stacks.detect(files, context.projectId(), copy).id());
+        var auth = mern ? AccountAcceptance.browserSession(criteria, context.projectId()) : Map.<String, String>of();
+        var browserData = new LinkedHashMap<String, Object>(Map.of("schema", 1, "actions", actions));
+        var smokeData = new LinkedHashMap<String, Object>(outcomePlan.definitions().isEmpty()
+                ? Map.of("schema", 1, "actions", List.of()) : featureOutcomes.browserData(outcomePlan, List.of()));
+        if (!auth.isEmpty()) { browserData.put("authSetup", auth); smokeData.put("authSetup", auth); }
+        String acceptance = objectMapper.writeValueAsString(browserData);
+        String smokeAcceptance = outcomePlan.definitions().isEmpty() && auth.isEmpty() ? null : objectMapper.writeValueAsString(smokeData);
         Probe smoke = null;
         SandboxPort.CommandResult outcomeResult = null;
         if (!actions.isEmpty() && cloud == null) {

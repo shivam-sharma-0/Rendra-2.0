@@ -7,7 +7,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {exchange, forwardSupabase, supabaseResponseHeaders} from './relay.mjs';
 import {outcomeDom, runOutcomes} from './outcomes.mjs';
 
@@ -202,6 +202,39 @@ await send("Page.addScriptToEvaluateOnNewDocument", { source:
 await send("Page.navigate", { url: siteUrl }, sessionId);
 for (let waited = 0; !loaded && waited < 15_000; waited += 100) await new Promise((r) => setTimeout(r, 100));
 await new Promise((r) => setTimeout(r, settleMs));
+
+// Called only with backend-authored setup and unique disposable credentials. Return no token or response body.
+async function setupAccount(config, credentials) {
+  try {
+    if (config.signup !== '/api/auth/signup' || config.login !== '/api/auth/login'
+        || !/^rendra-session:[a-f0-9-]{36}$/.test(config.storageKey)) return false;
+    const post = path => fetch(path, {method:'POST', redirect:'error', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(credentials), signal:AbortSignal.timeout(8000)});
+    const signup = await post(config.signup);
+    if (signup.status !== 201) return false;
+    const login = await post(config.login);
+    if (login.status !== 200) return false;
+    const session = await login.json();
+    if (typeof session.token !== 'string' || !session.token || session.token.length > 8192
+        || typeof session.userId !== 'string' || !session.userId || session.userId.length > 128) return false;
+    localStorage.setItem(config.storageKey, JSON.stringify({token:session.token, userId:session.userId, email:credentials.email}));
+    return true;
+  } catch { return false; }
+}
+if (loaded && acceptanceData.authSetup) {
+  const credentials = {email:`browser-${randomUUID()}@example.invalid`, password:randomUUID()};
+  const seeded = await send('Runtime.evaluate', {returnByValue:true, awaitPromise:true,
+    expression:`(${setupAccount.toString()})(${JSON.stringify(acceptanceData.authSetup)},${JSON.stringify(credentials)})`}, sessionId);
+  if (seeded.result?.result?.value !== true) {
+    add('auth-setup', 'Fresh candidate account setup failed', null);
+    loaded = false;
+  } else {
+    loaded = false;
+    await send('Page.navigate', {url:siteUrl}, sessionId);
+    for (let waited=0; !loaded && waited<10000; waited+=100) await new Promise(resolve=>setTimeout(resolve,100));
+    await new Promise(resolve=>setTimeout(resolve,settleMs));
+  }
+}
 
 // A page that rendered nothing visible is broken even without an error (for example an empty #root).
 const evaluation = await send("Runtime.evaluate", { returnByValue: true, expression: `(() => {

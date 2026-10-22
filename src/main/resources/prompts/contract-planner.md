@@ -61,18 +61,12 @@ Do not declare unused extra endpoints, health, or error APIs. DELETE has one suc
 NOT_FOUND is a later GET of the deleted captured identity, not the successful READ coverage.
 Use one API sequence: health, create/capture recordId, list, read recordId, update/assert edited value,
 restart/read/assert the same value, delete, GET deleted record/assert 404. Adapt fields and paths to the app.
-Account tests require signup/login with ${fixtureEmail}/${fixturePassword}, login token capture, missing/invalid token
-rejection, authenticated CRUD, wrong-password denial, and persistent data after restart. Variables cannot be used before capture.
-For ACCOUNTS the coordinator owns ALL /api/auth/* paths. Only POST /api/auth/signup and POST /api/auth/login
-are supported; sign-out clears the client session. Do not declare or implement these paths in application api/units.
-AuthSession is {token:string,userId:string}. After HEALTH: AUTH_SIGNUP POST /api/auth/signup 201,
-AUTH_LOGIN POST /api/auth/login 200 capturing loginToken at /token; both use fixtureEmail/fixturePassword.
-Then AUTH_REJECT GET the protected collection without a token 401, AUTH_INVALID GET with invalidToken 401,
-and AUTH_REJECT POST /api/auth/login with fixtureEmail/invalidToken as password 401. Never omit these checks.
-Set every later successful CREATE/READ/UPDATE/DELETE/NOT_FOUND/PERSISTENCE tokenVariable to the literal
-captured name "loginToken", never "${loginToken}" or a token value. tokenVariable is null on signup/login;
-captureVariable/capturePointer store the login response AFTER the request, so a request cannot use its own capture.
-These setup steps supplement the full CRUD/restart and browser flows; they never replace them.
+For MERN ACCOUNTS, auth setup is platform-provided: fresh fixture signup/login, token capture, missing/invalid-token
+and wrong-password denials are inserted deterministically. Do not write those setup steps or declare /api/auth/* in api/units.
+These coordinator-owned endpoints are POST /api/auth/signup and /api/auth/login; sign-out clears the client session.
+Set protected CRUD tokenVariable to null; the platform binds it to its captured session. Preserve every CRUD/restart assertion.
+Browser checks start with a fresh authenticated platform session unless explicitly testing the auth forms. Use the declared
+product selectors for CRUD/search/filter/reload and do not spend browser actions or static credentials on auth setup.
 PERSISTENCE performs a real restart and must assert a value. assertValue is scalar text (one, 42, true), not JSON-encoded text.
 Only local /api paths. No external acceptance URLs, JavaScript, shell, new privileges or raised limits.
 Assets must reference exact source path/fingerprint from project context; use no invented image or SDK.
@@ -88,7 +82,7 @@ if completed is requested, ui_complete CLICK on the task checkbox then ui_comple
 ui_delete CLICK then ui_deleted ASSERT_COUNT on task rows (value 0). Add preparatory FILL/CLICK actions as needed.
 Use selectors matching the actual UI. Task text assertions select task rows, never just headings.
 Preserve every required check; MERN unit responsibility is assigned by the coordinator.
-Fit account setup, CRUD/completion/reload, search, filter and required route checks into one browser flow of at most
+Fit CRUD/completion/reload, search, filter and required route checks into one browser flow of at most
 24 actions, including setup. Reuse the created task and edit form. Test one meaningful filter, not every chip;
 combine search evidence with task assertions. Keep settings navigation while skipping optional preference controls.
 Example complete browser sequence for a task form (adapt selectors to the UI you specify):

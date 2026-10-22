@@ -1,5 +1,7 @@
 package com.code.pal.agent.contract;
 
+import com.code.pal.agent.validation.AccountAcceptance;
+
 import com.code.pal.agent.starter.Starter;
 import com.code.pal.project.capability.BuildDecisions;
 import org.springframework.stereotype.Component;
@@ -74,7 +76,7 @@ public final class ContractScaffold {
         out.put(root + "types.ts", types);
         if (c.stack() == BuildContract.Stack.MERN && c.auth() == BuildDecisions.Auth.ACCOUNTS)
             out.put(root + "auth-client.ts", resource("contract/auth-client.ts")
-                    .replace("{{storageKey}}", json("rendra-session:" + projectId)));
+                    .replace("{{storageKey}}", json(AccountAcceptance.storageKey(projectId))));
         out.put(root + "api.ts", api(c));
         StringBuilder routes = new StringBuilder("import type { ComponentType } from 'react'\n");
         for (int i = 0; i < c.routes().size(); i++) {
