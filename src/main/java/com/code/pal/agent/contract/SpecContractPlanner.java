@@ -6,6 +6,8 @@ import com.code.pal.agent.prompt.PromptLoader.Prompt;
 import com.code.pal.agent.llm.CallPurpose;
 import com.code.pal.agent.llm.LlmCallContext;
 import com.code.pal.agent.llm.LlmClient;
+import com.code.pal.agent.llm.LlmLogicalCall;
+import java.util.UUID;
 import com.code.pal.agent.starter.Starter;
 import com.code.pal.project.spec.ApprovedSpec;
 import lombok.extern.slf4j.Slf4j;
@@ -30,9 +32,11 @@ final class SpecContractPlanner {
             "specHash", "planRevision", "replacesContractId", "templateVersion", "batches");
     private static final String SYSTEM = PromptLoader.load(Prompt.SPEC_CONTRACT_PLANNER);
     private final ObjectMapper mapper;
+    private final AgentProperties properties;
 
-    SpecContractPlanner(ObjectMapper mapper) {
+    SpecContractPlanner(ObjectMapper mapper, AgentProperties properties) {
         this.mapper = mapper;
+        this.properties = properties;
     }
 
     BuildContract plan(ContractPlanner.SpecInput input, AgentProperties.ModelSelection model,
@@ -58,20 +62,23 @@ final class SpecContractPlanner {
                 "requiredPageFiles", SpecPlanValues.pages(input.spec()), "availableCoordinatorPaths", available,
                 "unitLimits", Map.of("sourceFiles", BatchBudget.MAX_SOURCE_FILES,
                         "sourceCharacters", BatchBudget.MAX_SOURCE_CHARACTERS, "outputTokens", input.budget().outputCap())))));
-        for (int attempt = 0; attempt < 2; attempt++) {
+        var progress = new PlannerRejections(properties);
+        AgentProperties.ModelSelection selected = model;
+        for (int attempt = 0; attempt < 3; attempt++) {
             int inputBytes = messages.stream().mapToInt(message -> message.content().getBytes(StandardCharsets.UTF_8).length).sum()
                     + schema.schema().getBytes(StandardCharsets.UTF_8).length;
             if (inputBytes > input.budget().inputCap()) {
                 throw new IllegalArgumentException("Planner input or correction exceeds bounded capacity");
             }
-            var request = new LlmClient.LlmRequest(model.provider(), model.model(), List.copyOf(messages), List.of(), 0.0,
+            var request = new LlmClient.LlmRequest(selected.provider(), selected.model(), List.copyOf(messages), List.of(), 0.0,
                     Duration.ofMillis(base.limits().timeoutMs()))
                     .withMaxTokens(Math.min(8_192, base.limits().outputTokens()));
-            if ("mistral".equalsIgnoreCase(model.provider())) {
+            if ("mistral".equalsIgnoreCase(selected.provider())) {
                 request = request.withJsonSchema(schema);
             }
             LlmClient.LlmResult response;
-            try (var purpose = LlmCallContext.purpose(attempt == 0 ? CallPurpose.PLANNER : CallPurpose.SCHEMA_CORRECTION, true)) {
+            try (var purpose = LlmCallContext.purpose(attempt == 0 ? CallPurpose.PLANNER : CallPurpose.SCHEMA_CORRECTION, true);
+                    var identity = LlmLogicalCall.bind(UUID.randomUUID())) {
                 response = checked.apply(request);
             }
             String proposal = null;
@@ -111,9 +118,11 @@ final class SpecContractPlanner {
                 String reason = ContractPlanner.schemaFeedback(invalid);
                 log.info("planner_contract_rejected attempt={} reason={} contractId={} specId={}",
                         attempt + 1, reason, base.id(), input.spec().specId());
-                if (attempt == 1) {
+                var next = progress.rejected(ContractPlanner.rejectionSignature(invalid), attempt, selected);
+                if (attempt > 0 && next == null) {
                     throw new IllegalArgumentException("Planner correction failed: " + reason + "; no files changed", invalid);
                 }
+                if (next != null) selected = next;
                 if (proposal != null) {
                     messages.add(LlmClient.LlmMessage.user(PromptLoader.load(Prompt.SPEC_PLAN_PROPOSAL)
                             .replace("{{proposal}}", proposal)));

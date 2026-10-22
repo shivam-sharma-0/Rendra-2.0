@@ -7,6 +7,7 @@ public final class AcceptanceStepException extends IllegalArgumentException {
     private final boolean routeValue;
     private final String prefix;
     private final String allowed;
+    private final String signature;
 
     public AcceptanceStepException(String sequence, int index, String id, Enum<?> kind, String field,
             Object value, String allowed, RuntimeException cause) {
@@ -14,7 +15,11 @@ public final class AcceptanceStepException extends IllegalArgumentException {
         this.prefix = format(sequence, index, id, kind, field, value);
         this.allowed = allowed;
         this.routeValue = kind == BehaviorCriteria.BrowserKind.ASSERT_ROUTE && field.equals("value");
+        this.signature = sequence + "/" + (id != null && id.matches("[A-Za-z0-9_-]{1,64}") ? id : "INVALID_ID")
+                + "/" + index + "/" + (kind == null ? "UNKNOWN_KIND" : kind.name()) + "/" + field + ": " + allowed;
     }
+
+    public String signature() { return signature; }
 
     public String feedback(List<String> routes) {
         return prefix + "; " + (routeValue && !routes.isEmpty()

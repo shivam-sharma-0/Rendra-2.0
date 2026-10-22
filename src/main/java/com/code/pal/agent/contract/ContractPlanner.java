@@ -23,7 +23,7 @@ import tools.jackson.databind.DeserializationFeature;
 import com.code.pal.project.spec.ApprovedSpec;
 import com.code.pal.agent.workspace.ProjectPaths;
 
-/** One logical planner invocation plus at most one schema correction. Caller owns durable call caps. */
+/** Planner plus one correction; a repeated rejection permits one configured alternate. Caller owns durable caps. */
 @Component
 @lombok.extern.slf4j.Slf4j
 public final class ContractPlanner {
@@ -52,7 +52,7 @@ public final class ContractPlanner {
 
     public BuildContract plan(SpecInput input, AgentProperties.ModelSelection model,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checkedCall, Consumer<BuildContract> sources) {
-        return new SpecContractPlanner(mapper).plan(input, model, checkedCall, sources);
+        return new SpecContractPlanner(mapper, properties).plan(input, model, checkedCall, sources);
     }
 
     public BuildContract plan(Input input, AgentProperties.ModelSelection model,
@@ -97,11 +97,15 @@ public final class ContractPlanner {
             tools = List.of(new LlmClient.ToolSpec("proposeContract", PromptLoader.load(Prompt.CONTRACT_PROPOSAL_TOOL),
                     mapper.readValue(proposalSchema.schema(), Map.class)));
         }
-        for (int attempt = 0; attempt < 2; attempt++) {
+        var progress = new PlannerRejections(properties);
+        AgentProperties.ModelSelection alternate = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
             LlmClient.LlmResult result;
             try (var purpose = LlmCallContext
-                    .purpose(attempt == 0 ? CallPurpose.PLANNER : CallPurpose.SCHEMA_CORRECTION, true)) {
-                var selected = attempt == 0 ? model : new PlanningModelCalls(properties).schemaCorrectionRoute(model);
+                    .purpose(attempt == 0 ? CallPurpose.PLANNER : CallPurpose.SCHEMA_CORRECTION, true);
+                    var identity = LlmLogicalCall.bind(UUID.randomUUID())) {
+                var selected = attempt == 0 ? model : alternate != null ? alternate
+                        : new PlanningModelCalls(properties).schemaCorrectionRoute(model);
                 var request = new LlmClient.LlmRequest(selected.provider(), selected.model(), List.copyOf(messages),
                         tools, 0.0,
                         Duration.ofMillis(input.limits().timeoutMs()), toolEnabled ? "required" : null)
@@ -110,78 +114,114 @@ public final class ContractPlanner {
                     request = request.withJsonSchema(ContractResponseSchema.planner(input, mapper));
                 result = checkedCall.apply(request);
             }
-            String proposal = null;
-            Map<?, ?> proposalData = null;
-            boolean validatingSources = false;
             try {
-                if (result == null)
-                    throw new IllegalArgumentException("Planner must return one bounded JSON object");
-                if ("length".equals(result.finishReason()))
-                    throw new IllegalArgumentException("Planner output reached its token limit; use concise objectives and avoid duplicate data");
-                String body = result.content();
-                if (result.hasToolCalls()) {
-                    if (result.toolCalls().size() != 1 || !"proposeContract".equals(result.toolCalls().getFirst().name()))
-                        throw new IllegalArgumentException("Planner may only propose one application contract");
-                    body = result.toolCalls().getFirst().arguments();
+                var validated = validate(input, result, true);
+                try { sources.accept(validated.contract()); }
+                catch (WorkflowStageException invalidSource) {
+                    throw new Rejected(schemaFeedback(invalidSource), rejectionSignature(invalidSource), validated.proposal(), invalidSource);
                 }
-                if (body == null || body.length() > 48000)
-                    throw new IllegalArgumentException("Planner must return one bounded JSON object");
-                proposal = boundedProposal(body);
-                body = ModelJson.unfenced(body);
-                if (body.stripLeading().startsWith("[")) {
-                    JsonNode wrapped = mapper.readerFor(JsonNode.class)
-                            .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readValue(body);
-                    log.info("planner_proposal_envelope toolCall={} items={} contractField={} unitField={}",
-                            result.hasToolCalls(), wrapped.size(), wrapped.path(0).has("schemaVersion"), wrapped.path(0).has("objective"));
-                    if (wrapped.size() != 1 || !wrapped.get(0).isObject())
-                        throw new IllegalArgumentException("Planner must propose exactly one contract object");
-                    body = mapper.writeValueAsString(wrapped.get(0));
-                }
-                String content = ModelJson.object(body);
-                Map<?, ?> object = mapper.readerFor(Map.class).with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
-                        .readValue(content);
-                proposalData = object;
-                var fields = object.keySet();
-                if (!fields.equals(Set.of("schemaVersion", "id", "stack", "storage", "auth", "limits", "theme",
-                        "routes", "types", "models", "api", "assets", "envNames", "units", "acceptance")))
-                    throw new IllegalArgumentException("Contract fields are missing or unknown");
-                content = mapper.writeValueAsString(object);
-                content = ContractAcceptanceCompiler.completeCollections(content, mapper,
-                        input.request(), input.approvedRequirements());
-                // A parsed, bounded proposal lets the one correction repair the specific defect instead
-                // of inventing a different plan with new defects. It remains untrusted data and is revalidated.
-                proposal = boundedProposal(content);
-                BuildContract contract = mapper.readValue(content, BuildContract.class);
-                if (!contract.id().equals(input.id()) || !contract.limits().within(input.limits())
-                        || contract.storage() != input.choice().storage() || contract.auth() != input.choice().auth())
-                    throw new IllegalArgumentException("Contract cannot change approved capabilities/limits");
-                if (input.requiredRootPath() != null && !contract.ownership().containsKey(input.requiredRootPath())
-                        && contract.routes().isEmpty())
-                    throw new IllegalArgumentException(
-                            "New application needs an owned root component or a declared implemented route");
-                verifyRequestedUi(input, contract);
-                ApprovedProductScope.requirePages(input, contract, mapper);
-                if (contract.units().size() + 1 > contract.limits().modelCalls())
-                    throw new IllegalArgumentException("Units exceed the fixed model-call budget");
-                validatingSources = true;
-                sources.accept(contract);
-                return contract;
-            } catch (RuntimeException invalid) {
-                if (validatingSources && !(invalid instanceof WorkflowStageException))
-                    throw invalid;
-                String reason = schemaFeedback(invalid, proposalData);
-                log.info("planner_contract_rejected attempt={} reason={}", attempt + 1, reason);
-                if (attempt == 1)
-                    throw new IllegalArgumentException(
-                            "Planner schema correction failed: " + reason + "; no application files written", invalid);
-                if (proposal != null)
+                return validated.contract();
+            } catch (Rejected invalid) {
+                log.info("planner_contract_rejected attempt={} signature={} reason={}", attempt + 1, invalid.signature(), invalid.getMessage());
+                var selected = attempt == 0 ? model : alternate != null ? alternate
+                        : new PlanningModelCalls(properties).schemaCorrectionRoute(model);
+                var next = progress.rejected(invalid.signature(), attempt, selected);
+                if (attempt > 0 && next == null)
+                    throw new IllegalArgumentException("Planner schema correction failed: " + invalid.getMessage()
+                            + "; no application files written", invalid);
+                alternate = next;
+                if (invalid.proposal() != null)
                     messages.add(LlmClient.LlmMessage.user(PromptLoader.load(Prompt.CONTRACT_PROPOSAL_CORRECTION)
-                            .replace("{{proposal}}", proposal)));
+                            .replace("{{proposal}}", invalid.proposal())));
                 messages.add(LlmClient.LlmMessage.user(PromptLoader.load(Prompt.CONTRACT_SCHEMA_CORRECTION)
-                        .replace("{{reason}}", reason)));
+                        .replace("{{reason}}", invalid.getMessage())));
             }
         }
         throw new IllegalStateException();
+    }
+
+    record Validated(BuildContract contract, String proposal) {}
+
+    static final class Rejected extends IllegalArgumentException {
+        private final String signature, proposal;
+        Rejected(String reason, String signature, String proposal, RuntimeException cause) {
+            super(reason, cause); this.signature = signature; this.proposal = proposal;
+        }
+        String signature() { return signature; }
+        String proposal() { return proposal; }
+    }
+
+    /** Shared offline validation seam: production normalizes; diagnostics may inspect the raw proposal too. */
+    Validated validate(Input input, LlmClient.LlmResult result, boolean normalize) {
+        String proposal = null;
+        Map<?, ?> proposalData = null;
+        try {
+            if (result == null)
+                throw new IllegalArgumentException("Planner must return one bounded JSON object");
+            if ("length".equals(result.finishReason()))
+                throw new IllegalArgumentException("Planner output reached its token limit; use concise objectives and avoid duplicate data");
+            String body = result.content();
+            if (result.hasToolCalls()) {
+                if (result.toolCalls().size() != 1 || !"proposeContract".equals(result.toolCalls().getFirst().name()))
+                    throw new IllegalArgumentException("Planner may only propose one application contract");
+                body = result.toolCalls().getFirst().arguments();
+            }
+            if (body == null || body.length() > 48000)
+                throw new IllegalArgumentException("Planner must return one bounded JSON object");
+            proposal = boundedProposal(body);
+            body = ModelJson.unfenced(body);
+            if (body.stripLeading().startsWith("[")) {
+                JsonNode wrapped = mapper.readerFor(JsonNode.class)
+                        .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readValue(body);
+                log.info("planner_proposal_envelope toolCall={} items={} contractField={} unitField={}",
+                        result.hasToolCalls(), wrapped.size(), wrapped.path(0).has("schemaVersion"), wrapped.path(0).has("objective"));
+                if (wrapped.size() != 1 || !wrapped.get(0).isObject())
+                    throw new IllegalArgumentException("Planner must propose exactly one contract object");
+                body = mapper.writeValueAsString(wrapped.get(0));
+            }
+            String content = ModelJson.object(body);
+            Map<?, ?> object = mapper.readerFor(Map.class).with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .readValue(content);
+            proposalData = object;
+            var fields = object.keySet();
+            if (!fields.equals(Set.of("schemaVersion", "id", "stack", "storage", "auth", "limits", "theme",
+                    "routes", "types", "models", "api", "assets", "envNames", "units", "acceptance")))
+                throw new IllegalArgumentException("Contract fields are missing or unknown");
+            content = mapper.writeValueAsString(object);
+            if (normalize) content = ContractAcceptanceCompiler.completeCollections(content, mapper,
+                    input.request(), input.approvedRequirements());
+            // A parsed, bounded proposal lets the one correction repair the specific defect instead
+            // of inventing a different plan with new defects. It remains untrusted data and is revalidated.
+            proposal = boundedProposal(content);
+            BuildContract contract = mapper.readValue(content, BuildContract.class);
+            if (!contract.id().equals(input.id()) || !contract.limits().within(input.limits())
+                    || contract.storage() != input.choice().storage() || contract.auth() != input.choice().auth())
+                throw new IllegalArgumentException("Contract cannot change approved capabilities/limits");
+            if (input.requiredRootPath() != null && !contract.ownership().containsKey(input.requiredRootPath())
+                    && contract.routes().isEmpty())
+                throw new IllegalArgumentException(
+                        "New application needs an owned root component or a declared implemented route");
+            verifyRequestedUi(input, contract);
+            ApprovedProductScope.requirePages(input, contract, mapper);
+            if (contract.units().size() + 1 > contract.limits().modelCalls())
+                throw new IllegalArgumentException("Units exceed the fixed model-call budget");
+
+                return new Validated(contract, proposal);
+        } catch (RuntimeException invalid) {
+            throw new Rejected(schemaFeedback(invalid, proposalData), rejectionSignature(invalid), proposal, invalid);
+        }
+    }
+
+    static String rejectionSignature(Throwable failure) {
+        String location = "contract";
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ContractRuleException rule) return rule.signature();
+            if (cause instanceof AcceptanceStepException step) return step.signature();
+            if (cause instanceof JacksonException json && !json.getPath().isEmpty())
+                location = json.getPath().stream().map(ref -> ref.getPropertyName() == null ? "[]"
+                        : ref.getPropertyName().replaceAll("[^A-Za-z0-9_]", "_")).collect(Collectors.joining("/"));
+        }
+        return location + ": " + schemaFeedback(failure);
     }
 
     private String boundedProposal(String content) {
@@ -257,6 +297,7 @@ public final class ContractPlanner {
                 "body", "status", "tokenVariable", "captureVariable", "capturePointer", "assertPointer", "assertValue",
                 "files", "specId", "specRevision", "specHash", "planRevision", "templateVersion", "replacesContractId", "batches");
         for (int depth = 0; failure != null && depth < 8; depth++, failure = failure.getCause()) {
+            if (failure instanceof ContractRuleException rule) return rule.getMessage();
             if (failure instanceof AcceptanceStepException step) {
                 var routes = new ArrayList<String>();
                 if (proposal != null && proposal.get("routes") instanceof List<?> declared)

@@ -217,9 +217,12 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         acceptance.browser().forEach(a -> ids.add(a.id()));
         acceptance.api().forEach(a -> ids.add(a.id()));
         for (var unit : units) {
-            if (!unitIds.containsAll(unit.dependsOn()) || unit.dependsOn().contains(unit.id())
-                    || !ids.containsAll(unit.acceptanceIds()))
-                bad("Unknown dependency/acceptance criterion");
+            if (!unitIds.containsAll(unit.dependsOn()))
+                throw new ContractRuleException("dependsOn", unit.id(), "unknown unit");
+            if (unit.dependsOn().contains(unit.id()))
+                throw new ContractRuleException("dependsOn", unit.id(), "self dependency");
+            if (!ids.containsAll(unit.acceptanceIds()))
+                throw new ContractRuleException("acceptanceIds", unit.id(), "unknown criterion");
         }
         var assigned = new HashSet<String>();
         units.forEach(u -> assigned.addAll(u.acceptanceIds()));

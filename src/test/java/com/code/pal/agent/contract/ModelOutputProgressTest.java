@@ -42,14 +42,14 @@ class ModelOutputProgressTest {
     @Test void identicalCorrectionRotatesOnceAndCannotCallTheStagnantRouteAgain() {
         var request = request(Map.of("id", "plan"));
         var routes = new ArrayList<String>();
-        call(CallPurpose.PLANNER, request, routed -> result("{\"bad\":true}"));
-        var corrected = call(CallPurpose.SCHEMA_CORRECTION, request, routed -> {
+        call(CallPurpose.UNIT, request, routed -> result("{\"bad\":true}"));
+        var corrected = call(CallPurpose.UNIT_CORRECTION, request, routed -> {
             routes.add(routed.model());
             return result(routed.model().equals("first") ? "{ \"bad\" : true }" : "{\"fixed\":true}");
         });
         assertEquals("{\"fixed\":true}", corrected.content());
         assertEquals(List.of("first", "second"), routes);
-        var stopped = assertThrows(LlmException.class, () -> call(CallPurpose.SCHEMA_CORRECTION, request, routed -> {
+        var stopped = assertThrows(LlmException.class, () -> call(CallPurpose.UNIT_CORRECTION, request, routed -> {
             routes.add(routed.model()); return result("{\"fixed\":true}");
         }));
         assertTrue(stopped.getMessage().contains("wastedCalls=2"));
@@ -58,9 +58,9 @@ class ModelOutputProgressTest {
 
     @Test void bothRoutesRepeatingStopsWithoutAThirdRouteAndReportsEveryWastedCall() {
         var request = request(Map.of("id", "plan"));
-        call(CallPurpose.PLANNER, request, routed -> result("{}"));
+        call(CallPurpose.UNIT, request, routed -> result("{}"));
         var calls = new AtomicInteger();
-        assertThrows(LlmException.class, () -> call(CallPurpose.SCHEMA_CORRECTION, request, routed -> { calls.incrementAndGet(); return result("{}"); }));
+        assertThrows(LlmException.class, () -> call(CallPurpose.UNIT_CORRECTION, request, routed -> { calls.incrementAndGet(); return result("{}"); }));
         assertEquals(2, calls.get());
         assertEquals(2, progress.wastedCalls());
         assertEquals(List.of(1, 2), reports.stream().map(ModelOutputProgress.Repeated::wastedCalls).toList());
@@ -94,8 +94,8 @@ class ModelOutputProgressTest {
         call(CallPurpose.UNIT, request(repair("second failure")), routed -> { calls.incrementAndGet(); return result(files("export const count = 2")); });
         assertEquals(1, calls.get()); assertEquals(0, progress.wastedCalls());
         var request = request(Map.of("id", "strings"));
-        call(CallPurpose.PLANNER, request, routed -> result(files("export const label = 'a  b'")));
-        call(CallPurpose.SCHEMA_CORRECTION, request, routed -> result(files("export const label = 'a b'")));
+        call(CallPurpose.UNIT, request, routed -> result(files("export const label = 'a  b'")));
+        call(CallPurpose.UNIT_CORRECTION, request, routed -> result(files("export const label = 'a b'")));
         assertEquals(0, progress.wastedCalls());
     }
 
@@ -140,11 +140,12 @@ class ModelOutputProgressTest {
     }
 
     @Test void operatorRouteBoundStopsCorrectionWithoutAddingACall() {
-        properties.getPlanning().setMaxRouteAttempts(1);
+        properties.getModels().setFreeBuild(List.of("mistral:first"));
+        properties.getModels().setFreePlan(List.of("mistral:first"));
         var request = request(Map.of("id", "plan"));
-        call(CallPurpose.PLANNER, request, routed -> result("{}"));
+        call(CallPurpose.UNIT, request, routed -> result("{}"));
         var count = new AtomicInteger();
-        assertThrows(LlmException.class, () -> call(CallPurpose.SCHEMA_CORRECTION, request, routed -> {
+        assertThrows(LlmException.class, () -> call(CallPurpose.UNIT_CORRECTION, request, routed -> {
             count.incrementAndGet(); return result("{}");
         }));
         assertEquals(1, count.get());

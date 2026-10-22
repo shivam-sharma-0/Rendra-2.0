@@ -37,6 +37,8 @@ public final class ModelOutputProgress {
     public LlmClient.LlmResult call(LlmClient.LlmRequest request, Function<LlmClient.LlmRequest, LlmClient.LlmResult> physical) {
         var purpose = LlmCallContext.current().purpose();
         boolean planning = purpose == CallPurpose.PLANNER || purpose == CallPurpose.SCHEMA_CORRECTION;
+        // Planning progress is measured after normalization/validation, by rule + location, in the planner.
+        if (planning) return physical.apply(request);
         var data = input(request);
         boolean patch = data != null && data.has("diagnosticsRevision") && data.has("files");
         if (!planning && purpose != CallPurpose.UNIT && purpose != CallPurpose.UNIT_CORRECTION && !patch)
