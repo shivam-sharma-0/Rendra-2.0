@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class AgentConfigurationTest {
-    @Test void shippedContractRoutesPreferCodestralWhileRequirementsKeepUltra() {
+    @Test void shippedPlanningAndRequirementsPreferCodestralWithTheirOwnFallbacks() {
         var yaml = new YamlPropertiesFactoryBean();
         yaml.setResources(new ClassPathResource("application.yaml"));
         var sources = new MutablePropertySources();
@@ -31,8 +31,8 @@ class AgentConfigurationTest {
             assertEquals("codestral-latest", properties.preferredModel(ProjectType.PLAN).model());
             assertEquals(List.of("mistral", "openrouter", "nvidia"),
                     properties.planningRoutes().stream().map(AgentProperties.ModelSelection::provider).toList());
-            assertEquals("nvidia/nemotron-3-ultra-550b-a55b:free", properties.preferredRequirementsModel().model());
-            assertEquals(List.of("openrouter", "mistral"),
+            assertEquals("codestral-latest", properties.preferredRequirementsModel().model());
+            assertEquals(List.of("mistral", "openrouter"),
                     properties.requirementsRoutes().stream().map(AgentProperties.ModelSelection::provider).toList());
         }
         assertEquals("90000", config.getProperty("app.agent.requirements.timeout-ms"));

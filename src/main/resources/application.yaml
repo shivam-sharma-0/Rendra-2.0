@@ -166,7 +166,7 @@ app:
     structured-contracts: ${AGENT_STRUCTURED_CONTRACTS:false}
     full-stack-contracts: ${AGENT_FULL_STACK_CONTRACTS:true}
     requirements:
-      models: "${AGENT_REQUIREMENTS_MODELS:openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,mistral:codestral-latest}"
+      models: "${AGENT_REQUIREMENTS_MODELS:mistral:codestral-latest,openrouter:nvidia/nemotron-3-ultra-550b-a55b:free}"
       timeout-ms: ${AGENT_REQUIREMENTS_TIMEOUT_MS:90000}
       max-output-tokens: ${AGENT_REQUIREMENTS_MAX_OUTPUT_TOKENS:6000}
     planning:
