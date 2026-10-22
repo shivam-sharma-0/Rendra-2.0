@@ -65,6 +65,11 @@ final class ContractAcceptanceCompiler {
             return changed ? mapper.writeValueAsString(data) : content;
         changed |= removeExactDuplicates(data);
         changed |= resolveUnambiguousUnitIds(data);
+        List<Map<String, Object>> units = (List<Map<String, Object>>) data.get("units");
+        changed |= removeCoordinatorOwnedPaths(units);
+        // Before the collection insertion and responsibility loop below: both read api.owner.
+        changed |= alignOwnersToFiles(data, true);
+        changed |= alignOwnersToFiles(data, false);
         changed |= trimOptionalBrowserChecks(data, requiredScope);
         changed |= AccountAcceptance.normalize(data, mapper);
         var criteria = mapper.convertValue(data.get("acceptance"), BehaviorCriteria.class);
@@ -74,8 +79,6 @@ final class ContractAcceptanceCompiler {
         var ids = new HashSet<String>();
         checks.forEach(step -> ids.add(step.id()));
         criteria.browser().forEach(step -> ids.add(step.id()));
-        List<Map<String, Object>> units = (List<Map<String, Object>>) data.get("units");
-        changed |= removeCoordinatorOwnedPaths(units);
         for (Object value : (List<?>) data.get("api")) {
             var api = mapper.convertValue(value, BuildContract.Api.class);
             if (!api.method().equals("GET") || api.path().contains(":") || !api.responseType().endsWith("[]")
@@ -333,6 +336,54 @@ final class ContractAcceptanceCompiler {
             names.forEach((unit, name) -> unit.put("id", name));
             owners.forEach(owner -> owner.getKey().put("owner", owner.getValue()));
             used.addAll(names.values());
+            changed = true;
+        }
+        return changed;
+    }
+
+    /** api/route owners are routing metadata, never a grant: point them at the one unit listing their exact file.
+     * Unowned or multiply-owned files, undeclared owners and inconsistent routers stay for the validator. */
+    @SuppressWarnings("unchecked")
+    private static boolean alignOwnersToFiles(Map<String, Object> data, boolean api) {
+        String pathKey = api ? "routerPath" : "componentPath";
+        if (!(data.get(api ? "api" : "routes") instanceof List<?> entries) || !(data.get("units") instanceof List<?> units))
+            return false;
+        var unitIds = new HashMap<String, Integer>();
+        var fileOwners = new HashMap<String, List<String>>();
+        for (Object value : units) {
+            if (!(value instanceof Map<?, ?> unit) || !(unit.get("id") instanceof String id)
+                    || !(unit.get("ownedPaths") instanceof List<?> paths)) return false;
+            unitIds.merge(id, 1, Integer::sum);
+            for (Object path : new LinkedHashSet<>(paths))
+                if (path instanceof String file) fileOwners.computeIfAbsent(file, key -> new ArrayList<>()).add(id);
+        }
+        var groups = new LinkedHashMap<String, List<Map<String, Object>>>();
+        for (Object value : entries) {
+            if (!(value instanceof Map<?, ?> entry) || !(entry.get(pathKey) instanceof String file)) return false;
+            groups.computeIfAbsent(file, key -> new ArrayList<>()).add((Map<String, Object>) entry);
+        }
+        boolean changed = false;
+        for (var group : groups.entrySet()) {
+            var owners = fileOwners.getOrDefault(group.getKey(), List.of());
+            var members = group.getValue();
+            if (owners.size() != 1 || unitIds.get(owners.getFirst()) != 1
+                    || members.stream().anyMatch(entry -> !(entry.get("owner") instanceof String owner)
+                            || !unitIds.containsKey(owner))
+                    || api && members.stream().map(entry -> Arrays.asList(entry.get("routerExport"), entry.get("basePath")))
+                            .distinct().count() != 1)
+                continue;
+            String owner = owners.getFirst();
+            var moved = members.stream().filter(entry -> !owner.equals(entry.get("owner"))).toList();
+            if (moved.isEmpty()) continue;
+            var labels = moved.stream().map(entry -> entry.get(api ? "id" : "path")).filter(label ->
+                    label instanceof String text && text.matches("[A-Za-z0-9_/:.-]{1,120}")).limit(24).toList();
+            var previous = moved.stream().map(entry -> (String) entry.get("owner"))
+                    .filter(text -> text.matches("[A-Za-z0-9_-]{1,64}")).distinct().toList();
+            moved.forEach(entry -> entry.put("owner", owner));
+            String file = group.getKey().matches("[A-Za-z0-9_./-]{1,240}") ? group.getKey() : "<unsafe>";
+            String target = owner.matches("[A-Za-z0-9_-]{1,64}") ? owner : "<unsafe>";
+            if (api) log.info("planner_api_owner_aligned routerPath={} owner={} ids={} previous={}", file, target, labels, previous);
+            else log.info("planner_route_owner_aligned componentPath={} owner={} paths={} previous={}", file, target, labels, previous);
             changed = true;
         }
         return changed;
