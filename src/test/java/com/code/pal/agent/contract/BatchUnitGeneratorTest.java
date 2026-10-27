@@ -43,6 +43,10 @@ class BatchUnitGeneratorTest {
         var c=ContractFixtures.mern();var dependent=c.units().stream().map(u->new UnitGenerator.Input(c,u,"Build","Approved",Map.of(),"")).toList();assertFalse(generator.eligible(dependent));
         var original=inputs();var first=original.getFirst();var huge=new UnitGenerator.Input(first.contract(),first.unit(),first.request(),first.approvedRequirements(),Map.of("index.html",new UnitGenerator.FileView("absent","x".repeat(40_000))),"");
         assertFalse(generator.eligible(List.of(huge,original.getLast())));
+        // Live E2E 2026-10-28: a pair under the old character estimate exceeded generate()'s byte bound (policy + schema).
+        var accented=new UnitGenerator.Input(first.contract(),first.unit(),first.request(),first.approvedRequirements(),Map.of("index.html",new UnitGenerator.FileView("absent","é".repeat(15_500))),"");
+        assertTrue(new ObjectMapper().writeValueAsString(accented).length()<32_000,"the old character estimate admitted it");
+        assertFalse(generator.eligible(List.of(accented,original.getLast())));
     }
     @Test void batchCheckpointInputsIncludePartnerVersionsAndRejectInconsistentFrozenBodies() {
         var inputs=inputs();var frozen=BatchUnitGenerator.checkpointInputs(inputs);assertEquals(Set.of("index.html","style.css"),frozen.getFirst().snapshot().keySet());

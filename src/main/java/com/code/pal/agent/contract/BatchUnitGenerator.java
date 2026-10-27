@@ -60,7 +60,8 @@ public final class BatchUnitGenerator {
         if (count > 6 || inputs.stream().anyMatch(in -> in.unit().dependsOn().stream().anyMatch(ids::contains)))
             return false;
         try {
-            return data(inputs).length() + SYSTEM.length() <= 32_000;
+            // The same measure generate() enforces, so an oversized pair falls back to single units instead of failing.
+            return requestBytes(inputs, data(inputs)) <= 32_000;
         } catch (IllegalArgumentException invalid) {
             return false;
         }
@@ -177,8 +178,7 @@ public final class BatchUnitGenerator {
                 input.request(), input.approvedRequirements(), snapshot, input.repairFeedback())).toList();
     }
 
-    private List<UnitGenerator.Output> generatePrepared(List<UnitGenerator.Input> inputs, AgentProperties.ModelSelection model,
-            Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, String data, int outputCap, int inputCap) {
+    private static String policy(List<UnitGenerator.Input> inputs) {
         String policy = SYSTEM + ContractImports.policy(inputs.getFirst().contract());
         if (inputs.getFirst().contract().schemaVersion() == 2) {
             policy += SpecAcceptance.policy();
@@ -187,6 +187,17 @@ public final class BatchUnitGenerator {
             policy += "\nStatic HTML/CSS/JS only. Backend compiles Tailwind and injects local rendra.css. "
                     + "Use utility classes; no runtime CDN, remote scripts/fonts, CSS imports or compiler directives.";
         }
+        return policy;
+    }
+
+    /** The bytes the first batch request sends, measured exactly as {@link #generatePrepared} bounds them. */
+    private int requestBytes(List<UnitGenerator.Input> inputs, String data) {
+        return (policy(inputs) + data + schema(inputs).schema()).getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    private List<UnitGenerator.Output> generatePrepared(List<UnitGenerator.Input> inputs, AgentProperties.ModelSelection model,
+            Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, String data, int outputCap, int inputCap) {
+        String policy = policy(inputs);
         var messages = new ArrayList<LlmClient.LlmMessage>(
                 List.of(LlmClient.LlmMessage.system(policy), LlmClient.LlmMessage.user(data)));
         for (int attempt = 0; attempt < 2; attempt++) {
