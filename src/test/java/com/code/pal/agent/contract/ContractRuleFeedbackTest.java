@@ -91,6 +91,39 @@ class ContractRuleFeedbackTest {
                 reject(c, data -> list(data, "api").get(3).put("authenticated", false)), "api itemDELETE DELETE /api/items/:id");
     }
 
+    void endpoint(Map<String, Object> data, String id, String method, String path) {
+        var api = new ArrayList<>(list(data, "api")); var copy = new LinkedHashMap<>(api.get(1));
+        copy.putAll(Map.of("id", id, "method", method, "path", path)); api.add(copy); data.put("api", api);
+    }
+
+    @Test void uncoveredEndpointsAreListedTogetherUnderOneStableRule() {
+        String rule = "api: declared endpoint has no successful acceptance request";
+        var first = reject(ContractFixtures.mern(), data -> endpoint(data, "itemStats", "GET", "/api/items/stats"));
+        // MERN must keep an UPDATE check, so it moves to a declared PATCH and leaves itemPUT uncovered.
+        var second = reject(ContractFixtures.mern(), data -> {
+            var api = new ArrayList<>(list(data, "api")); var patch = new LinkedHashMap<>(api.get(2));
+            patch.putAll(Map.of("id", "itemPATCH", "method", "PATCH")); api.add(patch); data.put("api", api);
+            list((Map<String, Object>) data.get("acceptance"), "api").get(3).put("method", "PATCH");
+        });
+        located(rule, first, "api itemStats GET /api/items/stats", second, "api itemPUT PUT /api/items/:id");
+        assertTrue(ContractPlanner.schemaFeedback(first).contains("; tested GET paths /api/items/:fixture; add one 2xx READ"));
+        var both = ContractPlanner.schemaFeedback(reject(ContractFixtures.mern(), data -> {
+            endpoint(data, "itemStats", "GET", "/api/items/stats"); endpoint(data, "itemTags", "GET", "/api/items/tags"); }));
+        assertTrue(both.contains("api itemStats GET /api/items/stats, api itemTags GET /api/items/tags have no 2xx"), both);
+        // Coordinator auth requests are never offered as the tested paths of a data endpoint.
+        var accounts = reject(ContractFixtures.accounts(), data -> {
+            endpoint(data, "itemSearch", "POST", "/api/items/search"); list(data, "api").getLast().put("authenticated", true); });
+        assertEquals(rule, ContractPlanner.rejectionSignature(accounts));
+        String auth = ContractPlanner.schemaFeedback(accounts);
+        assertTrue(auth.contains("api itemSearch POST /api/items/search") && auth.contains("tested POST paths /api/items;"), auth);
+        assertFalse(auth.contains("/api/auth/"), auth);
+        var many = reject(ContractFixtures.mern(), data -> {
+            for (int i = 0; i < 6; i++) endpoint(data, "itemReportWithLongName" + i, "GET", "/api/items/reports/monthly/summary/" + i); });
+        assertEquals(rule, ContractPlanner.rejectionSignature(many));
+        String more = ContractPlanner.schemaFeedback(many);
+        assertTrue(more.contains("api itemReportWithLongName0 GET") && more.contains(" more have no 2xx"), more);
+    }
+
     @Test void unboundedOrUnsafeDetailFallsBackToTheRuleOnly() {
         assertEquals("api: router ownership mismatch", new ContractRuleException("api: router ownership mismatch", "owner <script>\n").getMessage());
         assertEquals("units: duplicate unit id", new ContractRuleException("units: duplicate unit id", "x".repeat(601)).getMessage());

@@ -276,15 +276,29 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
                 bad("Inconsistent router interface");
             if (endpoint.authenticated() && auth != BuildDecisions.Auth.ACCOUNTS)
                 bad("API auth capability mismatch");
-            if (acceptance.api().stream().noneMatch(step -> step.method().equals(endpoint.method())
-                    && step.status() >= 200 && step.status() < 300 && matchesApiPath(endpoint.path(), step.path()))) {
+            if (!covered(endpoint, acceptance)) {
+                var uncovered = api.stream().filter(e -> !covered(e, acceptance)).toList();
                 String requests = acceptance.api().stream()
-                        .filter(step -> step.method().equals(endpoint.method()) && step.status() >= 200
-                                && step.status() < 300 && step.kind() != BehaviorCriteria.ApiKind.HEALTH)
+                        .filter(step -> step.method().equals(endpoint.method()) && step.status() >= 200 && step.status() < 300
+                                && step.kind() != BehaviorCriteria.ApiKind.HEALTH && !step.kind().name().startsWith("AUTH_"))
                         .map(step -> step.path().replaceAll("\\$\\{[A-Za-z0-9_]+}", ":fixture")).distinct().limit(2)
                         .map(path -> path.substring(0, Math.min(45, path.length()))).collect(Collectors.joining(","));
-                bad("Declared API " + endpoint.method() + " " + endpoint.path()
-                        + " has no successful acceptance request; tested paths " + requests);
+                var listed = new StringBuilder();
+                int shown = 0;
+                for (var e : uncovered) {
+                    String entry = (shown == 0 ? "" : ", ") + "api " + e.id() + " " + e.method() + " " + e.path();
+                    if (shown > 0 && listed.length() + entry.length() > 200)
+                        break;
+                    listed.append(entry);
+                    shown++;
+                }
+                if (shown < uncovered.size())
+                    listed.append(" and ").append(uncovered.size() - shown).append(" more");
+                throw new ContractRuleException("api: declared endpoint has no successful acceptance request", listed
+                        + " have no 2xx acceptance.api request with that method and path"
+                        + (requests.isEmpty() ? "" : "; tested " + endpoint.method() + " paths " + requests)
+                        + "; add one 2xx READ with a value assertion, or a CREATE, UPDATE or DELETE on a captured id, per endpoint;"
+                        + " or compute a summary, search or tag view in the client from the list GET and remove only that endpoint");
             }
         }
         unique("api: duplicate router export", "api routerExport of distinct routerPaths", api.stream()
@@ -415,6 +429,11 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
 
     private static String baseType(String value) {
         return value != null && value.endsWith("[]") ? value.substring(0, value.length() - 2) : value;
+    }
+
+    private static boolean covered(Api endpoint, BehaviorCriteria acceptance) {
+        return acceptance.api().stream().anyMatch(step -> step.method().equals(endpoint.method())
+                && step.status() >= 200 && step.status() < 300 && matchesApiPath(endpoint.path(), step.path()));
     }
 
     static boolean matchesApiPath(String shape, String actual) {

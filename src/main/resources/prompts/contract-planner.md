@@ -52,6 +52,7 @@ Browser kinds: CLICK/FILL/SELECT/ASSERT_TEXT/ASSERT_COUNT/ASSERT_ROUTE/RELOAD; a
 Each browser action and each API test needs a unique ID within its sequence, e.g. ui_fill, ui_add,
 ui_created, ui_reload, ui_persisted and api_health, api_create, api_read, api_update, api_restart, api_delete, api_missing.
 For other stacks unit acceptanceIds reference these exact IDs; MERN check IDs are assigned by the coordinator.
+Each api entry has its own endpoint id, e.g. listTodos, createTodo, getTodo, updateTodo, deleteTodo; the unit id goes only in owner.
 All selectors/values/assertValue are strings, never numbers.
 RELOAD has null selector/value and reloads the real page; assert persisted UI values after it.
 API acceptance fields: id,kind,method,path,body,status,tokenVariable,captureVariable,capturePointer,assertPointer,assertValue.
@@ -63,7 +64,9 @@ JSON pointers use /id or /0/title, never $.id. body is a JSON string; GET bodies
 Cover EVERY declared method/path with a successful API test. Every acceptance.api request except HEALTH and
 /api/auth/* must match a declared api method+path. MERN CRUD always declares the record GET, e.g. GET /api/todos/:id,
 on the list's router/owner; include both READ requests (list assertion /0/title and record assertion /title).
-Do not declare unused extra endpoints, health, or error APIs. DELETE has one successful DELETE test;
+Do not declare unused extra endpoints, health, or error APIs. Compute dashboard summaries, search/filter results and tag lists
+in the client from the list GET; do not declare summary, search or stats endpoints. Keep tags as a STRING_ARRAY field of the record.
+DELETE has one successful DELETE test;
 NOT_FOUND is a later GET of the deleted captured identity, not the successful READ coverage.
 Use one API sequence: health, create/capture recordId, list, read recordId, update/assert edited value,
 restart/read/assert the same value, delete, GET deleted record/assert 404. Adapt fields and paths to the app.
@@ -83,6 +86,7 @@ Coordinator-wired pages use hash links such as #/settings and #/tasks/123; accep
 those actual href values. Logical route checks remain /settings and /tasks/123. Route pages receive
 params: Record<string,string> for named segments such as /tasks/:id. Own App.tsx if custom provider wrappers are needed.
 When the fresh request asks add/edit/delete, browser acceptance MUST exercise every flow:
+Use these exact IDs even if the request says create: ui_add, never ui_create or ui_add_<entity>.
 ui_add CLICK then ui_created ASSERT_TEXT; enter edit mode, FILL edited title, ui_edit CLICK to save,
 then ui_edited ASSERT_TEXT; ui_reload RELOAD then ui_persisted ASSERT_TEXT;
 if completed is requested, ui_complete CLICK on the task checkbox then ui_completed ASSERT_COUNT on checked task checkboxes (value 1);
