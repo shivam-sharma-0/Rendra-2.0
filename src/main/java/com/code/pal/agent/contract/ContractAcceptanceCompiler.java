@@ -21,6 +21,7 @@ final class ContractAcceptanceCompiler {
     private static final Pattern CONTROL_ATTRIBUTE = Pattern.compile(
             "\\[(?:name|data-(?:pref|preference|action|testid))\\s*=\\s*['\"]([^'\"]+)['\"]\\]");
     private static final Pattern HREF = Pattern.compile("\\[href\\s*=\\s*['\"]([^'\"]*)['\"]\\]");
+    private static final Pattern ADD_CLICK = Pattern.compile("ui_(?:create|add)(?:_[a-z0-9]+)*");
     private ContractAcceptanceCompiler() {
     }
 
@@ -67,6 +68,7 @@ final class ContractAcceptanceCompiler {
         changed |= removeExactDuplicates(data);
         changed |= renameDuplicateApiIds(data);
         changed |= resolveUnambiguousUnitIds(data);
+        changed |= alignAddClickId(data);
         changed |= removeCoordinatorOwnedPaths((List<Map<String, Object>>) data.get("units"));
         changed |= mergeUnitsSharingFiles(data);
         // Before the collection insertion and responsibility loop below: both read api.owner.
@@ -282,6 +284,46 @@ final class ContractAcceptanceCompiler {
             unit.put("acceptanceIds", assigned);
         }
         log.info("planner_optional_browser_checks_dropped ids={} before={} after={}", dropped, browser.size(), kept.size());
+        return true;
+    }
+
+    /** A uniquely named create/add click that a FILL prepares and ui_created asserts is the required ui_add; only its id changes. */
+    @SuppressWarnings("unchecked")
+    private static boolean alignAddClickId(Map<String, Object> data) {
+        if (!(data.get("acceptance") instanceof Map<?, ?> acceptance) || !(acceptance.get("browser") instanceof List<?> browser)
+                || !(data.get("units") instanceof List<?> units)) return false;
+        var ids = new HashSet<String>();
+        int candidate = -1, created = -1;
+        for (int i = 0; i < browser.size(); i++) {
+            if (!(browser.get(i) instanceof Map<?, ?> action) || !(action.get("id") instanceof String id)
+                    || !id.matches("[A-Za-z0-9_-]{1,64}") || !ids.add(id)) return false;
+            if (id.equals("ui_created")) created = i;
+            if ("CLICK".equals(action.get("kind")) && ADD_CLICK.matcher(id).matches() && !REQUIRED_UI_IDS.contains(id)) {
+                if (candidate >= 0) return false;
+                candidate = i;
+            }
+        }
+        if (candidate < 0 || created < candidate || ids.contains("ui_add")
+                || !"ASSERT_TEXT".equals(((Map<?, ?>) browser.get(created)).get("kind"))
+                || browser.subList(candidate + 1, created).stream().anyMatch(action ->
+                        Set.of("CLICK", "SELECT", "RELOAD").contains(((Map<?, ?>) action).get("kind")))
+                || browser.subList(0, candidate).stream().noneMatch(action -> "FILL".equals(((Map<?, ?>) action).get("kind"))))
+            return false;
+        for (Object unit : units)
+            if (!(unit instanceof Map<?, ?> owner) || owner.get("acceptanceIds") != null
+                    && (!strings(owner.get("acceptanceIds")) || ((List<?>) owner.get("acceptanceIds")).contains("ui_add")))
+                return false;
+        var action = (Map<String, Object>) browser.get(candidate);
+        String oldId = (String) action.get("id");
+        action.put("id", "ui_add");
+        for (Object unit : units) {
+            var owner = (Map<String, Object>) unit;
+            if (!(owner.get("acceptanceIds") instanceof List<?> assigned) || !assigned.contains(oldId)) continue;
+            var renamed = new ArrayList<>((List<String>) assigned);
+            renamed.replaceAll(id -> id.equals(oldId) ? "ui_add" : id);
+            owner.put("acceptanceIds", renamed);
+        }
+        log.info("planner_browser_add_id_aligned from={} to=ui_add", oldId);
         return true;
     }
 

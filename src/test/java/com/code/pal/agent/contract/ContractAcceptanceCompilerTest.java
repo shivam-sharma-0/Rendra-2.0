@@ -619,6 +619,67 @@ class ContractAcceptanceCompilerTest {
         assertEquals(List.of(),capture(()->assertEquals(unique,ContractAcceptanceCompiler.completeCollections(unique,mapper))));
     }
 
+    @Test void uniqueCreateClickBeforeUiCreatedBecomesUiAddWithoutMovingOrChangingTheStep() {
+        // Batch r2 19 shape: FILL..., ui_create CLICK, ui_created ASSERT_TEXT.
+        Map<String,Object> data=addFlow("ui_create");var before=browser(data);
+        var events=capture(()->{
+            String once=ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper);
+            var expected=new ArrayList<Map<String,Object>>();before.forEach(step->expected.add(new LinkedHashMap<>(step)));expected.get(1).put("id","ui_add");
+            assertEquals(expected,browser(mapper.readValue(once,Map.class)));
+            assertEquals(once,ContractAcceptanceCompiler.completeCollections(once,mapper));
+        });
+        assertEquals(List.of("planner_browser_add_id_aligned from=ui_create to=ui_add"),
+                events.stream().filter(event->event.startsWith("planner_browser_add")).toList());
+        // Batch r1 16 shape: a suffixed add click already assigned to a unit.
+        Map<String,Object> expense=addFlow("ui_add_expense");units(expense).getLast().put("acceptanceIds",List.of("ui_fill_title","ui_add_expense","ui_created"));
+        Map<String,Object> compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(expense),mapper),Map.class);
+        assertEquals("ui_add",browser(compiled).get(1).get("id"));
+        assertEquals(List.of("ui_fill_title","ui_add","ui_created"),((List<?>)units(compiled).getLast().get("acceptanceIds")).subList(0,3));
+        assertFalse(((List<?>)units(compiled).getLast().get("acceptanceIds")).contains("ui_add_expense"));
+    }
+
+    @Test void presentAmbiguousUnpreparedOrUnassertedAddClicksAreNotRenamed() {
+        var cases=new ArrayList<java.util.function.Consumer<Map<String,Object>>>();
+        cases.add(data->browser(data).add(action("ui_add","CLICK","button.secondary",null)));
+        cases.add(data->units(data).getLast().put("acceptanceIds",List.of("ui_add")));
+        cases.add(data->{browser(data).get(1).put("id","ui_add_note");browser(data).add(action("ui_add_tag","CLICK","button[data-action='tag']",null));});
+        cases.add(data->browser(data).get(1).put("kind","ASSERT_EXISTS"));
+        cases.add(data->browser(data).add(2,action("ui_confirm","CLICK","button[data-action='confirm']",null)));
+        cases.add(data->browser(data).add(2,action("ui_pick","SELECT","select[name='tag']","work")));
+        cases.add(data->browser(data).get(2).put("id","ui_shown"));
+        cases.add(data->{browser(data).get(2).put("kind","ASSERT_COUNT");browser(data).get(2).put("value","1");});
+        cases.add(data->browser(data).add(0,browser(data).remove(2)));
+        cases.add(data->browser(data).removeFirst());
+        cases.add(data->browser(data).get(1).put("id","ui_created_note"));
+        cases.add(data->data.put("stack","VITE"));
+        for(var mutation:cases){
+            Map<String,Object> data=addFlow("ui_create");mutation.accept(data);
+            var ids=browser(data).stream().map(step->step.get("id")).toList();
+            var events=capture(()->{
+                Map<String,Object> compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
+                assertEquals(ids,browser(compiled).stream().map(step->step.get("id")).toList());
+            });
+            assertTrue(events.stream().noneMatch(event->event.startsWith("planner_browser_add")),ids.toString());
+        }
+    }
+
+    Map<String,Object> addFlow(String addId){
+        Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(ContractFixtures.mern()),Map.class);
+        ((Map<String,Object>)data.get("acceptance")).put("browser",new ArrayList<>(List.of(
+                action("ui_fill_title","FILL","input[name='title']","Fixture post"),action(addId,"CLICK","button[data-action='create']",null),
+                action("ui_created","ASSERT_TEXT","[data-post]","Fixture post"),action("ui_enter_edit","CLICK","button[data-action='edit']",null),
+                action("ui_edit_fill_title","FILL","input[name='editTitle']","Edited post"),action("ui_edit","CLICK","button[data-action='save']",null),
+                action("ui_edited","ASSERT_TEXT","[data-post]","Edited post"),action("ui_reload","RELOAD",null,null),
+                action("ui_persisted","ASSERT_TEXT","[data-post]","Edited post"),action("ui_delete","CLICK","button[data-action='delete']",null),
+                action("ui_deleted","ASSERT_COUNT","[data-post]","0"))));
+        units(data).getLast().put("acceptanceIds",List.of());
+        return data;
+    }
+    static Map<String,Object> action(String id,String kind,String selector,String value){
+        var action=new LinkedHashMap<String,Object>();action.put("id",id);action.put("kind",kind);action.put("selector",selector);action.put("value",value);return action;
+    }
+    private static List<Map<String,Object>> browser(Map<String,Object> data){return (List<Map<String,Object>>)((Map<String,Object>)data.get("acceptance")).get("browser");}
+
     private static List<String> capture(Runnable action){
         var logger=(ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(ContractAcceptanceCompiler.class);
         var appender=new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();

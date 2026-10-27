@@ -95,6 +95,18 @@ class ContractPlannerTest {
         var c=ContractFixtures.mern();var fresh=new ContractPlanner.Input(c.id(),"Add, edit and delete tasks with completed","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");var calls=new AtomicInteger();
         var failure=assertThrows(IllegalArgumentException.class,()->planner.plan(fresh,model,request->{calls.incrementAndGet();return reply(mapper.writeValueAsString(c));}));assertEquals(2,calls.get());assertTrue(failure.getMessage().contains("Requested UI CRUD"));
     }
+    @Test void aUniqueCreateClickSatisfiesRequestedUiCrudButAMissingOneKeepsTheFixedRejection(){
+        // Batch r2 19 shape: ui_create CLICK between the create FILL and ui_created.
+        var c=ContractFixtures.mern();var input=new ContractPlanner.Input(c.id(),"Add, edit and delete posts","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");
+        var flows=new ContractAcceptanceCompilerTest();Map<String,Object> flow=flows.addFlow("ui_create");var steps=(List<Map<String,Object>>)((Map<?,?>)flow.get("acceptance")).get("browser");
+        ((List<Map<String,Object>>)flow.get("units")).getLast().put("acceptanceIds",steps.stream().map(step->step.get("id")).toList());String created=mapper.writeValueAsString(flow);
+        String signature="contract: Requested UI CRUD needs ui_add, ui_created, ui_edit, ui_edited, ui_delete, ui_deleted, ui_reload, ui_persisted and requested completion checks";
+        assertEquals(signature,assertThrows(ContractPlanner.Rejected.class,()->planner.validate(input,reply(created),false)).signature());
+        var browser=planner.validate(input,reply(created),true).contract().acceptance().browser();
+        assertEquals(List.of("ui_fill_title","ui_add","ui_created"),browser.subList(0,3).stream().map(action->action.id()).toList());
+        Map<String,Object> missing=flows.addFlow("ui_create");((List<?>)((Map<?,?>)missing.get("acceptance")).get("browser")).remove(1);
+        assertEquals(signature,assertThrows(ContractPlanner.Rejected.class,()->planner.validate(input,reply(mapper.writeValueAsString(missing)),true)).signature());
+    }
     LlmClient.LlmResult reply(String body){return new LlmClient.LlmResult(body,null,List.of(),new LlmClient.Usage(20,30),"stop");}
     @Test void oneValidPlannerCallAndOneBoundedCorrectionHaveDistinctMeteringPurposes() {
         var count=new AtomicInteger();var purposes=new ArrayList<CallPurpose>();
