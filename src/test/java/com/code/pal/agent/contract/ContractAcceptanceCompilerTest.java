@@ -738,6 +738,55 @@ class ContractAcceptanceCompilerTest {
         }
     }
 
+    @Test void preparedEditSubmitBeforeUiEditedBecomesUiEditWhileTheOpeningClickKeepsItsId() {
+        // Batch r3 18 shape: ui_create_post_submit, ui_created, ui_edit_post CLICK, FILLs, ui_edit_post_submit CLICK, ui_edited.
+        Map<String,Object> data=editFlow("ui_edit_post","ui_edit_post_submit");browser(data).get(1).put("id","ui_create_post_submit");
+        browser(data).add(5,action("ui_edit_post_content","FILL","textarea[name='editContent']","Edited body"));
+        units(data).getLast().put("acceptanceIds",List.of("ui_edit_post","ui_edit_post_submit","ui_edited"));var before=browser(data);
+        var events=capture(()->{
+            String once=ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper);
+            Map<String,Object> compiled=mapper.readValue(once,Map.class);
+            var expected=new ArrayList<Map<String,Object>>();before.forEach(step->expected.add(new LinkedHashMap<>(step)));
+            expected.get(1).put("id","ui_add");expected.get(6).put("id","ui_edit");
+            assertEquals(expected,browser(compiled));
+            assertEquals(List.of("ui_edit_post","ui_edit","ui_edited"),((List<?>)units(compiled).getLast().get("acceptanceIds")).subList(0,3));
+            assertEquals(once,ContractAcceptanceCompiler.completeCollections(once,mapper));
+        });
+        assertEquals(List.of("planner_browser_add_id_aligned from=ui_create_post_submit to=ui_add",
+                "planner_browser_edit_id_aligned from=ui_edit_post_submit to=ui_edit"),
+                events.stream().filter(event->event.startsWith("planner_browser_")).toList());
+    }
+
+    @Test void presentAmbiguousUnpreparedOrUnassertedEditClicksAreNotRenamed() {
+        var cases=new ArrayList<java.util.function.Consumer<Map<String,Object>>>();
+        cases.add(data->browser(data).add(action("ui_edit","CLICK","button.secondary",null)));
+        cases.add(data->units(data).getLast().put("acceptanceIds",List.of("ui_edit")));
+        cases.add(data->browser(data).add(5,action("ui_edit_confirm","CLICK","button[data-action='confirm']",null)));
+        cases.add(data->browser(data).remove(4));
+        cases.add(data->browser(data).remove(5));
+        cases.add(data->browser(data).get(5).put("id","ui_save"));
+        cases.add(data->browser(data).add(6,action("ui_confirm","CLICK","button[data-action='confirm']",null)));
+        cases.add(data->browser(data).add(6,action("ui_pick","SELECT","select[name='tag']","work")));
+        cases.add(data->{browser(data).get(6).put("kind","ASSERT_COUNT");browser(data).get(6).put("value","1");});
+        cases.add(data->browser(data).get(6).put("id","ui_edited_post"));
+        cases.add(data->browser(data).get(2).put("id","ui_shown"));
+        cases.add(data->browser(data).add(0,browser(data).remove(6)));
+        cases.add(data->data.put("stack","VITE"));
+        for(var mutation:cases){
+            Map<String,Object> data=editFlow("ui_edit_post","ui_edit_post_submit");mutation.accept(data);
+            var ids=browser(data).stream().map(step->step.get("id")).toList();
+            var events=capture(()->{
+                Map<String,Object> compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
+                assertEquals(ids,browser(compiled).stream().map(step->step.get("id")).toList());
+            });
+            assertTrue(events.stream().noneMatch(event->event.startsWith("planner_browser_edit")),ids.toString());
+        }
+    }
+
+    Map<String,Object> editFlow(String openId,String submitId){
+        Map<String,Object> data=addFlow("ui_add");browser(data).get(3).put("id",openId);browser(data).get(5).put("id",submitId);return data;
+    }
+
     Map<String,Object> addFlow(String addId){
         Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(ContractFixtures.mern()),Map.class);
         ((Map<String,Object>)data.get("acceptance")).put("browser",new ArrayList<>(List.of(

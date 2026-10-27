@@ -107,6 +107,18 @@ class ContractPlannerTest {
         Map<String,Object> missing=flows.addFlow("ui_create");((List<?>)((Map<?,?>)missing.get("acceptance")).get("browser")).remove(1);
         assertEquals(signature,assertThrows(ContractPlanner.Rejected.class,()->planner.validate(input,reply(mapper.writeValueAsString(missing)),true)).signature());
     }
+    @Test void aPreparedEditSubmitSatisfiesRequestedUiCrudButAnUnpreparedOneKeepsTheFixedRejection(){
+        // Batch r3 18 shape: ui_edit_post opens the edit, FILL, ui_edit_post_submit CLICK, ui_edited.
+        var c=ContractFixtures.mern();var input=new ContractPlanner.Input(c.id(),"Add, edit and delete posts","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");
+        var flows=new ContractAcceptanceCompilerTest();Map<String,Object> flow=flows.editFlow("ui_edit_post","ui_edit_post_submit");var steps=(List<Map<String,Object>>)((Map<?,?>)flow.get("acceptance")).get("browser");
+        ((List<Map<String,Object>>)flow.get("units")).getLast().put("acceptanceIds",steps.stream().map(step->step.get("id")).toList());String edited=mapper.writeValueAsString(flow);
+        String signature="contract: Requested UI CRUD needs ui_add, ui_created, ui_edit, ui_edited, ui_delete, ui_deleted, ui_reload, ui_persisted and requested completion checks";
+        assertEquals(signature,assertThrows(ContractPlanner.Rejected.class,()->planner.validate(input,reply(edited),false)).signature());
+        var browser=planner.validate(input,reply(edited),true).contract().acceptance().browser();
+        assertEquals(List.of("ui_edit_post","ui_edit_fill_title","ui_edit","ui_edited"),browser.subList(3,7).stream().map(action->action.id()).toList());
+        Map<String,Object> unprepared=flows.editFlow("ui_edit_post","ui_edit_post_submit");((List<?>)((Map<?,?>)unprepared.get("acceptance")).get("browser")).remove(4);
+        assertEquals(signature,assertThrows(ContractPlanner.Rejected.class,()->planner.validate(input,reply(mapper.writeValueAsString(unprepared)),true)).signature());
+    }
     LlmClient.LlmResult reply(String body){return new LlmClient.LlmResult(body,null,List.of(),new LlmClient.Usage(20,30),"stop");}
     @Test void oneValidPlannerCallAndOneBoundedCorrectionHaveDistinctMeteringPurposes() {
         var count=new AtomicInteger();var purposes=new ArrayList<CallPurpose>();
