@@ -194,11 +194,11 @@ END $codex$;
             '--app.agent.providers.nvidia.base-url=https://integrate.api.nvidia.com/v1',
             '--app.agent.providers.openrouter.base-url=https://openrouter.ai/api',
             '--app.agent.providers.groq.base-url=https://api.groq.com/openai/v1',
-            '--app.agent.models.free-chat=mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b',
+            '--app.agent.models.free-chat=mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-ultra-550b-a55b',
             ('--app.agent.models.free-plan=' + ($planningRouteOrder -join ',')),
             ('--app.agent.requirements.models=' + ($requirementsRouteOrder -join ',')),
             '--app.agent.planning.max-route-attempts=3',
-            '--app.agent.models.free-build=mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b,groq:openai/gpt-oss-120b',
+            '--app.agent.models.free-build=mistral:codestral-latest,nvidia:nvidia/nemotron-3-ultra-550b-a55b,groq:openai/gpt-oss-120b',
             '--app.agent.models.vision=nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia:meta/llama-3.2-11b-vision-instruct')
     }
     if($Scenario -eq 'reject'){$appArgs+=@('--app.agent.models.free-build=mistral:codestral-latest','--app.agent.models.free-chat=mistral:codestral-latest','--app.agent.providers.mistral.api-keys[0]=invalid-e2e-rejection-test','--app.agent.providers.mistral.api-key=invalid-e2e-rejection-test')}

@@ -271,12 +271,12 @@ app:
       # Priority order: a run sticks to the first available model (one line of reasoning, one code
       # style) and uses the next ones only while it fails; other calls (requirements, intent) rotate.
       # Mistral deprecated open-mistral-nemo on 2026-05-22; keep the current small Ministral model first.
-      build: "${AGENT_MODEL_BUILD:mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b}"
-      chat: "${AGENT_MODEL_CHAT:mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b}"
-      plan: "${AGENT_MODEL_PLAN:mistral:codestral-latest,openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,nvidia:nvidia/nemotron-3-super-120b-a12b}"
-      free-build: "mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b,groq:openai/gpt-oss-120b"
-      free-chat: "mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b"
-      free-plan: "${AGENT_MODEL_FREE_PLAN:mistral:codestral-latest,openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,nvidia:nvidia/nemotron-3-super-120b-a12b}"
+      build: "${AGENT_MODEL_BUILD:mistral:codestral-latest,nvidia:nvidia/nemotron-3-ultra-550b-a55b}"
+      chat: "${AGENT_MODEL_CHAT:mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-ultra-550b-a55b}"
+      plan: "${AGENT_MODEL_PLAN:mistral:codestral-latest,openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,nvidia:nvidia/nemotron-3-ultra-550b-a55b}"
+      free-build: "mistral:codestral-latest,nvidia:nvidia/nemotron-3-ultra-550b-a55b,groq:openai/gpt-oss-120b"
+      free-chat: "mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-ultra-550b-a55b"
+      free-plan: "${AGENT_MODEL_FREE_PLAN:mistral:codestral-latest,openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,nvidia:nvidia/nemotron-3-ultra-550b-a55b}"
       # Reads attached images (screenshots, designs) into a text brief for the coding model; in order.
       vision: "${AGENT_MODEL_VISION:nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia:meta/llama-3.2-11b-vision-instruct}"
     # Per-project code lives here (one dir per project).
