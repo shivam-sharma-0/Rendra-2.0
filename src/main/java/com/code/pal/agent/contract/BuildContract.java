@@ -9,6 +9,7 @@ import com.code.pal.project.brief.ProjectBriefFile;
 import java.nio.file.Path;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /** Model-proposed data with nullable v2 metadata for historical v1 JSON. Validation never grants tools or raises budgets. */
 public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisions.Storage storage,
@@ -64,7 +65,7 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             fields = bounded(fields, 24);
             if (fields.isEmpty())
                 bad("Empty type");
-            unique(fields.stream().map(Field::name).toList());
+            unique("fields: duplicate field name", "type " + name + " fields", fields.stream().map(Field::name).toList());
         }
     }
 
@@ -123,9 +124,9 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             ownedPaths.forEach(BuildContract::canonical);
             imports.forEach(BuildContract::canonical);
             dependsOn.forEach(BuildContract::identifier);
-            unique(ownedPaths);
-            unique(dependsOn);
-            unique(acceptanceIds);
+            unique("ownedPaths: duplicate path", "unit " + id + " ownedPaths", ownedPaths);
+            unique("dependsOn: duplicate unit", "unit " + id + " dependsOn", dependsOn);
+            unique("acceptanceIds: duplicate criterion", "unit " + id + " acceptanceIds", acceptanceIds);
         }
     }
 
@@ -191,12 +192,12 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         if (storage == BuildDecisions.Storage.SUPABASE
                 && (stack != Stack.VITE || !envNames.equals(Set.of("VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY"))))
             bad("Connected Supabase requires the Vite connector hook");
-        unique(units.stream().map(Unit::id).toList());
-        unique(types.stream().map(DataType::name).toList());
-        unique(models.stream().map(DataType::name).toList());
-        unique(routes.stream().map(Route::path).toList());
-        unique(api.stream().map(Api::id).toList());
-        unique(api.stream().map(a -> a.method() + " " + a.path()).toList());
+        unique("units: duplicate unit id", "units", units.stream().map(Unit::id).toList());
+        unique("types: duplicate type name", "types", types.stream().map(DataType::name).toList());
+        unique("models: duplicate model name", "models", models.stream().map(DataType::name).toList());
+        unique("routes: duplicate route path", "routes", routes.stream().map(Route::path).toList());
+        unique("api: duplicate api id", "api", api.stream().map(Api::id).toList());
+        unique("api: duplicate method and path", "api", api.stream().map(a -> a.method() + " " + a.path()).toList());
         var ownership = new TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER);
         var unitIds = new HashSet<>(units.stream().map(Unit::id).toList());
         String clientRoot = clientRoot(stack, id), serverRoot = serverRoot(id);
@@ -205,9 +206,14 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
                 if (path.toLowerCase(Locale.ROOT).startsWith(clientRoot.toLowerCase(Locale.ROOT))
                         || path.toLowerCase(Locale.ROOT).startsWith(serverRoot.toLowerCase(Locale.ROOT))
                         || reserved(path, stack)
-                        || (schemaVersion == 2 && (path.equalsIgnoreCase(StaticAssets.MARKER) || path.equalsIgnoreCase("rendra.css")))
-                        || ownership.putIfAbsent(path, unit.id()) != null)
-                    bad("Overlapping/coordinator file ownership");
+                        || (schemaVersion == 2 && (path.equalsIgnoreCase(StaticAssets.MARKER) || path.equalsIgnoreCase("rendra.css"))))
+                    throw new ContractRuleException("ownedPaths: coordinator-owned path", "unit " + unit.id() + " lists " + path
+                            + "; rendra roots, package/tsconfig/vite config, server/src/index.ts and markers are coordinator-owned, remove it");
+                String prior = ownership.putIfAbsent(path, unit.id());
+                if (prior != null)
+                    throw new ContractRuleException("ownedPaths: duplicate file owner", path + " is listed by "
+                            + (prior.equals(unit.id()) ? "unit " + prior + " twice" : "units " + prior + " and " + unit.id())
+                            + "; keep each file in exactly one unit ownedPaths");
             }
         for (String path : ownership.keySet())
             for (String other : ownership.keySet())
@@ -227,7 +233,10 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         var assigned = new HashSet<String>();
         units.forEach(u -> assigned.addAll(u.acceptanceIds()));
         if (!assigned.containsAll(ids))
-            bad("Acceptance criterion has no responsible unit");
+            throw new ContractRuleException("acceptanceIds: criterion has no responsible unit", Stream.concat(
+                    acceptance.browser().stream().filter(a -> !assigned.contains(a.id())).map(a -> "browser " + a.id() + " " + a.kind()),
+                    acceptance.api().stream().filter(a -> !assigned.contains(a.id())).map(a -> "api " + a.id() + " " + a.method() + " " + a.path()))
+                    .limit(3).collect(Collectors.joining(", ")) + " in no unit acceptanceIds; add each id to the unit that implements it");
         for (var route : routes)
             if (!route.owner().equals(ownership.get(route.componentPath())))
                 bad("Route ownership mismatch");
@@ -238,11 +247,16 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             if (!endpoint.routerPath().startsWith("server/src/") || !endpoint.routerPath().endsWith(".ts"))
                 bad("MERN router must be a server TypeScript module");
             if (auth == BuildDecisions.Auth.ACCOUNTS && !endpoint.authenticated())
-                bad("Account data APIs require the coordinator auth guard");
+                throw new ContractRuleException("api: account data API requires auth guard", "api " + endpoint.id() + " "
+                        + endpoint.method() + " " + endpoint.path() + " has authenticated false; set authenticated true for every ACCOUNTS data API");
             if (auth == BuildDecisions.Auth.ACCOUNTS && endpoint.path().startsWith("/api/auth/"))
                 bad("Authentication routes are coordinator-owned");
-            if (!endpoint.owner().equals(ownership.get(endpoint.routerPath())))
-                bad("API router ownership mismatch");
+            String routerOwner = ownership.get(endpoint.routerPath());
+            if (!endpoint.owner().equals(routerOwner))
+                throw new ContractRuleException("api: router ownership mismatch", "api " + endpoint.id() + " owner " + endpoint.owner()
+                        + " but routerPath " + endpoint.routerPath() + (routerOwner == null
+                                ? " is in no unit ownedPaths; add it to one unit and make that unit the owner"
+                                : " is owned by unit " + routerOwner + "; set owner " + routerOwner));
             if (!typeNames.contains(baseType(endpoint.responseType())))
                 bad("Unknown API response type " + endpoint.responseType() + "; declare its base name in types");
             if (endpoint.requestType() != null && !typeNames.contains(baseType(endpoint.requestType())))
@@ -264,10 +278,10 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
                         + " has no successful acceptance request; tested paths " + requests);
             }
         }
-        unique(api.stream().collect(Collectors.toMap(Api::routerPath, Api::routerExport, (a, b) -> a)).values().stream()
-                .toList());
-        unique(api.stream().collect(Collectors.toMap(Api::routerPath, Api::basePath, (a, b) -> a)).values().stream()
-                .toList());
+        unique("api: duplicate router export", "api routerExport of distinct routerPaths", api.stream()
+                .collect(Collectors.toMap(Api::routerPath, Api::routerExport, (a, b) -> a)).values().stream().toList());
+        unique("api: duplicate router basePath", "api basePath of distinct routerPaths", api.stream()
+                .collect(Collectors.toMap(Api::routerPath, Api::basePath, (a, b) -> a)).values().stream().toList());
         if (auth == BuildDecisions.Auth.ACCOUNTS && stack == Stack.MERN) {
             boolean missing = acceptance.api().stream().anyMatch(a -> a.kind() == BehaviorCriteria.ApiKind.AUTH_REJECT
                     && a.method().equals("GET") && a.tokenVariable() == null);
@@ -287,7 +301,7 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
                     BehaviorCriteria.ApiKind.PERSISTENCE).contains(step.kind())
                     && (step.assertPointer() == null || step.assertValue() == null))
                 bad("Data behavior requires value assertions");
-        unique(assets.stream().map(Asset::destination).toList());
+        unique("assets: duplicate destination", "assets", assets.stream().map(Asset::destination).toList());
         for (var asset : assets)
             if (!asset.owner().equals(ownership.get(asset.destination())))
                 bad("Asset destination ownership mismatch");
@@ -408,9 +422,11 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         return List.copyOf(values);
     }
 
-    private static void unique(List<String> values) {
-        if (new HashSet<>(values).size() != values.size())
-            bad("Duplicate contract identifiers");
+    private static void unique(String rule, String scope, List<String> values) {
+        var seen = new HashSet<String>();
+        for (String value : values)
+            if (!seen.add(value))
+                throw new ContractRuleException(rule, "duplicate " + value + " in " + scope);
     }
 
     private static void text(String value, int max) {

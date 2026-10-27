@@ -91,6 +91,23 @@ class PlannerRejectionsTest {
         assertEquals(List.of("codestral-latest", "codestral-latest"), routes);
     }
 
+    @Test void theSameLocatedRuleOnADifferentValueIsStillNoProgress() {
+        var routes = new ArrayList<String>(); var corrections = new ArrayList<String>();
+        var result = new ContractPlanner(mapper, properties).plan(input, properties.planningRoutes().getFirst(), request -> {
+            routes.add(request.model());
+            if (routes.size() > 1) corrections.add(request.messages().getLast().content());
+            if (routes.size() == 3) return reply(mapper.writeValueAsString(contract));
+            Map<String, Object> data = mapper.readValue(mapper.writeValueAsString(contract), Map.class);
+            var ui = ((List<Map<String, Object>>) data.get("units")).getLast();
+            ui.put("ownedPaths", List.of("client/src/App.tsx", contract.clientRoot() + (routes.size() == 1 ? "api.ts" : "types.ts")));
+            return reply(mapper.writeValueAsString(data));
+        });
+        assertEquals(contract, result);
+        assertEquals(List.of("codestral-latest", "codestral-latest", "alternate"), routes);
+        assertTrue(corrections.get(0).contains("ownedPaths: coordinator-owned path; unit ui lists " + contract.clientRoot() + "api.ts"), corrections.get(0));
+        assertTrue(corrections.get(1).contains("unit ui lists " + contract.clientRoot() + "types.ts"), corrections.get(1));
+    }
+
     @Test void acceptanceRuleSignatureIgnoresTheRejectedValueButKeepsTheLocation() {
         var first = new AcceptanceStepException("browser", 1, "route", BrowserKind.ASSERT_ROUTE, "value", null, "local route", null);
         var second = new AcceptanceStepException("browser", 1, "route", BrowserKind.ASSERT_ROUTE, "value", "invalid", "local route", null);
