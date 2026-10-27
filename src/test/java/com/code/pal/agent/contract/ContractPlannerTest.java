@@ -71,6 +71,26 @@ class ContractPlannerTest {
         var fresh=new ContractPlanner.Input(c.id(),"Build Items","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");var calls=new AtomicInteger();
         assertEquals(c,planner.plan(fresh,model,request->{if(calls.incrementAndGet()==1)return reply(mapper.writeValueAsString(bad));assertTrue(request.messages().getLast().content().contains("root component"));return reply(mapper.writeValueAsString(c));}));assertEquals(2,calls.get());
     }
+    @Test void plannerAndCorrectionPromptsDefineUnitsAsFileOwners(){
+        var c=ContractFixtures.mern();Map<String,Object> bad=mapper.readValue(mapper.writeValueAsString(c),Map.class);
+        ((List<Map<String,Object>>)bad.get("units")).getLast().put("ownedPaths",List.of("client/src/Items.tsx"));bad.put("routes",List.of());
+        var fresh=new ContractPlanner.Input(c.id(),"Build Items","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");var calls=new AtomicInteger();
+        assertEquals(c,planner.plan(fresh,model,request->{
+            String system=request.messages().getFirst().content().replaceAll("\\s+"," ");
+            for(String rule:List.of("A unit is a code-writing owner of files, not a page or feature","Unit ids are unique",
+                    "dependsOn lists only other unit ids, never itself, a feature id or an api id","Each file is in exactly one unit's ownedPaths",
+                    "A route's owner lists its componentPath","owner of every api entry with that routerPath","3-6 cohesive units for a typical app, at most 12",
+                    "MERN CRUD always declares the record GET","Every acceptance.api request except HEALTH and /api/auth/* must match a declared api",
+                    "For ACCOUNTS every api entry is authenticated:true","one server unit per router"))
+                assertTrue(system.contains(rule),rule);
+            assertFalse(system.contains("3-4 cohesive units"));
+            if(calls.incrementAndGet()==1)return reply(mapper.writeValueAsString(bad));
+            String correction=request.messages().getLast().content().replaceAll("\\s+"," ");
+            for(String rule:List.of("not a page or feature","each file is in exactly one unit's ownedPaths","owner of every api entry with that routerPath",
+                    "dependsOn lists only other unit ids","matches a declared api method+path","MERN CRUD declares the record GET","every api entry is authenticated:true"))
+                assertTrue(correction.contains(rule),rule);
+            return reply(mapper.writeValueAsString(c));}));assertEquals(2,calls.get());
+    }
     @Test void freshRequestedCrudCannotBeCertifiedByAHeadingOnly(){
         var c=ContractFixtures.mern();var fresh=new ContractPlanner.Input(c.id(),"Add, edit and delete tasks with completed","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");var calls=new AtomicInteger();
         var failure=assertThrows(IllegalArgumentException.class,()->planner.plan(fresh,model,request->{calls.incrementAndGet();return reply(mapper.writeValueAsString(c));}));assertEquals(2,calls.get());assertTrue(failure.getMessage().contains("Requested UI CRUD"));

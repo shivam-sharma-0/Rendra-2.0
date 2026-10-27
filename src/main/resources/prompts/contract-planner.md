@@ -8,7 +8,9 @@ api[{id,method,path,requestType(nullable),responseType,owner,routerPath,routerEx
 assets[{source,destination,fingerprint,owner}],envNames[],
 units[{id,objective,ownedPaths[],imports[],dependsOn[],acceptanceIds[]}],
 acceptance{schema:1,browser:[{id,kind,selector,value}],api:[],authRequired,crudRequired}.
-Every unit includes all six fields. For a small single-entity app use 3-4 cohesive units, not one per control.
+Every unit includes all six fields. A unit is a code-writing owner of files, not a page or feature. Unit ids are
+unique; approved page and feature ids may be equal, so never add one unit per feature or control.
+Use 3-6 cohesive units for a typical app, at most 12.
 Keep every requested page and backend workflow; share helpers within their existing owner instead of adding units.
 Limits: routes at most 20; types at most 16; models at most 12; api at most 24; assets at most 16.
 acceptance.browser and acceptance.api each contain at most 24 actions total. Combine preparatory navigation and
@@ -18,11 +20,12 @@ account, CRUD, search/filter and reload-persistence flows. Do not add full tests
 secondary preferences or every route when they duplicate required evidence. Keep one concise route assertion where it
 proves navigation; do not restate the same state with multiple selectors.
 objective is one plain-text sentence under 120 characters, not source code or JSX.
-ownedPaths/imports are arrays of canonical file-path strings; dependsOn/acceptanceIds are arrays of ID strings.
+ownedPaths/imports are arrays of canonical file-path strings; acceptanceIds are arrays of check ID strings.
+dependsOn lists only other unit ids, never itself, a feature id or an api id; use [] when none.
 Return minified JSON without indentation. Target 11000-12000 characters for a simple record app.
 Do not repeat requirements, acceptance IDs, shared imports or implementation prose in objectives.
 Reuse request/response types when their shapes match; do not invent DTOs or extra API endpoints for optional UI controls.
-For MERN set unit acceptanceIds to []; the coordinator assigns every browser/API check to its existing owner.
+For MERN set unit acceptanceIds to []; the coordinator assigns checks to units, never route/api owners.
 {{freshMernPolicy}}
 Field kind: STRING/NUMBER/BOOLEAN/JSON/STRING_ARRAY/NUMBER_ARRAY/JSON_ARRAY. Type references are names or name[].
 API requestType/responseType must reference a declared types name, or the built-ins unknown/ApiError/Credentials/AuthSession.
@@ -32,9 +35,11 @@ For a DELETE 204 use responseType unknown; for bodyless GET/DELETE use requestTy
 A coherent CRUD contract declares Todo{id:STRING,title:STRING,completed:BOOLEAN} and TodoInput{title:STRING,completed:BOOLEAN},
 plus a Mongo Todo model{title:STRING,completed:BOOLEAN}. GET /api/todos returns Todo[], POST returns Todo,
 GET/PATCH /api/todos/:id return Todo, DELETE /api/todos/:id returns unknown. Reuse one router/owner/basePath for all.
-Use at most 12 focused units; exclusive canonical exact owned files, no traversal/secrets/config/package files.
+Each file is in exactly one unit's ownedPaths; canonical exact paths, no traversal/secrets/config/package files.
 Theme colors are hex; radius/spacing 0-32px; font system/serif/mono. One coherent theme.
-Dependencies form a DAG. Imports from another owner need a dependency. Routes/API router files belong to their owner.
+Dependencies form a DAG. Imports from another owner need a dependency. A route's owner lists its componentPath.
+Each API router file has one server unit that owns it and is the owner of every api entry with that routerPath,
+never the calling page. If two pages share a component, one unit owns it and the other lists that unit in dependsOn.
 Shared coordinator files are under src/rendra/<id>/ (MERN client/src/rendra/<id>/ and server/src/rendra/<id>/;
 Use exact availableCoordinatorPaths from input for shared imports, including the UUID. Imports may be empty:
 the coordinator automatically supplies these interfaces. Never invent a missing existing import or omit its UUID.
@@ -46,7 +51,7 @@ include it in acceptance.api as HEALTH, not in the application api array or a un
 Browser kinds: CLICK/FILL/SELECT/ASSERT_TEXT/ASSERT_COUNT/ASSERT_ROUTE/RELOAD; at least one actual assertion.
 Each browser action and each API test needs a unique ID within its sequence, e.g. ui_fill, ui_add,
 ui_created, ui_reload, ui_persisted and api_health, api_create, api_read, api_update, api_restart, api_delete, api_missing.
-For other stacks unit acceptanceIds reference these exact IDs; MERN ownership is assigned by the coordinator.
+For other stacks unit acceptanceIds reference these exact IDs; MERN check IDs are assigned by the coordinator.
 All selectors/values/assertValue are strings, never numbers.
 RELOAD has null selector/value and reloads the real page; assert persisted UI values after it.
 API acceptance fields: id,kind,method,path,body,status,tokenVariable,captureVariable,capturePointer,assertPointer,assertValue.
@@ -55,8 +60,9 @@ API tests start with HEALTH GET /api/health (2xx). MERN requires data models and
 Acceptance API paths are actual requests, never router templates: capture a created record into recordId
 with capturePointer /id, then READ/UPDATE/DELETE/PERSISTENCE use /api/items/${recordId}, never /api/items/:id.
 JSON pointers use /id or /0/title, never $.id. body is a JSON string; GET bodies are null.
-Cover EVERY declared method/path with a successful API test. If you declare both GET /api/todos and
-GET /api/todos/:id, include both READ requests (list assertion /0/title and record assertion /title).
+Cover EVERY declared method/path with a successful API test. Every acceptance.api request except HEALTH and
+/api/auth/* must match a declared api method+path. MERN CRUD always declares the record GET, e.g. GET /api/todos/:id,
+on the list's router/owner; include both READ requests (list assertion /0/title and record assertion /title).
 Do not declare unused extra endpoints, health, or error APIs. DELETE has one successful DELETE test;
 NOT_FOUND is a later GET of the deleted captured identity, not the successful READ coverage.
 Use one API sequence: health, create/capture recordId, list, read recordId, update/assert edited value,
@@ -64,6 +70,7 @@ restart/read/assert the same value, delete, GET deleted record/assert 404. Adapt
 For MERN ACCOUNTS, auth setup is platform-provided: fresh fixture signup/login, token capture, missing/invalid-token
 and wrong-password denials are inserted deterministically. Do not write those setup steps or declare /api/auth/* in api/units.
 These coordinator-owned endpoints are POST /api/auth/signup and /api/auth/login; sign-out clears the client session.
+For ACCOUNTS every api entry is authenticated:true; public data endpoints are not supported.
 Set protected CRUD tokenVariable to null; the platform binds it to its captured session. Preserve every CRUD/restart assertion.
 Browser checks start with a fresh authenticated platform session unless explicitly testing the auth forms. Use the declared
 product selectors for CRUD/search/filter/reload and do not spend browser actions or static credentials on auth setup.
