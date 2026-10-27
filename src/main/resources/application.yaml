@@ -160,7 +160,7 @@ app:
 
   # Agent (LLM coding agent) 
   # LLM providers are OpenAI-compatible. Mistral (three keys, rotated) is the main model pool, NVIDIA
-  # the fallback; Groq is configured but not used (no model list names it).
+  # the fallback; Groq gpt-oss-120b is the last free-build route, reached when an alternate repair route is unreachable.
   # api-key is a SECRET â†’ env-only, no default. All models below must support tool/function calling.
   agent:
     structured-contracts: ${AGENT_STRUCTURED_CONTRACTS:false}
@@ -274,7 +274,7 @@ app:
       build: "${AGENT_MODEL_BUILD:mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b}"
       chat: "${AGENT_MODEL_CHAT:mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b}"
       plan: "${AGENT_MODEL_PLAN:mistral:codestral-latest,openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,nvidia:nvidia/nemotron-3-super-120b-a12b}"
-      free-build: "mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b"
+      free-build: "mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b,groq:openai/gpt-oss-120b"
       free-chat: "mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b"
       free-plan: "${AGENT_MODEL_FREE_PLAN:mistral:codestral-latest,openrouter:nvidia/nemotron-3-ultra-550b-a55b:free,nvidia:nvidia/nemotron-3-super-120b-a12b}"
       # Reads attached images (screenshots, designs) into a text brief for the coding model; in order.

@@ -103,7 +103,8 @@ or alter commits. Compare identical prompts, fixture recipes and FREE routes at 
 
 Only synthetic fixture prompts, synthetic conversation history, project summaries, seeded/generated source
 and validation/repair context, and platform system/mode prompts plus tool schemas reach the providers:
-`https://api.mistral.ai/v1` and `https://integrate.api.nvidia.com/v1`. API keys authenticate provider requests;
+`https://api.mistral.ai/v1` and `https://integrate.api.nvidia.com/v1`, plus `https://openrouter.ai/api/v1` for planning
+and, since 2026-10-27, `https://api.groq.com/openai/v1` as the last free-build repair alternate. API keys authenticate provider requests;
 they must not be included in prompt text or reports. Copied dev records are cleared before any worker starts.
 Real workspaces, the DB dump/backup, `.env`, secret files and private JWT keys are not model input.
 JWT keys are used locally by the fixture backend for authentication. The benchmark uploads no images;

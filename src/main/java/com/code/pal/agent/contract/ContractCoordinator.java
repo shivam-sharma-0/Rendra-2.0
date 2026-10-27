@@ -459,7 +459,8 @@ public final class ContractCoordinator {
     }
 
     boolean fixRelativeImports(AgentContext ctx, BuildContract contract, List<BuildContract.Unit> units, ValidationReport report) {
-        if (report.introducedDiagnostics().stream().noneMatch(RelativeImports::missingModule)) return false;
+        if (report.introducedDiagnostics().stream().noneMatch(diagnostic -> RelativeImports.missingModule(diagnostic)
+                || MissingImports.missingName(diagnostic) != null)) return false;
         var output = importFixes(ctx, contract, units, report.introducedDiagnostics());
         if (output.isEmpty()) return false;
         if (report.changeSetRevision() != changes.view(ctx).revision())
@@ -476,12 +477,15 @@ public final class ContractCoordinator {
         output.forEach(delta -> log.info("relative_import_fixed runId={} file={} reason=unresolved_before_validation", ctx.runId(), delta.path()));
     }
 
-    /** Diagnosed modules first, then every other unresolved relative import of the same owned files. */
+    /** Diagnosed modules first, then every other unresolved relative import of the same owned files, then forgotten
+     * React hook imports and, for diagnosed missing names, contract type imports. */
     private List<UnitGenerator.Delta> importFixes(AgentContext ctx, BuildContract contract, List<BuildContract.Unit> units,
             List<ProjectDiagnostic> diagnostics) {
         var existing = RepairProjectContext.existing(files, ctx);
         var coordinator = existing.stream().filter(path -> path.startsWith(contract.clientRoot())
                 || path.startsWith(contract.serverRoot())).collect(Collectors.toSet());
+        var typeNames = new HashSet<>(BuildContract.BUILT_IN_TYPES);
+        contract.types().forEach(type -> typeNames.add(type.name()));
         var output = new ArrayList<UnitGenerator.Delta>();
         for (var unit : units) {
             var readable = new HashSet<>(ContractImports.availablePaths(contract, unit));
@@ -495,8 +499,11 @@ public final class ContractCoordinator {
                 String version = files.version(ctx.projectId(), ctx.root(), path);
                 String source = bounded(ctx, path);
                 if (source == null) continue;
-                String fixed = RelativeImports.fixAll(path, diagnostics == null ? source
-                        : RelativeImports.fix(path, source, readable, diagnostics), existing, coordinator);
+                String fixed = MissingImports.hooks(path, RelativeImports.fixAll(path, diagnostics == null ? source
+                        : RelativeImports.fix(path, source, readable, diagnostics), existing, coordinator));
+                String typesModule = (path.startsWith("server/") ? contract.serverRoot() : contract.clientRoot()) + "types.ts";
+                if (diagnostics != null && existing.contains(typesModule))
+                    fixed = MissingImports.types(path, fixed, diagnostics, typeNames, typesModule);
                 if (!fixed.equals(source)) output.add(new UnitGenerator.Delta(path, version, fixed));
             }
         }

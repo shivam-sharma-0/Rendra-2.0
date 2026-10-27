@@ -40,5 +40,11 @@
     "outputTokens": 12288,
     "images": false,
     "evidence": "Application caps within published 1000000 context / 65536 completion capacity; text only; contract planning cap reviewed 2026-10-18: https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free"
+  },
+  "groq:openai/gpt-oss-120b": {
+    "inputTokens": 65536,
+    "outputTokens": 8192,
+    "images": false,
+    "evidence": "Application caps within the Groq models API values read 2026-10-27 (context 131072, max completion 65536); text only; free-build alternate route"
   }
 }

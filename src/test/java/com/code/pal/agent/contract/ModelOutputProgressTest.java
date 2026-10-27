@@ -127,6 +127,26 @@ class ModelOutputProgressTest {
         }
     }
 
+    @Test void anUnreachableAlternatePassesTheSingleAlternateTurnToTheNextConfiguredRoute() {
+        // Live E2E 2026-10-27: the only alternate's key returned 403, so a repairable run stopped on no-progress.
+        var routes = new ArrayList<String>();
+        var fixed = call(CallPurpose.UNIT, request(repair("TS2304")), routed -> {
+            routes.add(routed.model());
+            return switch (routed.model()) {
+                case "first" -> result(files("export const count=1"));
+                case "second" -> throw new LlmHttpException(403, "Authorization failed");
+                default -> result(files("export const count=2"));
+            };
+        });
+        assertEquals(files("export const count=2"), fixed.content());
+        assertEquals(List.of("first", "second", "third"), routes);
+        var none = assertThrows(LlmException.class, () -> call(CallPurpose.UNIT, request(repair("other")), routed -> {
+            if (routed.model().equals("first")) return result(files("export const count=1"));
+            throw new LlmHttpException(503, "unavailable");
+        }));
+        assertTrue(none.getMessage().contains("alternate route unavailable"), none.getMessage());
+    }
+
     @Test void lineNumberChangesDoNotAllowAnotherCallToTheStagnantRoute() {
         var routes = new ArrayList<String>();
         for (int line : List.of(1, 90)) {

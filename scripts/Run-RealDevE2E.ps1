@@ -139,7 +139,7 @@ END $codex$;
         Wsl-Check @('psql','-h','127.0.0.1','-p',"$pgPort",'-U','codepal_codex_it','-d',$taskId,'-w','-v','ON_ERROR_STOP=1','-c',$sanitizeCopy)
         $evidence.copiedApplicationRowsRemovedBeforeBoot = $true
         $evidence.modelPayload = 'Synthetic test prompts/history, fixture/generated source and platform prompts/tool schemas only; Phase Two also uses one synthetic pixel'
-        $evidence.modelDestinations = @('https://openrouter.ai/api/v1', 'https://api.mistral.ai/v1', 'https://integrate.api.nvidia.com/v1')
+        $evidence.modelDestinations = @('https://openrouter.ai/api/v1', 'https://api.mistral.ai/v1', 'https://integrate.api.nvidia.com/v1', 'https://api.groq.com/openai/v1')
     }
     # Never execute copied active jobs or retain their live queue/outbox ownership.
     Wsl-Check @('psql','-h','127.0.0.1','-p',"$pgPort",'-U','codepal_codex_it','-d',$taskId,'-w','-c',"update agent_runs set status='FAILED' where status in ('RUNNING','QUEUED','COMMITTING');")
@@ -193,11 +193,12 @@ END $codex$;
         $appArgs += @('--app.agent.providers.mistral.base-url=https://api.mistral.ai/v1',
             '--app.agent.providers.nvidia.base-url=https://integrate.api.nvidia.com/v1',
             '--app.agent.providers.openrouter.base-url=https://openrouter.ai/api',
+            '--app.agent.providers.groq.base-url=https://api.groq.com/openai/v1',
             '--app.agent.models.free-chat=mistral:ministral-8b-latest,mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b',
             ('--app.agent.models.free-plan=' + ($planningRouteOrder -join ',')),
             ('--app.agent.requirements.models=' + ($requirementsRouteOrder -join ',')),
             '--app.agent.planning.max-route-attempts=3',
-            '--app.agent.models.free-build=mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b',
+            '--app.agent.models.free-build=mistral:codestral-latest,nvidia:nvidia/nemotron-3-super-120b-a12b,groq:openai/gpt-oss-120b',
             '--app.agent.models.vision=nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia:meta/llama-3.2-11b-vision-instruct')
     }
     if($Scenario -eq 'reject'){$appArgs+=@('--app.agent.models.free-build=mistral:codestral-latest','--app.agent.models.free-chat=mistral:codestral-latest','--app.agent.providers.mistral.api-keys[0]=invalid-e2e-rejection-test','--app.agent.providers.mistral.api-key=invalid-e2e-rejection-test')}

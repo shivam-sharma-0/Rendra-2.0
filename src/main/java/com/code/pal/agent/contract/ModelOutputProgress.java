@@ -63,10 +63,20 @@ public final class ModelOutputProgress {
             var configured = planning ? properties.freePlanningRoutes().stream()
                     .limit(Math.clamp(properties.getPlanning().getMaxRouteAttempts(), 1, 3)).toList() : properties.freeStructuredRoutes();
             if (planning && !properties.getPlanning().isCorrectionFallback()) configured = List.of();
-            state.alternate = configured.stream().filter(candidate -> !candidate.equals(route))
-                    .filter(properties::available).findFirst().orElse(null);
-            if (state.alternate == null) throw stopped();
-            var next = alternate(request, state.alternate, physical, started);
+            var candidates = configured.stream().filter(candidate -> !candidate.equals(route))
+                    .filter(properties::available).toList();
+            if (candidates.isEmpty()) throw stopped();
+            // Still one alternate answer: an unreachable route (expired key, outage) only passes the turn to the next.
+            LlmClient.LlmResult next = null;
+            for (var candidate : candidates)
+                try {
+                    next = alternate(request, candidate, physical, started);
+                    state.alternate = candidate;
+                    break;
+                } catch (AlternateUnavailable unavailable) {
+                    properties.markModelUnavailable(candidate);
+                    if (candidate.equals(candidates.getLast())) throw unavailable;
+                }
             String nextFingerprint = fingerprint(next);
             if (nextFingerprint != null && (nextFingerprint.equals(fingerprint) || nextFingerprint.equals(state.previous)
                     || repair && noSourceChange(data, next))) {
@@ -90,8 +100,12 @@ public final class ModelOutputProgress {
         // A distinct physical call needs its own ledger identity, even inside an existing logical route attempt.
         try (var identity = LlmLogicalCall.bind(UUID.randomUUID())) { return physical.apply(routed); }
         catch (LlmHttpException | RetryableLlmException | LlmStreamException unavailable) {
-            throw new LlmException("No-progress alternate route unavailable; wastedCalls=" + wasted.get());
+            throw new AlternateUnavailable(wasted.get());
         }
+    }
+
+    private static final class AlternateUnavailable extends LlmException {
+        AlternateUnavailable(int wasted) { super("No-progress alternate route unavailable; wastedCalls=" + wasted); }
     }
 
     private LlmException stopped() { return new LlmException("Model made no progress for the same failure; one alternate exhausted or unavailable; wastedCalls=" + wasted.get()); }
