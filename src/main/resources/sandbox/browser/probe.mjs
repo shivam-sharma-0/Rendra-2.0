@@ -146,6 +146,9 @@ const requestUrls = new Map();
 const requestTypes = new Map();
 // Browsers ask for a favicon on their own; a site without one is not broken.
 const ignored = (url) => /\/favicon\.ico(\?|$)/.test(url ?? "");
+// The first load runs before the backend-authored account exists, so the page's own API request is rightly refused.
+let accountReady = !acceptanceData.authSetup;
+const preAccountRefusal = (status, url) => !accountReady && status === 401 && (url ?? "").startsWith(siteUrl + "api/");
 listeners.push((message) => {
   if (message.sessionId !== sessionId) return;
   const p = message.params ?? {};
@@ -171,7 +174,8 @@ listeners.push((message) => {
       requestTypes.set(p.requestId, p.type ?? '');
       break;
     case "Network.responseReceived":
-      if (p.response?.status >= 400 && sameOrigin(p.response.url) && !ignored(p.response.url)) {
+      if (p.response?.status >= 400 && sameOrigin(p.response.url) && !ignored(p.response.url)
+          && !preAccountRefusal(p.response.status, p.response.url)) {
         add("asset", `${p.response.status} ${p.response.url}`, null);
       }
       break;
@@ -230,6 +234,7 @@ if (loaded && acceptanceData.authSetup) {
     loaded = false;
   } else {
     loaded = false;
+    accountReady = true;
     await send('Page.navigate', {url:siteUrl}, sessionId);
     for (let waited=0; !loaded && waited<10000; waited+=100) await new Promise(resolve=>setTimeout(resolve,100));
     await new Promise(resolve=>setTimeout(resolve,settleMs));
