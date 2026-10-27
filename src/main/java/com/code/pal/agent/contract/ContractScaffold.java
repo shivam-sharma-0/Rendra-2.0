@@ -96,7 +96,8 @@ public final class ContractScaffold {
             String directory = app.substring(0, app.lastIndexOf('/') + 1);
             out.put(app, "import " + json(relative(directory, root + "theme.css", true)) + "\nimport { routes } from "
                     + json(relative(directory, root + "routes.ts", true))
-                    + "\n" + resource(c.schemaVersion() == 2 ? "contract/hash-app.tsx" : "contract/path-app.tsx"));
+                    // Every planner and unit prompt asks for #/path links; a pathname router ignores them.
+                    + "\n" + resource("contract/hash-app.tsx"));
         }
         if (existing.apply(app) == null && !out.containsKey(app))
             out.put(app, "export default function PendingApp() { return null }\n");
@@ -148,8 +149,8 @@ public final class ContractScaffold {
     }
 
     public static String revision() {
-        return ContractStore.hash("contract-scaffold-2026-10-16.3/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
-                + "/" + resource("contract/hash-app.tsx") + resource("contract/path-app.tsx"));
+        return ContractStore.hash("contract-scaffold-2026-10-27.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
+                + "/" + resource("contract/hash-app.tsx"));
     }
 
     private String type(BuildContract.DataType t) {

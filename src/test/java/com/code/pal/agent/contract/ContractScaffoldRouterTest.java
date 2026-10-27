@@ -37,13 +37,14 @@ class ContractScaffoldRouterTest {
     }
 
     @Test
-    void legacyBootstrapKeepsItsPathRouter() {
+    void aFreshV1BootstrapAlsoUsesTheHashRouterItsPromptsLinkTo() {
+        // Live E2E 2026-10-27: a v1 MERN app got BrowserRouter, so the units' #/path edit links never left Home.
         var v2 = routed();
-        var legacy = new BuildContract(1, v2.id(), v2.stack(), v2.storage(), v2.auth(), v2.limits(), v2.theme(),
+        var v1 = new BuildContract(1, v2.id(), v2.stack(), v2.storage(), v2.auth(), v2.limits(), v2.theme(),
                 v2.routes(), v2.types(), v2.models(), v2.api(), v2.assets(), v2.envNames(), v2.units(), v2.acceptance());
-        String app = new ContractScaffold(new ObjectMapper()).render(legacy, "Fixture", path -> null).get("src/App.tsx");
-        assertTrue(app.contains("<BrowserRouter><Routes>"), "Legacy contracts keep pathname routing");
-        assertFalse(app.contains("hashchange"));
+        String app = new ContractScaffold(new ObjectMapper()).render(v1, "Fixture", path -> null).get("src/App.tsx");
+        assertTrue(app.contains("<HashRouter><Routes>"));
+        assertFalse(app.contains("BrowserRouter"));
     }
 
     @Test

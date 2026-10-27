@@ -807,14 +807,16 @@ class ContractAcceptanceCompilerTest {
 
     @Test void theOnlyEditRoutesOwnerAlsoReceivesTheEditFillsAndSubmitButTheRootOwnerKeepsThem(){
         // Live E2E 2026-10-27: every browser check went to the "/" owner, so the edit page never rendered editTitle/save.
-        for(String[] editors:List.of(new String[]{"editor"},new String[]{"editor","other"},new String[]{"ui"})){
+        for(String[] editors:List.of(new String[]{"editor"},new String[]{"editor","/edit/:id"},new String[]{"editor","other"},new String[]{"ui"})){
             Map<String,Object> data=editFlow("ui_enter_edit","ui_edit");
             var routes=(List<Map<String,Object>>)data.get("routes");
-            for(int i=0;i<editors.length;i++){
+            boolean prefix=editors.length==2&&editors[1].startsWith("/");
+            for(int i=0;i<(prefix?1:editors.length);i++){
                 String owner=editors[i],file="client/src/pages/Edit"+i+".tsx";
                 if(!owner.equals("ui"))units(data).add(new LinkedHashMap<>(Map.of("id",owner,"objective","Edit","ownedPaths",List.of(file),"imports",List.of(),"dependsOn",List.of(),"acceptanceIds",List.of())));
-                routes.add(Map.of("path","/items/:id"+(i==0?"":"/v"+i)+"/edit","componentPath",owner.equals("ui")?"client/src/App.tsx":file,"owner",owner));
+                routes.add(Map.of("path",prefix?editors[1]:"/items/:id"+(i==0?"":"/v"+i)+"/edit","componentPath",owner.equals("ui")?"client/src/App.tsx":file,"owner",owner));
             }
+            if(prefix)editors=new String[]{"editor"};
             Map<String,Object> compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
             var byId=new HashMap<Object,List<?>>();units(compiled).forEach(unit->byId.put(unit.get("id"),(List<?>)unit.get("acceptanceIds")));
             assertTrue(byId.get("ui").containsAll(List.of("ui_edit_fill_title","ui_edit","ui_enter_edit")));

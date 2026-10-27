@@ -956,14 +956,15 @@ final class ContractAcceptanceCompiler {
         return changed;
     }
 
-    /** Browser checks go to the "/" owner, but when the only edit route belongs to another unit, the edit is typed and
+    /** Browser checks go to the "/" owner, but when the only edit route (an "edit" path segment, /edit/:id or
+     * /todos/:id/edit) belongs to another unit, the edit is typed and
      * submitted on that unit's page: it also receives those FILL/SELECT steps and ui_edit, so it renders their selectors
      * and is repaired when they fail. Nothing is removed from the "/" owner. */
     @SuppressWarnings("unchecked")
     private static boolean shareEditChecks(List<Map<String, Object>> units, String frontend,
             List<BehaviorCriteria.BrowserAction> browser, List<?> routes, ObjectMapper mapper) {
         var editors = routes.stream().map(value -> mapper.convertValue(value, BuildContract.Route.class))
-                .filter(route -> route.path().endsWith("/edit")).map(BuildContract.Route::owner).distinct().toList();
+                .filter(route -> route.path().matches(".*/edit(?:/.*)?")).map(BuildContract.Route::owner).distinct().toList();
         if (frontend == null || editors.size() != 1 || editors.getFirst().equals(frontend)
                 || !editors.getFirst().matches("[A-Za-z0-9_-]{1,64}"))
             return false;
