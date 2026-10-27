@@ -576,6 +576,57 @@ class ContractAcceptanceCompilerTest {
         assertThrows(RuntimeException.class,()->ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(missing),mapper));
     }
 
+    @Test void duplicateApiIdsAreRenamedFromEachEndpointsOwnMethodAndPath() {
+        // Batch r2 10 shape: every api entry repeats the owning unit id.
+        var original=ContractFixtures.accounts();Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        api(data).forEach(api->api.put("id","data"));
+        String proposal=mapper.writeValueAsString(data);
+        var direct=assertThrows(RuntimeException.class,()->mapper.readValue(proposal,BuildContract.class));
+        assertEquals("api: duplicate api id",ContractPlanner.rejectionSignature(direct));
+        var events=capture(()->{
+            String once=ContractAcceptanceCompiler.completeCollections(proposal,mapper);
+            var compiled=mapper.readValue(once,BuildContract.class);
+            assertEquals(List.of("post_items","get_items_id","put_items_id","delete_items_id"),compiled.api().stream().map(BuildContract.Api::id).toList());
+            assertEquals(original.api().stream().map(api->new BuildContract.Api("x",api.method(),api.path(),api.requestType(),api.responseType(),api.owner(),api.routerPath(),api.routerExport(),api.basePath(),api.authenticated())).toList(),
+                    compiled.api().stream().map(api->new BuildContract.Api("x",api.method(),api.path(),api.requestType(),api.responseType(),api.owner(),api.routerPath(),api.routerExport(),api.basePath(),api.authenticated())).toList());
+            assertEquals(original.units(),compiled.units());assertEquals(original.acceptance(),compiled.acceptance());
+            assertEquals(once,ContractAcceptanceCompiler.completeCollections(once,mapper));
+        });
+        assertEquals(List.of("planner_duplicate_api_ids_renamed id=data ids=[post_items, get_items_id, put_items_id, delete_items_id] count=4"),events);
+    }
+
+    @Test void sameMethodAndPathCollidingOrUniqueApiIdsAreNotRenamed() {
+        var original=ContractFixtures.accounts();
+        var cases=new ArrayList<java.util.function.Consumer<Map<String,Object>>>();
+        cases.add(data->{var copy=new LinkedHashMap<String,Object>(api(data).get(1));copy.put("responseType","Item[]");api(data).add(copy);
+                api(data).forEach(api->api.put("id","data"));});
+        cases.add(data->{api(data).forEach(api->api.put("id","data"));var list=new LinkedHashMap<String,Object>(api(data).get(1));
+                list.putAll(Map.of("id","get_items_id","path","/api/items/:id/history"));api(data).add(list);});
+        cases.add(data->{var history=new LinkedHashMap<String,Object>(api(data).get(1));history.put("path","/api/items/:id/"+"a".repeat(40));
+                api(data).add(history);api(data).forEach(api->api.put("id","data"));});
+        for(var mutation:cases){
+            Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);mutation.accept(data);
+            var before=api(data).stream().map(api->api.get("id")).toList();
+            var events=capture(()->{
+                String result=ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper);
+                Map<String,Object> compiled=mapper.readValue(result,Map.class);assertEquals(before,api(compiled).stream().map(api->api.get("id")).toList());
+                var failure=assertThrows(RuntimeException.class,()->mapper.readValue(result,BuildContract.class));
+                assertEquals("api: duplicate api id",ContractPlanner.rejectionSignature(failure));
+            });
+            assertTrue(events.stream().noneMatch(event->event.startsWith("planner_duplicate_api_ids_renamed")));
+        }
+        String unique=mapper.writeValueAsString(original);
+        assertEquals(List.of(),capture(()->assertEquals(unique,ContractAcceptanceCompiler.completeCollections(unique,mapper))));
+    }
+
+    private static List<String> capture(Runnable action){
+        var logger=(ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(ContractAcceptanceCompiler.class);
+        var appender=new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        var level=logger.getLevel();appender.start();logger.addAppender(appender);logger.setLevel(ch.qos.logback.classic.Level.INFO);
+        try{action.run();}finally{logger.detachAppender(appender);logger.setLevel(level);}
+        return appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList();
+    }
+
     private Map<String,Object> missingRecordRead(BuildContract original){
         Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
         api(data).removeIf(api->"GET".equals(api.get("method")));

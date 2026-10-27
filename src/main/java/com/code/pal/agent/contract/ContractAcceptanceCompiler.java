@@ -65,6 +65,7 @@ final class ContractAcceptanceCompiler {
         if (!"MERN".equals(data.get("stack")))
             return changed ? mapper.writeValueAsString(data) : content;
         changed |= removeExactDuplicates(data);
+        changed |= renameDuplicateApiIds(data);
         changed |= resolveUnambiguousUnitIds(data);
         changed |= removeCoordinatorOwnedPaths((List<Map<String, Object>>) data.get("units"));
         changed |= mergeUnitsSharingFiles(data);
@@ -312,6 +313,44 @@ final class ContractAcceptanceCompiler {
             changed = true;
         }
         return changed;
+    }
+
+    /** api ids are referenced by nothing in the contract; a repeated id becomes each endpoint's own method_path name only
+     * when every name is valid and distinct. */
+    @SuppressWarnings("unchecked")
+    private static boolean renameDuplicateApiIds(Map<String, Object> data) {
+        if (!(data.get("api") instanceof List<?> entries)) return false;
+        var groups = new LinkedHashMap<String, List<Map<String, Object>>>();
+        for (Object value : entries) {
+            if (!(value instanceof Map<?, ?> entry) || !(entry.get("id") instanceof String id)
+                    || !(entry.get("method") instanceof String) || !(entry.get("path") instanceof String)) return false;
+            groups.computeIfAbsent(id, key -> new ArrayList<>()).add((Map<String, Object>) entry);
+        }
+        var taken = new HashSet<String>();
+        groups.entrySet().removeIf(group -> group.getValue().size() < 2 && taken.add(group.getKey()));
+        if (groups.isEmpty()) return false;
+        var names = new ArrayList<List<String>>();
+        for (var members : groups.values()) {
+            var renamed = new ArrayList<String>();
+            for (var entry : members) {
+                String path = (String) entry.get("path");
+                String rest = path.startsWith("/api/") ? path.substring("/api/".length()).replace(":", "")
+                        .replaceAll("[^A-Za-z0-9]+", "_").replaceAll("^_+|_+$", "") : "";
+                String name = ((String) entry.get("method")).toLowerCase(Locale.ROOT) + "_" + rest;
+                if (rest.isEmpty() || !valid(() -> BuildContract.identifier(name)) || !taken.add(name)) return false;
+                renamed.add(name);
+            }
+            names.add(renamed);
+        }
+        int index = 0;
+        for (var group : groups.entrySet()) {
+            var renamed = names.get(index++);
+            for (int i = 0; i < renamed.size(); i++) group.getValue().get(i).put("id", renamed.get(i));
+            String old = group.getKey();
+            log.info("planner_duplicate_api_ids_renamed id={} ids={} count={}",
+                    old.matches("[A-Za-z0-9_-]{1,64}") ? old : "<unsafe>", renamed, renamed.size());
+        }
+        return true;
     }
 
     /** Renumber only when every reference to a duplicate unit can be resolved from an exact owned path. */
