@@ -494,18 +494,26 @@ public final class ContractCoordinator {
             existing.stream().filter(path -> path.startsWith(contract.clientRoot()) || path.startsWith(contract.serverRoot()))
                     .forEach(readable::add);
             readable.retainAll(existing);
+            var originals = new LinkedHashMap<String, String>();
+            var versions = new HashMap<String, String>();
+            var fixes = new LinkedHashMap<String, String>();
             for (String path : unit.ownedPaths()) {
                 if (!existing.contains(path) || !path.matches(".+\\.[cm]?[jt]sx?")) continue;
-                String version = files.version(ctx.projectId(), ctx.root(), path);
                 String source = bounded(ctx, path);
                 if (source == null) continue;
+                versions.put(path, files.version(ctx.projectId(), ctx.root(), path));
+                originals.put(path, source);
                 String fixed = MissingImports.hooks(path, RelativeImports.fixAll(path, diagnostics == null ? source
                         : RelativeImports.fix(path, source, readable, diagnostics), existing, coordinator));
                 String typesModule = (path.startsWith("server/") ? contract.serverRoot() : contract.clientRoot()) + "types.ts";
                 if (diagnostics != null && existing.contains(typesModule))
                     fixed = MissingImports.types(path, fixed, diagnostics, typeNames, typesModule);
-                if (!fixed.equals(source)) output.add(new UnitGenerator.Delta(path, version, fixed));
+                fixes.put(path, fixed);
             }
+            var assigned = contract.acceptance().browser().stream().filter(action -> unit.acceptanceIds().contains(action.id())).toList();
+            AcceptanceAttributes.nameFields(assigned, fixes).forEach((path, fixed) -> {
+                if (!fixed.equals(originals.get(path))) output.add(new UnitGenerator.Delta(path, versions.get(path), fixed));
+            });
         }
         return output;
     }
