@@ -8,7 +8,8 @@ import java.util.*;
 import java.util.regex.Pattern;
 
 /** Completes bounded MERN acceptance ownership and removes unit claims on coordinator-owned files.
- * It adds no endpoint, permission, implementation or acceptance check beyond the existing CRUD fixture. */
+ * It adds no permission, implementation or acceptance check beyond the existing CRUD fixture, and no endpoint except
+ * the record GET that the contract's own 2xx read checks already request. */
 @lombok.extern.slf4j.Slf4j
 final class ContractAcceptanceCompiler {
     private static final Set<String> REQUIRED_UI_IDS = Set.of("ui_add", "ui_created", "ui_edit", "ui_edited",
@@ -77,6 +78,7 @@ final class ContractAcceptanceCompiler {
         var criteria = mapper.convertValue(data.get("acceptance"), BehaviorCriteria.class);
         if (!criteria.crudRequired())
             return changed ? mapper.writeValueAsString(data) : content;
+        changed |= declareRecordReads(data, criteria.api(), units, mapper);
         var checks = new ArrayList<>(criteria.api());
         var ids = new HashSet<String>();
         checks.forEach(step -> ids.add(step.id()));
@@ -140,8 +142,18 @@ final class ContractAcceptanceCompiler {
                             && BuildContract.matchesApiPath(api.path(), check.path()))
                     .map(BuildContract.Api::owner).findFirst().orElse(null);
             if (owner == null && check.kind().name().startsWith("AUTH_")
-                    || owner == null && check.kind() == BehaviorCriteria.ApiKind.HEALTH)
-                owner = declared.isEmpty() ? null : declared.getFirst().owner();
+                    || owner == null && check.kind() == BehaviorCriteria.ApiKind.HEALTH) {
+                // The first api whose owner is a unit; a non-unit first owner is a defect the validator reports.
+                owner = declared.stream().map(BuildContract.Api::owner)
+                        .filter(id -> units.stream().anyMatch(unit -> id.equals(unit.get("id")))).findFirst().orElse(null);
+                if (owner != null && !owner.equals(declared.getFirst().owner()) && assign(units, owner, check.id())) {
+                    log.info("planner_platform_check_owner_fallback id={} owner={} skipped={}",
+                            check.id().matches("[A-Za-z0-9_-]{1,64}") ? check.id() : "<unsafe>",
+                            owner.matches("[A-Za-z0-9_-]{1,64}") ? owner : "<unsafe>", declared.getFirst().owner());
+                    changed = true;
+                    continue;
+                }
+            }
             changed |= assign(units, owner, check.id());
         }
         if (!changed)
@@ -586,6 +598,60 @@ final class ContractAcceptanceCompiler {
             changed = true;
         }
         return changed;
+    }
+
+    /** A 2xx asserted READ/PERSISTENCE of /api/x/${id} with no declared GET gets GET /api/x/:id only when its
+     * PATCH/PUT/DELETE siblings agree on one unit owner, router, guard and declared record type. A NOT_FOUND alone
+     * never declares one: it would pass against an unimplemented route. */
+    private static boolean declareRecordReads(Map<String, Object> data, List<BehaviorCriteria.ApiStep> checks,
+            List<Map<String, Object>> units, ObjectMapper mapper) {
+        if (!(data.get("api") instanceof List<?> entries) || !(data.get("types") instanceof List<?> types)) return false;
+        var declared = new ArrayList<BuildContract.Api>(entries.stream()
+                .map(value -> mapper.convertValue(value, BuildContract.Api.class)).toList());
+        var typeNames = types.stream().map(type -> type instanceof Map<?, ?> value ? value.get("name") : null).toList();
+        var api = new ArrayList<Object>(entries);
+        var shapes = new HashSet<String>();
+        for (var check : checks) {
+            if (check.kind() != BehaviorCriteria.ApiKind.READ && check.kind() != BehaviorCriteria.ApiKind.PERSISTENCE
+                    || !check.method().equals("GET") || check.status() < 200 || check.status() >= 300
+                    || check.assertPointer() == null || check.assertValue() == null
+                    || !check.path().matches("/api/[A-Za-z0-9_/-]{1,160}/\\$\\{[A-Za-z][A-Za-z0-9_]*}")
+                    || declared.stream().anyMatch(endpoint -> endpoint.method().equals("GET")
+                            && BuildContract.matchesApiPath(endpoint.path(), check.path())))
+                continue;
+            var siblings = declared.stream().filter(endpoint -> Set.of("PATCH", "PUT", "DELETE").contains(endpoint.method())
+                    && BuildContract.matchesApiPath(endpoint.path(), check.path())).toList();
+            if (siblings.isEmpty() || !shapes.add(siblings.getFirst().path())) continue;
+            var sibling = siblings.getFirst();
+            String shape = sibling.path(), list = shape.substring(0, shape.lastIndexOf('/'));
+            var records = siblings.stream().filter(endpoint -> !endpoint.method().equals("DELETE"))
+                    .map(BuildContract.Api::responseType).distinct().toList();
+            String id = records.size() == 1 ? "get" + records.getFirst() : "";
+            if (!shape.matches("/api/[A-Za-z0-9_/-]{1,160}/:[A-Za-z][A-Za-z0-9_]*") || records.size() != 1
+                    || records.getFirst().endsWith("[]") || !typeNames.contains(records.getFirst())
+                    || siblings.stream().anyMatch(endpoint -> !endpoint.path().equals(shape)
+                            || !endpoint.owner().equals(sibling.owner()) || !endpoint.authenticated()
+                            || !endpoint.routerPath().equals(sibling.routerPath())
+                            || !endpoint.routerExport().equals(sibling.routerExport())
+                            || !Objects.equals(endpoint.basePath(), sibling.basePath()))
+                    || units.stream().noneMatch(unit -> sibling.owner().equals(unit.get("id")))
+                    || declared.stream().anyMatch(endpoint -> endpoint.method().equals("GET") && endpoint.path().equals(list)
+                            && !endpoint.responseType().equals(records.getFirst() + "[]"))
+                    || !valid(() -> BuildContract.identifier(id))
+                    || declared.stream().anyMatch(endpoint -> endpoint.id().equals(id)) || api.size() >= 24)
+                continue;
+            var read = new BuildContract.Api(id, "GET", shape, null, records.getFirst(), sibling.owner(),
+                    sibling.routerPath(), sibling.routerExport(), sibling.basePath(), true);
+            declared.add(read);
+            api.add(mapper.convertValue(read, Map.class));
+            var reads = checks.stream().filter(step -> step.method().equals("GET") && BuildContract.matchesApiPath(shape, step.path()))
+                    .map(BehaviorCriteria.ApiStep::id).filter(text -> text.matches("[A-Za-z0-9_-]{1,64}")).limit(8).toList();
+            log.info("planner_record_read_declared id={} path={} owner={} responseType={} checks={}", id, shape,
+                    sibling.owner(), records.getFirst(), reads);
+        }
+        if (api.size() == entries.size()) return false;
+        data.put("api", api);
+        return true;
     }
 
     @SuppressWarnings("unchecked")

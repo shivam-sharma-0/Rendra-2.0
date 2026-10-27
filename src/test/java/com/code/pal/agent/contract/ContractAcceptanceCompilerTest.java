@@ -482,6 +482,76 @@ class ContractAcceptanceCompilerTest {
         data.put("routes",routes);
         return data;
     }
+
+    @Test void missingRecordReadIsDeclaredFromItsUnambiguousSiblingsAndStaysIdempotent() {
+        var original=ContractFixtures.accounts();
+        var expected=new BuildContract.Api("getItem","GET","/api/items/:id",null,"Item","data","server/src/items.ts","itemsRouter","/api/items",true);
+        String once=ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(missingRecordRead(original)),mapper);
+        var compiled=mapper.readValue(once,BuildContract.class);
+        assertEquals(expected,compiled.api().getLast());
+        assertEquals(original.api().size(),compiled.api().size());
+        assertEquals(original.acceptance(),compiled.acceptance());
+        assertTrue(compiled.units().getFirst().acceptanceIds().containsAll(List.of("read","restart","missing")));
+        assertEquals(once,ContractAcceptanceCompiler.completeCollections(once,mapper));
+
+        // Batch 20 shape: PATCH sibling and a list GET of the same record type.
+        Map<String,Object> data=missingRecordRead(original);
+        api(data).stream().filter(api->"PUT".equals(api.get("method"))).forEach(api->api.put("method","PATCH"));
+        var steps=(List<Map<String,Object>>)((Map<String,Object>)data.get("acceptance")).get("api");
+        steps.stream().filter(step->"PUT".equals(step.get("method"))).forEach(step->step.put("method","PATCH"));
+        var list=new LinkedHashMap<String,Object>(api(data).getFirst());list.putAll(Map.of("id","getItems","method","GET","path","/api/items","responseType","Item[]"));list.put("requestType",null);
+        api(data).add(0,list);
+        compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),BuildContract.class);
+        assertEquals(expected,compiled.api().getLast());
+        assertTrue(compiled.acceptance().api().stream().anyMatch(step->step.id().equals("collection_getItems")));
+    }
+
+    @Test void recordReadIsNeverDeclaredForNotFoundOnlyAmbiguousUnguardedOrUntypedSiblings() {
+        var original=ContractFixtures.accounts();
+        var cases=new ArrayList<java.util.function.Consumer<Map<String,Object>>>();
+        // Batch 21 shape: READ/PERSISTENCE use the list, so only NOT_FOUND requests the record path.
+        cases.add(data->{var list=new LinkedHashMap<String,Object>(api(data).getFirst());list.putAll(Map.of("id","getItems","method","GET","path","/api/items","responseType","Item[]"));
+                list.put("requestType",null);api(data).add(0,list);((List<Map<String,Object>>)((Map<String,Object>)data.get("acceptance")).get("api")).stream()
+                .filter(step->Set.of("read","restart").contains(step.get("id"))).forEach(step->{step.put("path","/api/items");step.put("assertPointer","/0/value");});});
+        cases.add(data->api(data).stream().filter(api->((String)api.get("path")).contains(":")).forEach(api->api.put("owner","ghost")));
+        cases.add(data->api(data).stream().filter(api->"PUT".equals(api.get("method"))).forEach(api->api.put("basePath","/api")));
+        cases.add(data->api(data).stream().filter(api->"DELETE".equals(api.get("method"))).forEach(api->api.put("routerPath","server/src/other.ts")));
+        cases.add(data->api(data).forEach(api->api.put("authenticated",false)));
+        cases.add(data->api(data).stream().filter(api->"PUT".equals(api.get("method"))).forEach(api->api.put("responseType","Thing")));
+        cases.add(data->api(data).stream().filter(api->"PUT".equals(api.get("method"))).forEach(api->api.put("responseType","Item[]")));
+        cases.add(data->api(data).removeIf(api->"PUT".equals(api.get("method"))));
+        cases.add(data->{var list=new LinkedHashMap<String,Object>(api(data).getFirst());list.putAll(Map.of("id","getItems","method","GET","path","/api/items","responseType","ItemInput[]"));api(data).add(list);});
+        cases.add(data->api(data).getFirst().put("id","getItem"));
+        cases.add(data->{for(int i=api(data).size();i<24;i++){var extra=new LinkedHashMap<String,Object>(api(data).getFirst());
+                extra.putAll(Map.of("id","extra"+i,"method","GET","path","/api/items/extra"+i));api(data).add(extra);}});
+        for(var mutation:cases){
+            Map<String,Object> data=missingRecordRead(original);mutation.accept(data);
+            var before=api(data).stream().map(api->api.get("method")+" "+api.get("path")).toList();
+            Map<String,Object> result=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
+            assertEquals(before,api(result).stream().map(api->api.get("method")+" "+api.get("path")).toList());
+            assertThrows(RuntimeException.class,()->mapper.readValue(mapper.writeValueAsString(result),BuildContract.class));
+        }
+    }
+
+    @Test void platformChecksFallBackToTheFirstApiOwnedByAUnit() {
+        // Batch 22 shape: the first declared api names a page that is not a unit.
+        var original=ContractFixtures.accounts();Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        units(data).getFirst().put("acceptanceIds",List.of());
+        var notes=new LinkedHashMap<String,Object>(api(data).getFirst());
+        notes.putAll(Map.of("id","notes","method","GET","path","/api/notes","responseType","Item[]","owner","Notes",
+                "routerPath","server/src/notes.ts","routerExport","notesRouter","basePath","/api/notes"));
+        api(data).add(0,notes);
+        Map<String,Object> result=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
+        assertTrue(((List<?>)units(result).getFirst().get("acceptanceIds")).containsAll(List.of("health","signup","login","wrongPassword")));
+        assertThrows(RuntimeException.class,()->mapper.readValue(mapper.writeValueAsString(result),BuildContract.class));
+    }
+
+    private Map<String,Object> missingRecordRead(BuildContract original){
+        Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        api(data).removeIf(api->"GET".equals(api.get("method")));
+        units(data).getFirst().put("acceptanceIds",List.of());
+        return data;
+    }
     private static Map<String,Object> limits(int modelCalls){return Map.of("modelCalls",modelCalls,"toolCalls",40,"outputTokens",8192,"timeoutMs",60000);}
     private static List<Map<String,Object>> units(Map<String,Object> data){return (List<Map<String,Object>>)data.get("units");}
     private static List<Map<String,Object>> api(Map<String,Object> data){return (List<Map<String,Object>>)data.get("api");}
