@@ -145,6 +145,7 @@ final class ContractAcceptanceCompiler {
             }
         for (var action : criteria.browser())
             changed |= assign(units, frontend, action.id());
+        changed |= shareEditChecks(units, frontend, criteria.browser(), (List<?>) data.get("routes"), mapper);
         for (var check : checks) {
             String owner = declared.stream()
                     .filter(api -> api.method().equals(check.method())
@@ -953,6 +954,38 @@ final class ContractAcceptanceCompiler {
             changed = true;
         }
         return changed;
+    }
+
+    /** Browser checks go to the "/" owner, but when the only edit route belongs to another unit, the edit is typed and
+     * submitted on that unit's page: it also receives those FILL/SELECT steps and ui_edit, so it renders their selectors
+     * and is repaired when they fail. Nothing is removed from the "/" owner. */
+    @SuppressWarnings("unchecked")
+    private static boolean shareEditChecks(List<Map<String, Object>> units, String frontend,
+            List<BehaviorCriteria.BrowserAction> browser, List<?> routes, ObjectMapper mapper) {
+        var editors = routes.stream().map(value -> mapper.convertValue(value, BuildContract.Route.class))
+                .filter(route -> route.path().endsWith("/edit")).map(BuildContract.Route::owner).distinct().toList();
+        if (frontend == null || editors.size() != 1 || editors.getFirst().equals(frontend)
+                || !editors.getFirst().matches("[A-Za-z0-9_-]{1,64}"))
+            return false;
+        var ids = browser.stream().map(BehaviorCriteria.BrowserAction::id).toList();
+        int created = ids.indexOf("ui_created"), edit = ids.indexOf("ui_edit"), edited = ids.indexOf("ui_edited");
+        if (created < 0 || edit <= created || edited <= edit)
+            return false;
+        var editor = units.stream().filter(unit -> editors.getFirst().equals(unit.get("id"))).findFirst().orElse(null);
+        if (editor == null)
+            return false;
+        var assigned = new ArrayList<>((List<String>) editor.get("acceptanceIds"));
+        var shared = new ArrayList<String>();
+        for (int i = created + 1; i <= edit; i++)
+            if ((i == edit || Set.of(BehaviorCriteria.BrowserKind.FILL, BehaviorCriteria.BrowserKind.SELECT)
+                    .contains(browser.get(i).kind())) && !assigned.contains(ids.get(i)) && ids.get(i).matches("[A-Za-z0-9_-]{1,64}"))
+                shared.add(ids.get(i));
+        if (shared.isEmpty() || assigned.size() + shared.size() > 48)
+            return false;
+        assigned.addAll(shared);
+        editor.put("acceptanceIds", assigned);
+        log.info("planner_edit_checks_shared owner={} ids={}", editors.getFirst(), shared);
+        return true;
     }
 
     @SuppressWarnings("unchecked")

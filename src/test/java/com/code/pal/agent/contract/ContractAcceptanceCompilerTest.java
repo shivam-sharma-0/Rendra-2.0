@@ -805,6 +805,24 @@ class ContractAcceptanceCompilerTest {
         }
     }
 
+    @Test void theOnlyEditRoutesOwnerAlsoReceivesTheEditFillsAndSubmitButTheRootOwnerKeepsThem(){
+        // Live E2E 2026-10-27: every browser check went to the "/" owner, so the edit page never rendered editTitle/save.
+        for(String[] editors:List.of(new String[]{"editor"},new String[]{"editor","other"},new String[]{"ui"})){
+            Map<String,Object> data=editFlow("ui_enter_edit","ui_edit");
+            var routes=(List<Map<String,Object>>)data.get("routes");
+            for(int i=0;i<editors.length;i++){
+                String owner=editors[i],file="client/src/pages/Edit"+i+".tsx";
+                if(!owner.equals("ui"))units(data).add(new LinkedHashMap<>(Map.of("id",owner,"objective","Edit","ownedPaths",List.of(file),"imports",List.of(),"dependsOn",List.of(),"acceptanceIds",List.of())));
+                routes.add(Map.of("path","/items/:id"+(i==0?"":"/v"+i)+"/edit","componentPath",owner.equals("ui")?"client/src/App.tsx":file,"owner",owner));
+            }
+            Map<String,Object> compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
+            var byId=new HashMap<Object,List<?>>();units(compiled).forEach(unit->byId.put(unit.get("id"),(List<?>)unit.get("acceptanceIds")));
+            assertTrue(byId.get("ui").containsAll(List.of("ui_edit_fill_title","ui_edit","ui_enter_edit")));
+            if(editors.length==1&&editors[0].equals("editor"))assertEquals(List.of("ui_edit_fill_title","ui_edit"),byId.get("editor"));
+            else if(byId.containsKey("editor"))assertEquals(List.of(),byId.get("editor"),"two edit routes are ambiguous");
+        }
+    }
+
     Map<String,Object> editFlow(String openId,String submitId){
         Map<String,Object> data=addFlow("ui_add");browser(data).get(3).put("id",openId);browser(data).get(5).put("id",submitId);return data;
     }
