@@ -55,6 +55,11 @@ final class ContractResponseSchema {
             @SuppressWarnings("unchecked")
             var unit = (Map<String, Object>) ((Map<String, Object>) properties.get("units")).get("items");
             properties(unit).put("acceptanceIds", Map.of("type", "array", "items", Map.of("type", "string"), "const", List.of()));
+            @SuppressWarnings("unchecked")
+            var api = (Map<String, Object>) ((Map<String, Object>) properties.get("api")).get("items");
+            // ContractScaffold guards every ACCOUNTS router; public data endpoints are not expressible.
+            if (input.choice().auth() == BuildDecisions.Auth.ACCOUNTS)
+                properties(api).put("authenticated", Map.of("type", "boolean", "const", true));
             if (input.requiredRootPath() != null) {
                 var file = Map.of("type", "string", "pattern", "^(?:client|server)/[A-Za-z0-9_][A-Za-z0-9_./-]{0,225}$");
                 properties(unit).put("imports", Map.of("type", "array", "items", Map.of("type", "string"), "const", List.of()));
@@ -62,8 +67,6 @@ final class ContractResponseSchema {
                 @SuppressWarnings("unchecked")
                 var route = (Map<String, Object>) ((Map<String, Object>) properties.get("routes")).get("items");
                 properties(route).put("componentPath", file);
-                @SuppressWarnings("unchecked")
-                var api = (Map<String, Object>) ((Map<String, Object>) properties.get("api")).get("items");
                 properties(api).put("routerPath", file);
             }
         }

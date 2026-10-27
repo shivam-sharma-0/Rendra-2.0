@@ -74,6 +74,7 @@ final class ContractAcceptanceCompiler {
         changed |= alignOwnersToFiles(data, true);
         changed |= alignOwnersToFiles(data, false);
         changed |= trimOptionalBrowserChecks(data, requiredScope);
+        changed |= bindAccountApiGuards(data);
         changed |= AccountAcceptance.normalize(data, mapper);
         var criteria = mapper.convertValue(data.get("acceptance"), BehaviorCriteria.class);
         if (!criteria.crudRequired())
@@ -204,6 +205,24 @@ final class ContractAcceptanceCompiler {
             return true;
         }
         return false;
+    }
+
+    /** ContractScaffold mounts every ACCOUNTS router behind requireAccount, so a false flag only misdescribes it.
+     * Coordinator /api/auth paths and non-boolean flags stay for the validator. */
+    private static boolean bindAccountApiGuards(Map<String, Object> data) {
+        if (!"ACCOUNTS".equals(data.get("auth")) || !(data.get("api") instanceof List<?> api)) return false;
+        boolean changed = false;
+        for (Object value : api)
+            if (value instanceof Map<?, ?> raw && Boolean.FALSE.equals(raw.get("authenticated"))
+                    && raw.get("path") instanceof String path && !path.equals("/api/auth") && !path.startsWith("/api/auth/")) {
+                @SuppressWarnings("unchecked")
+                var endpoint = (Map<String, Object>) raw;
+                endpoint.put("authenticated", true);
+                changed = true;
+                log.info("planner_api_auth_guard_bound id={}", endpoint.get("id") instanceof String id
+                        && id.matches("[A-Za-z0-9_-]{1,64}") ? id : "?");
+            }
+        return changed;
     }
 
     /** Fail closed: unknown actions and required scope stay intact for the existing model correction. */

@@ -516,7 +516,7 @@ class ContractAcceptanceCompilerTest {
         cases.add(data->api(data).stream().filter(api->((String)api.get("path")).contains(":")).forEach(api->api.put("owner","ghost")));
         cases.add(data->api(data).stream().filter(api->"PUT".equals(api.get("method"))).forEach(api->api.put("basePath","/api")));
         cases.add(data->api(data).stream().filter(api->"DELETE".equals(api.get("method"))).forEach(api->api.put("routerPath","server/src/other.ts")));
-        cases.add(data->api(data).forEach(api->api.put("authenticated",false)));
+        cases.add(data->{data.put("auth","NONE");api(data).forEach(api->api.put("authenticated",false));});
         cases.add(data->api(data).stream().filter(api->"PUT".equals(api.get("method"))).forEach(api->api.put("responseType","Thing")));
         cases.add(data->api(data).stream().filter(api->"PUT".equals(api.get("method"))).forEach(api->api.put("responseType","Item[]")));
         cases.add(data->api(data).removeIf(api->"PUT".equals(api.get("method"))));
@@ -544,6 +544,36 @@ class ContractAcceptanceCompilerTest {
         Map<String,Object> result=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
         assertTrue(((List<?>)units(result).getFirst().get("acceptanceIds")).containsAll(List.of("health","signup","login","wrongPassword")));
         assertThrows(RuntimeException.class,()->mapper.readValue(mapper.writeValueAsString(result),BuildContract.class));
+    }
+
+    @Test void accountDataApisAreBoundToTheCoordinatorGuardAndStayIdempotent() {
+        // Batch 17-19 shape: public list/detail reads beside guarded writes in an ACCOUNTS app.
+        var original=ContractFixtures.accounts();Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(original),Map.class);
+        api(data).stream().filter(api->"GET".equals(api.get("method"))).forEach(api->api.put("authenticated",false));
+        assertThrows(RuntimeException.class,()->mapper.readValue(mapper.writeValueAsString(data),BuildContract.class));
+        String once=ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper);
+        assertEquals(original,mapper.readValue(once,BuildContract.class));
+        assertEquals(once,ContractAcceptanceCompiler.completeCollections(once,mapper));
+    }
+
+    @Test void authGuardIsNeverBoundWithoutAccountsOnAuthPathsOrForNonBooleanFlags() {
+        Map<String,Object> open=mapper.readValue(mapper.writeValueAsString(ContractFixtures.mern()),Map.class);
+        Map<String,Object> result=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(open),mapper),Map.class);
+        assertTrue(api(result).stream().allMatch(api->Boolean.FALSE.equals(api.get("authenticated"))));
+        var accounts=ContractFixtures.accounts();
+        var cases=new ArrayList<java.util.function.Consumer<Map<String,Object>>>();
+        cases.add(api->{api.putAll(Map.of("path","/api/auth/profile","basePath","/api/auth","authenticated",false));});
+        cases.add(api->{api.putAll(Map.of("path","/api/auth","basePath","/api/auth","authenticated",false));});
+        cases.add(api->api.put("authenticated","false"));
+        for(var mutation:cases){
+            Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(accounts),Map.class);
+            mutation.accept(api(data).getFirst());var before=new LinkedHashMap<>(api(data).getFirst());
+            Map<String,Object> compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
+            assertEquals(before,api(compiled).stream().filter(api->before.get("id").equals(api.get("id"))).findFirst().orElseThrow());
+        }
+        Map<String,Object> missing=mapper.readValue(mapper.writeValueAsString(accounts),Map.class);
+        api(missing).getFirst().put("authenticated",null);
+        assertThrows(RuntimeException.class,()->ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(missing),mapper));
     }
 
     private Map<String,Object> missingRecordRead(BuildContract original){

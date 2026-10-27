@@ -45,6 +45,23 @@ class ContractResponseSchemaTest {
         var bounded=plain.withJsonSchema(schema).withMaxTokens(512);assertEquals(schema,bounded.jsonSchema());assertTrue(TokenEstimate.input(bounded)>TokenEstimate.input(plain));
     }
 
+    @Test void accountApisArePinnedToTheCoordinatorGuardOnlyForAccounts() {
+        var accounts = ContractFixtures.accounts();
+        for (String root : Arrays.asList(null, "client/src/App.tsx")) {
+            var input = new ContractPlanner.Input(accounts.id(), "Blog", "Approved", "Map",
+                    new BuildDecisions.Choice(1, accounts.storage(), accounts.auth(), null), accounts.limits(), root);
+            var schema = mapper.readTree(ContractResponseSchema.planner(input, mapper).schema());
+            assertTrue(schema.at("/properties/api/items/properties/authenticated/const").asBoolean());
+            assertEquals(root == null, schema.at("/properties/api/items/properties/routerPath/pattern").isMissingNode());
+        }
+        var open = ContractFixtures.mern();
+        var input = new ContractPlanner.Input(open.id(), "Tasks", "Approved", "Map",
+                new BuildDecisions.Choice(1, open.storage(), open.auth(), null), open.limits(), "client/src/App.tsx");
+        var schema = mapper.readTree(ContractResponseSchema.planner(input, mapper).schema());
+        assertTrue(schema.at("/properties/api/items/properties/authenticated/const").isMissingNode());
+        assertEquals("boolean", schema.at("/properties/api/items/properties/authenticated/type").asString());
+    }
+
     @Test void freshMernFileMetadataUsesCompletePathsAndAutomaticDependencyContext() {
         var contract = ContractFixtures.mern();
         var choice = new BuildDecisions.Choice(1, contract.storage(), contract.auth(), null);
