@@ -48,6 +48,22 @@ class RelativeImportsTest {
                 "Could not resolve '../theme.css'", "build", null)));
     }
 
+    @Test void oneUndiagnosedPassFixesEveryUnresolvedCoordinatorImportButNotALaterWavesFile() {
+        // Live E2E 2026-10-27: each off-by-one import cost a type-check plus a build round until the repair limit ran out.
+        String file = "client/src/pages/EditTask.tsx", root = "client/src/rendra/id/";
+        String source = "import { api } from '../../rendra/id/api'\nimport type { Task } from '../../rendra/id/types'\n"
+                + "import '../../rendra/id/theme.css'\nimport Card from '../components/Card'\nimport Later from './Later'\n"
+                + "import { auth } from '../rendra/id/auth-client'\nimport { useState } from 'react'\n";
+        var coordinator = Set.of(root + "api.ts", root + "types.ts", root + "theme.css", root + "auth-client.ts");
+        var existing = new HashSet<>(coordinator);
+        existing.addAll(Set.of("client/src/components/Card.tsx", "client/src/Later.tsx"));
+        String fixed = RelativeImports.fixAll(file, source, existing, coordinator);
+        assertEquals(source.replace("'../../rendra/id/", "'../rendra/id/"), fixed);
+        assertEquals(fixed, RelativeImports.fixAll(file, fixed, existing, coordinator));
+        assertEquals(Set.of("../../rendra/id/api", "../../rendra/id/types", "../../rendra/id/theme.css", "../components/Card",
+                "./Later", "../rendra/id/auth-client", "react"), ContractImports.importedModules(source));
+    }
+
     @Test void nodeJsSpecifierAndDirectoryIndexAreResolvedToExistingSource() {
         assertEquals("export {models} from '../rendra/id/models.js'", RelativeImports.fix("server/src/routes/tasks.ts",
                 "export {models} from '../models.js'", Set.of("server/src/rendra/id/models.ts"), List.of(missing("server/src/routes/tasks.ts", "../models.js"))));

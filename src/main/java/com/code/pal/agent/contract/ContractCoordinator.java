@@ -328,6 +328,8 @@ public final class ContractCoordinator {
             try (var scope = UnitWriteScope.wave(ctx, c, wave)) {
                 merge(ctx, outputs);
             }
+            // Before any validation round: an off-by-one import would otherwise cost a type-check and a build round.
+            resolveRelativeImports(ctx, c, wave);
             if (c.schemaVersion() == 2 && structuredRepair != null) {
                 var ready = new HashSet<String>();
                 orderedBatches.stream().filter(batch -> completedBatches.contains(batch.id())).forEach(batch -> ready.addAll(batch.ownedPaths()));
@@ -458,7 +460,28 @@ public final class ContractCoordinator {
 
     boolean fixRelativeImports(AgentContext ctx, BuildContract contract, List<BuildContract.Unit> units, ValidationReport report) {
         if (report.introducedDiagnostics().stream().noneMatch(RelativeImports::missingModule)) return false;
+        var output = importFixes(ctx, contract, units, report.introducedDiagnostics());
+        if (output.isEmpty()) return false;
+        if (report.changeSetRevision() != changes.view(ctx).revision())
+            throw new WorkflowStageException("Relative import diagnostics are stale");
+        try (var scope = UnitWriteScope.wave(ctx, contract, units)) { merge(ctx, output); }
+        output.forEach(delta -> log.info("relative_import_fixed runId={} file={} reason=unique_existing_module", ctx.runId(), delta.path()));
+        return true;
+    }
+
+    void resolveRelativeImports(AgentContext ctx, BuildContract contract, List<BuildContract.Unit> units) {
+        var output = importFixes(ctx, contract, units, null);
+        if (output.isEmpty()) return;
+        try (var scope = UnitWriteScope.wave(ctx, contract, units)) { merge(ctx, output); }
+        output.forEach(delta -> log.info("relative_import_fixed runId={} file={} reason=unresolved_before_validation", ctx.runId(), delta.path()));
+    }
+
+    /** Diagnosed modules first, then every other unresolved relative import of the same owned files. */
+    private List<UnitGenerator.Delta> importFixes(AgentContext ctx, BuildContract contract, List<BuildContract.Unit> units,
+            List<ProjectDiagnostic> diagnostics) {
         var existing = RepairProjectContext.existing(files, ctx);
+        var coordinator = existing.stream().filter(path -> path.startsWith(contract.clientRoot())
+                || path.startsWith(contract.serverRoot())).collect(Collectors.toSet());
         var output = new ArrayList<UnitGenerator.Delta>();
         for (var unit : units) {
             var readable = new HashSet<>(ContractImports.availablePaths(contract, unit));
@@ -471,16 +494,13 @@ public final class ContractCoordinator {
                 if (!existing.contains(path) || !path.matches(".+\\.[cm]?[jt]sx?")) continue;
                 String version = files.version(ctx.projectId(), ctx.root(), path);
                 String source = bounded(ctx, path);
-                String fixed = RelativeImports.fix(path, source, readable, report.introducedDiagnostics());
+                if (source == null) continue;
+                String fixed = RelativeImports.fixAll(path, diagnostics == null ? source
+                        : RelativeImports.fix(path, source, readable, diagnostics), existing, coordinator);
                 if (!fixed.equals(source)) output.add(new UnitGenerator.Delta(path, version, fixed));
             }
         }
-        if (output.isEmpty()) return false;
-        if (report.changeSetRevision() != changes.view(ctx).revision())
-            throw new WorkflowStageException("Relative import diagnostics are stale");
-        try (var scope = UnitWriteScope.wave(ctx, contract, units)) { merge(ctx, output); }
-        output.forEach(delta -> log.info("relative_import_fixed runId={} file={} reason=unique_existing_module", ctx.runId(), delta.path()));
-        return true;
+        return output;
     }
 
     static List<BuildContract.Unit> affected(BuildContract c, ValidationReport report) {

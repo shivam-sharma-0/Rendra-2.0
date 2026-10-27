@@ -7,6 +7,7 @@ import com.code.pal.agent.prompt.PromptLoader.Prompt;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -164,27 +165,38 @@ public final class ContractImports {
     static String rewriteModule(String source, String module, String replacement) {
         var tokens = tokens(source);
         var out = new StringBuilder(source);
-        for (int index = tokens.size() - 1; index > 0; index--) {
-            var token = tokens.get(index);
-            if (!token.literal() || !token.value().equals(module) || source.charAt(token.start() - 1) == '`') continue;
-            var previous = tokens.get(index - 1);
-            if (previous.literal()) continue;
-            boolean imported = previous.value().equals("import")
-                    || previous.value().equals("(") && index > 1 && !tokens.get(index - 2).literal()
-                    && Set.of("import", "require").contains(tokens.get(index - 2).value());
-            if (previous.value().equals("from")) {
-                for (int before = index - 2; before >= 0; before--) {
-                    var candidate = tokens.get(before);
-                    if (!candidate.literal() && candidate.value().equals(";")) break;
-                    if (!candidate.literal() && Set.of("import", "export").contains(candidate.value())) {
-                        imported = true;
-                        break;
-                    }
-                }
-            }
-            if (imported) out.replace(token.start(), token.end(), replacement);
-        }
+        for (int index = tokens.size() - 1; index > 0; index--)
+            if (tokens.get(index).value().equals(module) && imported(source, tokens, index))
+                out.replace(tokens.get(index).start(), tokens.get(index).end(), replacement);
         return out.toString();
+    }
+
+    /** The module literals {@link #rewriteModule} can rewrite, in source order. */
+    static Set<String> importedModules(String source) {
+        var tokens = tokens(source);
+        var modules = new LinkedHashSet<String>();
+        for (int index = 1; index < tokens.size(); index++)
+            if (imported(source, tokens, index))
+                modules.add(tokens.get(index).value());
+        return modules;
+    }
+
+    private static boolean imported(String source, List<Token> tokens, int index) {
+        var token = tokens.get(index);
+        if (!token.literal() || source.charAt(token.start() - 1) == '`') return false;
+        var previous = tokens.get(index - 1);
+        if (previous.literal()) return false;
+        if (previous.value().equals("import")
+                || previous.value().equals("(") && index > 1 && !tokens.get(index - 2).literal()
+                && Set.of("import", "require").contains(tokens.get(index - 2).value()))
+            return true;
+        if (previous.value().equals("from"))
+            for (int before = index - 2; before >= 0; before--) {
+                var candidate = tokens.get(before);
+                if (!candidate.literal() && candidate.value().equals(";")) break;
+                if (!candidate.literal() && Set.of("import", "export").contains(candidate.value())) return true;
+            }
+        return false;
     }
 
     private static List<Token> tokens(String source) {
