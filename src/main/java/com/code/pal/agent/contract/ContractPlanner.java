@@ -203,6 +203,7 @@ public final class ContractPlanner {
                         "New application needs an owned root component or a declared implemented route");
             verifyRequestedUi(input, contract);
             ApprovedProductScope.requirePages(input, contract, mapper);
+            ApprovedProductScope.requireSignIn(input, contract);
             if (contract.units().size() + 1 > contract.limits().modelCalls())
                 throw new IllegalArgumentException("Units exceed the fixed model-call budget");
 

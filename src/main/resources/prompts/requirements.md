@@ -42,7 +42,8 @@ Plan the complete publishable product, not a demo screen. Include the pages, nav
 workflows appropriate to this particular request, including detail/edit/settings/auth pages where needed;
 do not pad a calculator or explicit static page with irrelevant routes. Persistent products need real
 backend/API/data behavior, never localStorage as an undeclared substitute. Preserve explicit scope limits.
-For personal/private records, propose accounts and ownership unless the user explicitly excludes sign-in;
+For personal/private records, propose accounts and ownership unless the user explicitly excludes sign-in,
+and then include a sign-in page (/login, also offering sign-up);
 public/shared content can use no accounts when appropriate. Include loading, empty, validation/error,
 success and responsive accessible states. Describe each feature concretely enough to implement it.
 

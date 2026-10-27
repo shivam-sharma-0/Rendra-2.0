@@ -153,6 +153,20 @@ class ContractPlannerTest {
         String referenced=mapper.writeValueAsString(proposal);
         assertEquals(signature,assertThrows(ContractPlanner.Rejected.class,()->planner.validate(input,reply(referenced),true)).signature());
     }
+    @Test void aFreshAccountsAppWithoutASignInRouteIsRejectedForCorrection(){
+        // Live E2E 2026-10-27: an ACCOUNTS Todo saved only / and /todos/:id/edit, so a real person could never sign in.
+        var c=ContractFixtures.accounts();var fresh=new ContractPlanner.Input(c.id(),"Items","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");
+        String body=mapper.writeValueAsString(c);
+        var rejected=assertThrows(ContractPlanner.Rejected.class,()->planner.validate(fresh,reply(body),true));
+        assertEquals("routes: accounts app needs a sign-in page",rejected.signature());
+        assertTrue(rejected.getMessage().contains("add a /login route"),rejected.getMessage());
+        Map<String,Object> proposal=mapper.readValue(body,Map.class);
+        ((List<Object>)proposal.get("units")).add(Map.of("id","login","objective","Sign in and sign up","ownedPaths",List.of("client/src/pages/Login.tsx"),"imports",List.of(),"dependsOn",List.of(),"acceptanceIds",List.of()));
+        ((List<Object>)proposal.get("routes")).add(Map.of("path","/login","componentPath","client/src/pages/Login.tsx","owner","login"));
+        assertDoesNotThrow(()->planner.validate(fresh,reply(mapper.writeValueAsString(proposal)),true));
+        var edit=new ContractPlanner.Input(c.id(),"Items","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits());
+        assertDoesNotThrow(()->planner.validate(edit,reply(body),true),"an existing app's edit keeps its own pages");
+    }
     LlmClient.LlmResult reply(String body){return new LlmClient.LlmResult(body,null,List.of(),new LlmClient.Usage(20,30),"stop");}
     @Test void oneValidPlannerCallAndOneBoundedCorrectionHaveDistinctMeteringPurposes() {
         var count=new AtomicInteger();var purposes=new ArrayList<CallPurpose>();

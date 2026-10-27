@@ -71,6 +71,10 @@ class PlannerBatchHarnessTest {
                 .removeIf(step -> step.get("kind").toString().startsWith("AUTH_") && removed.add(step.get("id")));
         for (var unit : (List<Map<String, Object>>) proposal.get("units"))
             ((List<Object>) unit.get("acceptanceIds")).removeIf(removed::contains);
+        // A fresh accounts app needs a sign-in page.
+        ((List<Object>) proposal.get("units")).add(Map.of("id", "login", "objective", "Sign in", "ownedPaths", List.of("client/src/pages/Login.tsx"),
+                "imports", List.of(), "dependsOn", List.of(), "acceptanceIds", List.of()));
+        ((List<Object>) proposal.get("routes")).add(Map.of("path", "/login", "componentPath", "client/src/pages/Login.tsx", "owner", "login"));
         var usage = new LlmClient.Usage(10, 20);
         Files.writeString(batch.resolve("fixture.json"), "{\"cases\":[{\"name\":\"items\",\"repeats\":2,\"prompt\":\"Items\"}]}");
         Files.writeString(batch.resolve("01-items-1-requirements.json"), mapper.writeValueAsString(new LlmClient.LlmResult(

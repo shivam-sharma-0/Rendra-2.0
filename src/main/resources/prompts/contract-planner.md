@@ -79,6 +79,7 @@ For MERN ACCOUNTS, auth setup is platform-provided: fresh fixture signup/login, 
 and wrong-password denials are inserted deterministically. Do not write those setup steps or declare /api/auth/* in api/units.
 These coordinator-owned endpoints are POST /api/auth/signup and /api/auth/login; sign-out clears the client session.
 For ACCOUNTS every api entry is authenticated:true; public data endpoints are not supported.
+A new ACCOUNTS app also declares a /login route whose page unit signs in and signs up with the shared auth-client.
 Set protected CRUD tokenVariable to null; the platform binds it to its captured session. Preserve every CRUD/restart assertion.
 Browser checks start with a fresh authenticated platform session unless explicitly testing the auth forms. Use the declared
 product selectors for CRUD/search/filter/reload and do not spend browser actions or static credentials on auth setup.

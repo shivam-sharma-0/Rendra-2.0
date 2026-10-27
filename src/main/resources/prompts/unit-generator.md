@@ -15,7 +15,8 @@ Mongo documents expose string id in JSON/toObject via coordinator schema virtual
 return documents normally, or map _id to string id explicitly when using lean(). Do not invent a separate required id field.
 Account requests pass the coordinator requireAccount guard; use accountId for record ownership and never accept it from a body.
 MERN account UI uses the shared auth-client.ts: auth.signIn({email,password}), auth.signUp({email,password}),
-auth.signOut(), and useSession(). Generated api methods attach its token automatically. Do not duplicate auth
+auth.signOut(), and useSession(). Pages that load account data link to #/login when there is no session.
+Generated api methods attach its token automatically. Do not duplicate auth
 routers, middleware, credential models or provider contexts. Auth session includes token, userId and email.
 Account data models already enforce verified ownership. Use the supplied models' ordinary CRUD methods;
 no raw connections/collections, populate, bulkWrite, estimatedDocumentCount, pipeline updates or disabled middleware.
