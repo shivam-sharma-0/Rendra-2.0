@@ -232,11 +232,20 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         }
         var assigned = new HashSet<String>();
         units.forEach(u -> assigned.addAll(u.acceptanceIds()));
-        if (!assigned.containsAll(ids))
+        if (!assigned.containsAll(ids)) {
+            // MERN acceptanceIds are coordinator-assigned from api/App owners; editing them by hand would hide the defect.
+            boolean browser = acceptance.browser().stream().anyMatch(a -> !assigned.contains(a.id())),
+                    request = acceptance.api().stream().anyMatch(a -> !assigned.contains(a.id()));
             throw new ContractRuleException("acceptanceIds: criterion has no responsible unit", Stream.concat(
                     acceptance.browser().stream().filter(a -> !assigned.contains(a.id())).map(a -> "browser " + a.id() + " " + a.kind()),
                     acceptance.api().stream().filter(a -> !assigned.contains(a.id())).map(a -> "api " + a.id() + " " + a.method() + " " + a.path()))
-                    .limit(3).collect(Collectors.joining(", ")) + " in no unit acceptanceIds; add each id to the unit that implements it");
+                    .limit(3).collect(Collectors.joining(", ")) + " in no unit acceptanceIds; " + (stack != Stack.MERN
+                    ? "add each id to the unit that implements it"
+                    : "for MERN the coordinator assigns acceptanceIds, so " + Stream.of(
+                            request ? "each api check needs exactly one declared api with that method and path whose owner is a unit id" : null,
+                            browser ? "browser checks need one unit owning client/src/App.tsx or the / route" : null)
+                            .filter(Objects::nonNull).collect(Collectors.joining(" and "))));
+        }
         for (var route : routes)
             if (!route.owner().equals(ownership.get(route.componentPath())))
                 bad("Route ownership mismatch");

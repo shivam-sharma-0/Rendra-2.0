@@ -68,10 +68,20 @@ class ContractRuleFeedbackTest {
 
     @Test void unassignedCriterionNamesTheStepMethodAndPath() {
         var c = ContractFixtures.mern();
-        located("acceptanceIds: criterion has no responsible unit",
-                reject(c, data -> list(data, "units").get(0).put("acceptanceIds", List.of("health", "create", "update", "restart", "delete", "missing"))),
-                "api read GET /api/items/${itemId} in no unit acceptanceIds",
-                reject(c, data -> list(data, "units").get(1).put("acceptanceIds", List.of())), "browser ui ASSERT_TEXT in no unit acceptanceIds");
+        var request = reject(c, data -> list(data, "units").get(0).put("acceptanceIds", List.of("health", "create", "update", "restart", "delete", "missing")));
+        var browser = reject(c, data -> list(data, "units").get(1).put("acceptanceIds", List.of()));
+        located("acceptanceIds: criterion has no responsible unit", request, "api read GET /api/items/${itemId} in no unit acceptanceIds",
+                browser, "browser ui ASSERT_TEXT in no unit acceptanceIds");
+        // MERN acceptanceIds are coordinator-assigned: the feedback points at the api/App owner, never at editing acceptanceIds.
+        String api = ContractPlanner.schemaFeedback(request), ui = ContractPlanner.schemaFeedback(browser);
+        assertTrue(api.endsWith("for MERN the coordinator assigns acceptanceIds, so each api check needs exactly one declared api"
+                + " with that method and path whose owner is a unit id"), api);
+        assertTrue(ui.endsWith("for MERN the coordinator assigns acceptanceIds, so browser checks need one unit owning client/src/App.tsx or the / route"), ui);
+        assertFalse(api.contains("add each id") || ui.contains("add each id"));
+        var vite = reject(ContractFixtures.vite(), data -> list(data, "units").get(0).put("acceptanceIds", List.of()));
+        assertEquals("acceptanceIds: criterion has no responsible unit", ContractPlanner.rejectionSignature(vite));
+        assertTrue(ContractPlanner.schemaFeedback(vite).endsWith("browser ui ASSERT_TEXT in no unit acceptanceIds; add each id to the unit that implements it"),
+                ContractPlanner.schemaFeedback(vite));
     }
 
     @Test void unguardedAccountApiNamesTheEndpoint() {
