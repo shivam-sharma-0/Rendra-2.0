@@ -36,6 +36,18 @@ class RelativeImportsTest {
                 List.of(new ProjectDiagnostic(file, 1, 1, DiagnosticSeverity.ERROR, "Cannot find module '../models'", "compiler", "TS2304"))));
     }
 
+    @Test void theBundlersUnresolvedSideEffectCssImportIsRewrittenToTheUniqueExistingFile() {
+        // Live E2E 2026-10-27: tsc accepted the CSS import, so only the build reported it, with no TS code.
+        String file = "client/src/pages/EditTodo.tsx", id = "2a428af9-b4a2-40f7-9798-e5df3cd2c9ec";
+        var unresolved = new ProjectDiagnostic(file, 4, null, DiagnosticSeverity.ERROR,
+                "[UNRESOLVED_IMPORT] Could not resolve '../../rendra/" + id + "/theme.css' in " + file, "build", null);
+        assertTrue(RelativeImports.missingModule(unresolved));
+        assertEquals("import '../rendra/" + id + "/theme.css'", RelativeImports.fix(file, "import '../../rendra/" + id + "/theme.css'",
+                Set.of("client/src/rendra/" + id + "/theme.css"), List.of(unresolved)));
+        assertFalse(RelativeImports.missingModule(new ProjectDiagnostic(file, 4, null, DiagnosticSeverity.ERROR,
+                "Could not resolve '../theme.css'", "build", null)));
+    }
+
     @Test void nodeJsSpecifierAndDirectoryIndexAreResolvedToExistingSource() {
         assertEquals("export {models} from '../rendra/id/models.js'", RelativeImports.fix("server/src/routes/tasks.ts",
                 "export {models} from '../models.js'", Set.of("server/src/rendra/id/models.ts"), List.of(missing("server/src/routes/tasks.ts", "../models.js"))));

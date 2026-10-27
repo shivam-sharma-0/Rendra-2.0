@@ -7,20 +7,30 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/** Pure TS2307 path correction. An existing unique module is evidence; a guessed module is not. */
+/** Pure missing-module path correction. An existing unique module is evidence; a guessed module is not. */
 final class RelativeImports {
     private static final Pattern MISSING = Pattern.compile("Cannot find module ['\"]([^'\"]+)['\"]");
+    /** The bundler's report; tsc never reports a missing side-effect CSS import. */
+    private static final Pattern UNRESOLVED = Pattern.compile("\\[UNRESOLVED_IMPORT\\] Could not resolve ['\"]([^'\"]+)['\"]");
     private static final Pattern SCRIPT = Pattern.compile("\\.(?:[cm]?[jt]sx?)$");
 
     private RelativeImports() {}
 
+    static boolean missingModule(ProjectDiagnostic diagnostic) {
+        return module(diagnostic) != null;
+    }
+
+    private static String module(ProjectDiagnostic diagnostic) {
+        if (diagnostic.message() == null) return null;
+        var match = ("TS2307".equals(diagnostic.code()) ? MISSING : UNRESOLVED).matcher(diagnostic.message());
+        return match.find() ? match.group(1) : null;
+    }
+
     static String fix(String file, String source, Set<String> existing, List<ProjectDiagnostic> diagnostics) {
         String result = source;
         for (var diagnostic : diagnostics) {
-            if (!"TS2307".equals(diagnostic.code()) || !file.equals(diagnostic.file()) || diagnostic.message() == null) continue;
-            var match = MISSING.matcher(diagnostic.message());
-            if (!match.find()) continue;
-            String module = match.group(1);
+            String module = module(diagnostic);
+            if (module == null || !file.equals(diagnostic.file())) continue;
             if (!(module.startsWith("./") || module.startsWith("../"))) continue;
             String leaf = Path.of(module).getFileName().toString();
             String name = SCRIPT.matcher(leaf).replaceFirst("");

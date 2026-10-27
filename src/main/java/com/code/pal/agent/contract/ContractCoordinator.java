@@ -457,7 +457,7 @@ public final class ContractCoordinator {
     }
 
     boolean fixRelativeImports(AgentContext ctx, BuildContract contract, List<BuildContract.Unit> units, ValidationReport report) {
-        if (report.introducedDiagnostics().stream().noneMatch(diagnostic -> "TS2307".equals(diagnostic.code()))) return false;
+        if (report.introducedDiagnostics().stream().noneMatch(RelativeImports::missingModule)) return false;
         var existing = RepairProjectContext.existing(files, ctx);
         var output = new ArrayList<UnitGenerator.Delta>();
         for (var unit : units) {
