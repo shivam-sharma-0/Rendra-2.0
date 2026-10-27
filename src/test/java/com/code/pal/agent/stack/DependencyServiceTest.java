@@ -179,6 +179,31 @@ class DependencyServiceTest {
     }
 
     @Test
+    void aRegistryTimeoutIsRetriedWithinTheInstallBudgetButARealDependencyErrorIsNot() {
+        // Live E2E 2026-10-27: one npm ETIMEDOUT became a model repair diagnostic and failed the run.
+        project.write("package.json", DEPS);
+        var calls = new AtomicInteger();
+        doAnswer(call -> {
+            String root = call.getArgument(1);
+            installs.add(root);
+            if (calls.incrementAndGet() == 1)
+                return new SandboxPort.CommandResult(false, 1, "npm error code ETIMEDOUT\nnpm error network read ETIMEDOUT", "");
+            project.write(root + "/node_modules/react/index.js", "module.exports = {};");
+            return new SandboxPort.CommandResult(true, 0, "", "");
+        }).when(sandbox).install(any(), anyString(), any());
+
+        assertTrue(service.prepare(project.projectId, ".").installed());
+        assertEquals(2, installs.size());
+
+        installs.clear();
+        doAnswer(call -> { installs.add(call.getArgument(1)); return new SandboxPort.CommandResult(false, 1, "npm error code E404\nnpm error 404 Not Found - nope@9", ""); })
+                .when(sandbox).install(any(), anyString(), any());
+        project.write("package.json", "{\"dependencies\":{\"nope\":\"9\"}}");
+        assertTrue(service.prepare(project.projectId, ".").failed());
+        assertEquals(1, installs.size(), "a missing package is not retried");
+    }
+
+    @Test
     void onlyTheMostRecentlyUsedSetsAreKept() {
         for (int i = 0; i < 8; i++) {
             project.write("package.json", "{\"dependencies\":{\"pkg" + i + "\":\"1.0.0\"}}");

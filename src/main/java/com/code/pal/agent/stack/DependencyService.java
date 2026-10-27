@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.regex.Pattern;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -44,6 +45,9 @@ public class DependencyService {
     /** Installed sets kept per project (the most recently used ones). */
     private static final int MAX_SETS = 5;
     private static final int ERROR_TAIL_CHARS = 1_500;
+    /** Registry connectivity, not a dependency defect: the bounded install budget retries it instead of a code repair. */
+    private static final Pattern TRANSIENT_NETWORK = Pattern.compile("(?i)\\bcode (?:ETIMEDOUT|ECONNRESET|ECONNREFUSED"
+            + "|EAI_AGAIN|ENOTFOUND|ESOCKETTIMEDOUT|EPIPE|E429|E50[0234])\\b|problem related to network connectivity");
 
     private final Map<UUID, ReentrantLock> locks = new ConcurrentHashMap<>();
     private final StackPacks stacks;
@@ -183,8 +187,10 @@ public class DependencyService {
             log.warn("dependency_install_failed projectId={} stack={} exitCode={} elapsedMs={}", projectId, stack.id(),
                     result.exitCode(), elapsedMs);
             removeQuietly(projectId, set);
-            String reason = result.timedOut() ? "the install timed out" : tail(result.stdout() + "\n" + result.error());
-            return new InstallFailure("Dependencies could not be installed: " + reason, false);
+            String output = result.stdout() + "\n" + result.error();
+            String reason = result.timedOut() ? "the install timed out" : tail(output);
+            return new InstallFailure("Dependencies could not be installed: " + reason,
+                    !result.timedOut() && TRANSIENT_NETWORK.matcher(output).find());
         }
         String tooLarge = sizeError(projectId, set, stack.dependencyDirectory());
         if (tooLarge != null) {
