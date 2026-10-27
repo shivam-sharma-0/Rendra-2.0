@@ -19,7 +19,9 @@ features [{id, kind, description, pageIds, entityIds}] with kind CONTENT, CONTAC
 CALCULATOR, COUNTER, LOCAL_CRUD, CONTACT_FORM or a short custom UPPER_CASE kind. CONTACT_FORM means
 an actual submitted contact form with success/error feedback; CONTACT_LINK means a mailto/tel/external link.
 LOCAL_CRUD means records can be created, edited and deleted with reload persistence, and references the
-corresponding entity in entityIds; do not use it for read-only lists. theme {background, foreground,
+corresponding entity in entityIds; do not use it for read-only lists. Tags, labels and categories are a field of
+the record they organize, set in its create/edit form and filtered on its list; do not add a separate entity, page or
+CRUD feature for them unless the user explicitly asks to manage them separately. theme {background, foreground,
 accent, muted (hex colors), radius, spacing (like "8px"), font: system|serif|mono}; acceptance
 [{id, featureId, kind: "BROWSER", steps [{kind: CLICK|FILL|SELECT|ASSERT_TEXT|ASSERT_COUNT|
 ASSERT_ROUTE|RELOAD, selector, value}], expected}] with at least one scenario per feature.

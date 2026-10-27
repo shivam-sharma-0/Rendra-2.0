@@ -65,7 +65,10 @@ Cover EVERY declared method/path with a successful API test. Every acceptance.ap
 /api/auth/* must match a declared api method+path. MERN CRUD always declares the record GET, e.g. GET /api/todos/:id,
 on the list's router/owner; include both READ requests (list assertion /0/title and record assertion /title).
 Do not declare unused extra endpoints, health, or error APIs. Compute dashboard summaries, search/filter results and tag lists
-in the client from the list GET; do not declare summary, search or stats endpoints. Keep tags as a STRING_ARRAY field of the record.
+in the client from the list GET; do not declare summary, search or stats endpoints. Tags, labels and categories are a STRING_ARRAY
+field of the record, edited in its create/update form and filtered in the client; a tag page lists them from the record list.
+Do not declare /api/tags or any second resource router for them unless the user explicitly asks to manage them separately,
+and then cover every endpoint with acceptance checks.
 DELETE has one successful DELETE test;
 NOT_FOUND is a later GET of the deleted captured identity, not the successful READ coverage.
 Use one API sequence: health, create/capture recordId, list, read recordId, update/assert edited value,

@@ -91,6 +91,24 @@ class ContractPlannerTest {
                 assertTrue(correction.contains(rule),rule);
             return reply(mapper.writeValueAsString(c));}));assertEquals(2,calls.get());
     }
+    @Test void requirementsPlannerAndCorrectionPromptsKeepTagsAsARecordField(){
+        // Batch r3 22/23: "notes app ... tags" became a Tag entity, /tags pages and an uncovered /api/tags CRUD router.
+        String requirements=com.code.pal.agent.prompt.PromptLoader.load(com.code.pal.agent.prompt.PromptLoader.Prompt.REQUIREMENTS).replaceAll("\\s+"," ");
+        assertTrue(requirements.contains("Tags, labels and categories are a field of the record they organize"));
+        assertTrue(requirements.contains("do not add a separate entity, page or CRUD feature for them unless the user explicitly asks to manage them separately"));
+        var c=ContractFixtures.mern();Map<String,Object> bad=mapper.readValue(mapper.writeValueAsString(c),Map.class);
+        ((List<Map<String,Object>>)bad.get("units")).getLast().put("ownedPaths",List.of("client/src/Items.tsx"));bad.put("routes",List.of());
+        var fresh=new ContractPlanner.Input(c.id(),"Build Items","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");var calls=new AtomicInteger();
+        assertEquals(c,planner.plan(fresh,model,request->{
+            String system=request.messages().getFirst().content().replaceAll("\\s+"," ");
+            for(String rule:List.of("Tags, labels and categories are a STRING_ARRAY field of the record, edited in its create/update form and filtered in the client",
+                    "Do not declare /api/tags or any second resource router for them unless the user explicitly asks to manage them separately, and then cover every endpoint with acceptance checks"))
+                assertTrue(system.contains(rule),rule);
+            assertFalse(system.contains("Keep tags as a STRING_ARRAY field of the record."));
+            if(calls.incrementAndGet()==1)return reply(mapper.writeValueAsString(bad));
+            assertTrue(request.messages().getLast().content().replaceAll("\\s+"," ").contains("unless the user explicitly asked to manage them separately, tags, labels and categories are a STRING_ARRAY record field, not a separate router"));
+            return reply(mapper.writeValueAsString(c));}));assertEquals(2,calls.get());
+    }
     @Test void freshRequestedCrudCannotBeCertifiedByAHeadingOnly(){
         var c=ContractFixtures.mern();var fresh=new ContractPlanner.Input(c.id(),"Add, edit and delete tasks with completed","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");var calls=new AtomicInteger();
         var failure=assertThrows(IllegalArgumentException.class,()->planner.plan(fresh,model,request->{calls.incrementAndGet();return reply(mapper.writeValueAsString(c));}));assertEquals(2,calls.get());assertTrue(failure.getMessage().contains("Requested UI CRUD"));
