@@ -6,6 +6,7 @@ Preserve existing behavior outside this unit. Read dependencies/shared types/the
 For repairs, project.fileTree and project.packageDependencies in repairFeedback are the actual staged paths/packages.
 Resolve relative imports from the importing file to those paths; do not invent shortened coordinator paths.
 Route components export default. MERN router exports exactly the declared Express Router; bootstrap registration is coordinator-owned.
+It is mounted at its basePath, so each route is path minus basePath: basePath /api/todos serves /api/todos/:id as '/:id'.
 Coordinator-wired route pages use #/path links and receive {params: Record<string,string>} with decoded named route segments.
 Read params.id for /tasks/:id; use encodeURIComponent when building API paths. Preserve an existing custom router on edits.
 Do not introduce a provider wrapper requiring App.tsx changes unless App.tsx is owned by this unit.

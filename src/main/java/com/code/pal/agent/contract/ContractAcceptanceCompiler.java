@@ -70,6 +70,7 @@ final class ContractAcceptanceCompiler {
             return changed ? mapper.writeValueAsString(data) : content;
         changed |= removeExactDuplicates(data);
         changed |= renameDuplicateApiIds(data);
+        changed |= narrowRouterBases(data);
         changed |= resolveUnambiguousUnitIds(data);
         changed |= alignAddClickId(data);
         changed |= alignEditClickId(data);
@@ -291,8 +292,43 @@ final class ContractAcceptanceCompiler {
         return true;
     }
 
-    /** A uniquely named create/add click that a FILL prepares and ui_created asserts is the required ui_add; only its id changes. */
+    /** Units write a router relative to its resource ('/' and '/:id'), so a router mounted at bare /api whose every
+     * path continues with one shared static segment is mounted at that resource instead. Paths are unchanged; another
+     * router already at that base, a path equal to /api or mixed segments leave it for the validator. */
     @SuppressWarnings("unchecked")
+    private static boolean narrowRouterBases(Map<String, Object> data) {
+        if (!(data.get("api") instanceof List<?> api))
+            return false;
+        var routers = new LinkedHashMap<String, List<Map<String, Object>>>();
+        var bases = new HashSet<Object>();
+        for (Object value : api) {
+            if (!(value instanceof Map<?, ?> entry) || !(entry.get("routerPath") instanceof String router))
+                return false;
+            routers.computeIfAbsent(router, key -> new ArrayList<>()).add((Map<String, Object>) entry);
+            bases.add(entry.get("basePath"));
+        }
+        boolean changed = false;
+        for (var members : routers.values()) {
+            String segment = null;
+            for (var entry : members) {
+                String next = "/api".equals(entry.get("basePath")) && entry.get("path") instanceof String path
+                        && path.startsWith("/api/") ? path.substring(5).split("/", 2)[0] : null;
+                if (next == null || !next.matches("[A-Za-z0-9_-]{1,60}") || segment != null && !segment.equals(next)) {
+                    segment = null;
+                    break;
+                }
+                segment = next;
+            }
+            if (segment == null || !bases.add("/api/" + segment))
+                continue;
+            for (var entry : members)
+                entry.put("basePath", "/api/" + segment);
+            log.info("planner_router_base_narrowed router={} to=/api/{}", members.getFirst().get("routerPath"), segment);
+            changed = true;
+        }
+        return changed;
+    }
+
     /** The coordinator's types.ts already declares the built-ins, so a model copy no api references would collide with
      * it at scaffold time. A referenced copy is left for the validator: its shape may differ from the built-in. */
     private static boolean dropBuiltInTypes(Map<String, Object> data) {
@@ -320,6 +356,8 @@ final class ContractAcceptanceCompiler {
         return true;
     }
 
+    /** A uniquely named create/add click that a FILL prepares and ui_created asserts is the required ui_add; only its id changes. */
+    @SuppressWarnings("unchecked")
     private static boolean alignAddClickId(Map<String, Object> data) {
         if (!(data.get("acceptance") instanceof Map<?, ?> acceptance) || !(acceptance.get("browser") instanceof List<?> browser)
                 || !(data.get("units") instanceof List<?> units)) return false;

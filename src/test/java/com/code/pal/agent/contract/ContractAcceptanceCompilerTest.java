@@ -29,6 +29,28 @@ class ContractAcceptanceCompilerTest {
         assertEquals("/tasks/123", compiled.acceptance().browser().getLast().value());
     }
 
+    @SuppressWarnings("unchecked")
+    @Test void aBareApiRouterIsMountedAtItsSingleResourceButMixedOrTakenBasesAreKept() {
+        // Live E2E 2026-10-27: basePath /api mounted a router written as '/' and '/:id', so GET /api/todos hit '/:id'.
+        Map<String, Object> data = mapper.readValue(mapper.writeValueAsString(ContractFixtures.mern()), Map.class);
+        var api = (List<Map<String, Object>>) data.get("api");
+        api.forEach(entry -> entry.put("basePath", "/api"));
+        var compiled = mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data), mapper), BuildContract.class);
+        assertEquals(Set.of("/api/items"), compiled.api().stream().map(BuildContract.Api::basePath).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(ContractFixtures.mern().api().stream().map(BuildContract.Api::path).toList(), compiled.api().stream().map(BuildContract.Api::path).toList());
+
+        api.getFirst().put("path", "/api/things");
+        Map<String, Object> mixed = mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data), mapper), Map.class);
+        assertTrue(((List<Map<String, Object>>) mixed.get("api")).stream().allMatch(entry -> "/api".equals(entry.get("basePath"))));
+
+        api.getFirst().put("path", "/api/items");
+        var other = new LinkedHashMap<>(api.getFirst());
+        other.putAll(Map.of("id", "otherList", "path", "/api/items", "routerPath", "server/src/other.ts", "basePath", "/api/items"));
+        api.add(other);
+        Map<String, Object> taken = mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data), mapper), Map.class);
+        assertEquals(4, ((List<Map<String, Object>>) taken.get("api")).stream().filter(entry -> "/api".equals(entry.get("basePath"))).count());
+    }
+
     @Test void ambiguousRedirectsExternalLinksAndInterveningActionsNeverGuessARoute() {
         var data = routeProposal();
         for (String selector : List.of("button[data-action='login']", "a[href='/login'],a[href='/signup']",
