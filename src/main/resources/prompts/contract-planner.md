@@ -25,7 +25,7 @@ dependsOn lists only other unit ids, never itself, a feature id or an api id; us
 Return minified JSON without indentation. Target 11000-12000 characters for a simple record app.
 Do not repeat requirements, acceptance IDs, shared imports or implementation prose in objectives.
 Reuse request/response types when their shapes match; do not invent DTOs or extra API endpoints for optional UI controls.
-For MERN set unit acceptanceIds to []; the coordinator assigns checks to units, never route/api owners.
+For MERN set unit acceptanceIds to []; you set each route/api owner to a unit id, and the coordinator assigns each check to the unit owning its api or route.
 {{freshMernPolicy}}
 Field kind: STRING/NUMBER/BOOLEAN/JSON/STRING_ARRAY/NUMBER_ARRAY/JSON_ARRAY. Type references are names or name[].
 API requestType/responseType must reference a declared types name, or the built-ins unknown/ApiError/Credentials/AuthSession.

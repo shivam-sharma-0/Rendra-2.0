@@ -81,9 +81,9 @@ class ContractPlannerTest {
                     "dependsOn lists only other unit ids, never itself, a feature id or an api id","Each file is in exactly one unit's ownedPaths",
                     "A route's owner lists its componentPath","owner of every api entry with that routerPath","3-6 cohesive units for a typical app, at most 12",
                     "MERN CRUD always declares the record GET","Every acceptance.api request except HEALTH and /api/auth/* must match a declared api",
-                    "For ACCOUNTS every api entry is authenticated:true","one server unit per router"))
+                    "For ACCOUNTS every api entry is authenticated:true","one server unit per router","you set each route/api owner to a unit id, and the coordinator assigns each check to the unit owning its api or route"))
                 assertTrue(system.contains(rule),rule);
-            assertFalse(system.contains("3-4 cohesive units"));
+            assertFalse(system.contains("3-4 cohesive units"));assertFalse(system.contains("never route/api owners"));
             if(calls.incrementAndGet()==1)return reply(mapper.writeValueAsString(bad));
             String correction=request.messages().getLast().content().replaceAll("\\s+"," ");
             for(String rule:List.of("not a page or feature","each file is in exactly one unit's ownedPaths","owner of every api entry with that routerPath",
