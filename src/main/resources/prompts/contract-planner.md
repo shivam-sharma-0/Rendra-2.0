@@ -28,7 +28,8 @@ Reuse request/response types when their shapes match; do not invent DTOs or extr
 For MERN set unit acceptanceIds to []; you set each route/api owner to a unit id, and the coordinator assigns each check to the unit owning its api or route.
 {{freshMernPolicy}}
 Field kind: STRING/NUMBER/BOOLEAN/JSON/STRING_ARRAY/NUMBER_ARRAY/JSON_ARRAY. Type references are names or name[].
-API requestType/responseType must reference a declared types name, or the built-ins unknown/ApiError/Credentials/AuthSession.
+API requestType/responseType must reference a declared types name, or the built-ins unknown/ApiError/Credentials/AuthSession,
+which the platform already declares: never list those four in types.
 Mongo models are database schemas, not API type declarations. A model named Todo does not declare a Todo API type:
 declare Todo in types too. Do not use void, null, string, boolean, Record or object as type references.
 For a DELETE 204 use responseType unknown; for bodyless GET/DELETE use requestType null.

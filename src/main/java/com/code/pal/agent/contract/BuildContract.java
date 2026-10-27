@@ -25,6 +25,8 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         @JsonInclude(JsonInclude.Include.NON_EMPTY) List<ContractBatch> batches) {
     static final Set<String> SUPPORTED_ENVIRONMENT_NAMES = Set.of(
             "MONGODB_URI", "PORT", "NODE_ENV", "VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY");
+    /** Declared by the coordinator's types.ts for every non-static stack. */
+    static final Set<String> BUILT_IN_TYPES = Set.of("ApiError", "AuthSession", "Credentials");
     public BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisions.Storage storage,
             BuildDecisions.Auth auth, Limits limits, Map<String, String> theme, List<Route> routes,
             List<DataType> types, List<DataType> models, List<Api> api, List<Asset> assets,
@@ -194,6 +196,11 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             bad("Connected Supabase requires the Vite connector hook");
         unique("units: duplicate unit id", "units", units.stream().map(Unit::id).toList());
         unique("types: duplicate type name", "types", types.stream().map(DataType::name).toList());
+        var builtIn = types.stream().map(DataType::name).filter(BUILT_IN_TYPES::contains).toList();
+        if (stack != Stack.STATIC && !builtIn.isEmpty())
+            throw new ContractRuleException("types: built-in type name is reserved", "types " + String.join(", ", builtIn)
+                    + " are platform built-ins (ApiError {error}, Credentials {email, password}, AuthSession {token, userId});"
+                    + " remove them from types and reference them by name");
         unique("models: duplicate model name", "models", models.stream().map(DataType::name).toList());
         unique("routes: duplicate route path", "routes", routes.stream().map(Route::path).toList());
         unique("api: duplicate api id", "api", api.stream().map(Api::id).toList());
@@ -250,7 +257,8 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             if (!route.owner().equals(ownership.get(route.componentPath())))
                 bad("Route ownership mismatch");
         var typeNames = new HashSet<>(types.stream().map(DataType::name).toList());
-        typeNames.addAll(Set.of("ApiError", "AuthSession", "Credentials", "unknown"));
+        typeNames.addAll(BUILT_IN_TYPES);
+        typeNames.add("unknown");
         var routers = new HashMap<String, String>();
         for (var endpoint : api) {
             if (!endpoint.routerPath().startsWith("server/src/") || !endpoint.routerPath().endsWith(".ts"))

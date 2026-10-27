@@ -69,7 +69,7 @@ public final class ContractScaffold {
         }
         String types = "export type ApiError = { error: string }\nexport type Credentials = { email: string; password: string }\nexport type AuthSession = { token: string; userId: string }\n";
         for (var type : c.types()) {
-            if (Set.of("ApiError", "Credentials", "AuthSession").contains(type.name()))
+            if (BuildContract.BUILT_IN_TYPES.contains(type.name()))
                 throw new IllegalArgumentException("Built-in type name is reserved");
             types += type(type);
         }

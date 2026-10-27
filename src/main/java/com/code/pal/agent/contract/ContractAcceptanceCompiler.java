@@ -65,6 +65,7 @@ final class ContractAcceptanceCompiler {
         Map<String, Object> data = mapper.readValue(content, Map.class);
         boolean changed = fillRouteValues(data);
         changed |= ContractDependencies.normalize(data, approved, mapper);
+        changed |= dropBuiltInTypes(data);
         if (!"MERN".equals(data.get("stack")))
             return changed ? mapper.writeValueAsString(data) : content;
         changed |= removeExactDuplicates(data);
@@ -292,6 +293,33 @@ final class ContractAcceptanceCompiler {
 
     /** A uniquely named create/add click that a FILL prepares and ui_created asserts is the required ui_add; only its id changes. */
     @SuppressWarnings("unchecked")
+    /** The coordinator's types.ts already declares the built-ins, so a model copy no api references would collide with
+     * it at scaffold time. A referenced copy is left for the validator: its shape may differ from the built-in. */
+    private static boolean dropBuiltInTypes(Map<String, Object> data) {
+        if ("STATIC".equals(data.get("stack")) || !(data.get("types") instanceof List<?> types))
+            return false;
+        var used = new HashSet<String>();
+        if (data.get("api") instanceof List<?> api)
+            for (Object value : api)
+                if (value instanceof Map<?, ?> endpoint)
+                    for (String key : List.of("requestType", "responseType"))
+                        if (endpoint.get(key) instanceof String type)
+                            used.add(type.endsWith("[]") ? type.substring(0, type.length() - 2) : type);
+        var kept = new ArrayList<Object>();
+        var dropped = new ArrayList<String>();
+        for (Object value : types)
+            if (value instanceof Map<?, ?> type && type.get("name") instanceof String name
+                    && BuildContract.BUILT_IN_TYPES.contains(name) && !used.contains(name))
+                dropped.add(name);
+            else
+                kept.add(value);
+        if (dropped.isEmpty())
+            return false;
+        data.put("types", kept);
+        log.info("planner_built_in_types_dropped names={}", dropped);
+        return true;
+    }
+
     private static boolean alignAddClickId(Map<String, Object> data) {
         if (!(data.get("acceptance") instanceof Map<?, ?> acceptance) || !(acceptance.get("browser") instanceof List<?> browser)
                 || !(data.get("units") instanceof List<?> units)) return false;

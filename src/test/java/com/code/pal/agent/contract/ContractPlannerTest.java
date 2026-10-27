@@ -138,6 +138,21 @@ class ContractPlannerTest {
         Map<String,Object> unprepared=flows.editFlow("ui_edit_post","ui_edit_post_submit");((List<?>)((Map<?,?>)unprepared.get("acceptance")).get("browser")).remove(4);
         assertEquals(signature,assertThrows(ContractPlanner.Rejected.class,()->planner.validate(input,reply(mapper.writeValueAsString(unprepared)),true)).signature());
     }
+    @Test void unreferencedBuiltInTypeCopiesAreDroppedSoTheContractScaffoldsButAReferencedCopyIsRejected(){
+        // Live E2E 2026-10-27: Credentials/AuthSession in types passed validation, then failed the scaffold uncorrected.
+        var c=ContractFixtures.accounts();var input=new ContractPlanner.Input(c.id(),"Items","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits());
+        Map<String,Object> proposal=mapper.readValue(mapper.writeValueAsString(c),Map.class);var types=(List<Object>)proposal.get("types");
+        types.add(Map.of("name","Credentials","fields",List.of(Map.of("name","email","kind","STRING","optional",false),Map.of("name","password","kind","STRING","optional",false))));
+        types.add(Map.of("name","AuthSession","fields",List.of(Map.of("name","token","kind","STRING","optional",false))));
+        String copies=mapper.writeValueAsString(proposal),signature="types: built-in type name is reserved";
+        assertEquals(signature,assertThrows(ContractPlanner.Rejected.class,()->planner.validate(input,reply(copies),false)).signature());
+        var normalized=planner.validate(input,reply(copies),true).contract();
+        assertEquals(c.types(),normalized.types());
+        assertDoesNotThrow(()->new ContractScaffold(mapper).render(normalized,"Items",path->null));
+        ((List<Map<String,Object>>)proposal.get("api")).getFirst().put("responseType","AuthSession");
+        String referenced=mapper.writeValueAsString(proposal);
+        assertEquals(signature,assertThrows(ContractPlanner.Rejected.class,()->planner.validate(input,reply(referenced),true)).signature());
+    }
     LlmClient.LlmResult reply(String body){return new LlmClient.LlmResult(body,null,List.of(),new LlmClient.Usage(20,30),"stop");}
     @Test void oneValidPlannerCallAndOneBoundedCorrectionHaveDistinctMeteringPurposes() {
         var count=new AtomicInteger();var purposes=new ArrayList<CallPurpose>();

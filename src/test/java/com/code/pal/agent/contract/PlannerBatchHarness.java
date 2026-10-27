@@ -259,6 +259,14 @@ public final class PlannerBatchHarness {
         if (normalize) { events.start(); logger.addAppender(events); }
         try {
             var validated = planner.validate(input, proposal, normalize);
+            try {
+                // A valid contract must also scaffold, as the coordinator does next on a fresh project.
+                new ContractScaffold(new ObjectMapper()).render(validated.contract(), "Synthetic planner batch", path -> null);
+            } catch (IllegalArgumentException scaffold) {
+                result.put("valid", false); result.put("signature", "scaffold: " + scaffold.getMessage());
+                result.put("reason", scaffold.getMessage());
+                return result;
+            }
             result.put("valid", true); result.put("browserActions", validated.contract().acceptance().browser().size());
             result.put("apiActions", validated.contract().acceptance().api().size());
         } catch (ContractPlanner.Rejected rejected) {
