@@ -101,12 +101,13 @@ class ContractPlannerTest {
         var fresh=new ContractPlanner.Input(c.id(),"Build Items","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");var calls=new AtomicInteger();
         assertEquals(c,planner.plan(fresh,model,request->{
             String system=request.messages().getFirst().content().replaceAll("\\s+"," ");
-            for(String rule:List.of("Tags, labels and categories are a STRING_ARRAY field of the record, edited in its create/update form and filtered in the client",
-                    "Do not declare /api/tags or any second resource router for them unless the user explicitly asks to manage them separately, and then cover every endpoint with acceptance checks"))
+            for(String rule:List.of("Tags and labels are a STRING_ARRAY field of the record (a single category is a STRING field), edited in its create/update form and filtered in the client",
+                    "Do not declare /api/tags or any second resource router for tags, labels or categories unless the user explicitly asks to manage them separately, and then cover every endpoint with acceptance checks"))
                 assertTrue(system.contains(rule),rule);
             assertFalse(system.contains("Keep tags as a STRING_ARRAY field of the record."));
             if(calls.incrementAndGet()==1)return reply(mapper.writeValueAsString(bad));
-            assertTrue(request.messages().getLast().content().replaceAll("\\s+"," ").contains("unless the user explicitly asked to manage them separately, tags, labels and categories are a STRING_ARRAY record field, not a separate router"));
+            assertTrue(request.messages().getLast().content().replaceAll("\\s+"," ").contains("unless the user explicitly asked to manage them separately, tags and labels are a STRING_ARRAY record field and a single category a STRING field, never a separate router"));
+            assertFalse(system.contains("categories are a STRING_ARRAY"));
             return reply(mapper.writeValueAsString(c));}));assertEquals(2,calls.get());
     }
     @Test void freshRequestedCrudCannotBeCertifiedByAHeadingOnly(){
