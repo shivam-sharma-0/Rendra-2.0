@@ -26,6 +26,19 @@ public record BehaviorCriteria(int schema, List<BrowserAction> browser, List<Api
     }
 
     public record BrowserAction(String id, BrowserKind kind, String selector, String value) {
+        /** The canonical failure diagnostic: names the step's platform-validated kind, selector and value so a repair
+         * knows which element to render, and stays exactly reproducible from the contract for owner attribution. */
+        public String failureMessage() {
+            // Capped well below the 500-character runtime diagnostic bound, so the text is never truncated.
+            return "Required interaction " + id + " did not pass: " + kind
+                    + (selector == null ? "" : " " + abbreviate(selector, 200))
+                    + (value == null ? "" : " expecting \"" + abbreviate(value, 80) + "\"")
+                    + "; render a matching element on the page where this step runs";
+        }
+
+        private static String abbreviate(String text, int max) {
+            return text.length() <= max ? text : text.substring(0, max) + "...";
+        }
     }
 
     public enum ApiKind {

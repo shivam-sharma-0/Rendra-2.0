@@ -28,8 +28,8 @@ public final class ContractAcceptanceFailures {
         }
         for (var diagnostic : report.introducedDiagnostics()) {
             if (diagnostic.severity() == DiagnosticSeverity.ERROR && "BROWSER_ACCEPTANCE_FAILED".equals(diagnostic.code())) {
-                contract.acceptance().browser().stream().filter(action ->
-                        ("Required interaction " + action.id() + " did not pass").equals(diagnostic.message()))
+                contract.acceptance().browser().stream().filter(action -> action.failureMessage().equals(diagnostic.message())
+                        || ("Required interaction " + action.id() + " did not pass").equals(diagnostic.message()))
                         .forEach(action -> failed.add(action.id()));
             }
         }

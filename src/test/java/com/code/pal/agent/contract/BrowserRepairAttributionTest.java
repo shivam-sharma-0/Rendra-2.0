@@ -93,6 +93,18 @@ class BrowserRepairAttributionTest {
     }
 
     @Test
+    void theDescriptiveFailureMessageAttributesOnlyWhenItExactlyMatchesTheContractStep() {
+        // Live E2E 2026-10-28 (run 33): the bare "did not pass" text left the repair model guessing which element to render.
+        var action = contract.acceptance().browser().stream().filter(step -> step.id().equals("heading_0")).findFirst().orElseThrow();
+        String message = action.failureMessage();
+        assertTrue(message.startsWith("Required interaction heading_0 did not pass: " + action.kind()));
+        assertTrue(message.length() < 500);
+        assertFalse(ContractCoordinator.affected(contract, failure(0, message)).isEmpty());
+        for (String lookalike : List.of(message.replace(String.valueOf(action.kind()), "RELOAD"), message + " ", "x" + message))
+            assertTrue(ContractCoordinator.affected(contract, failure(0, lookalike)).isEmpty(), lookalike);
+    }
+
+    @Test
     void failedCompletionKeepsEarlierCreateStepsInTheRepairContext() {
         var original = SpecFixtures.browser();
         var scenario = new ApprovedSpec.Acceptance("complete_task_scenario", "tasks", "BROWSER",
