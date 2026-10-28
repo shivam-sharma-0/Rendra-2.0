@@ -65,6 +65,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private final Duration requestTimeout;
     private final Duration rejectedKeyCooldown;
     private final long streamIdleTimeoutNanos;
+    private final AgentProperties.Dev dev;
     private boolean accountingRequired;
 
     @PostConstruct
@@ -72,6 +73,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 
     public OpenAiCompatibleLlmClient(AgentProperties props, ObjectMapper objectMapper) {
         AgentProperties.Llm llm = props.getLlm();
+        this.dev = props.getDev();
         this.objectMapper = objectMapper;
         this.defaultTemperature = llm.getTemperature();
         this.maxAttempts = Math.max(1, llm.getMaxAttempts());
@@ -114,6 +116,8 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     @Override
     public LlmResult chatStreaming(LlmRequest request, Consumer<String> onTextDelta) {
         String provider = normalizeProvider(request.provider());
+        if (provider.equals("codex"))
+            return CodexCliClient.run(request, dev);
         EndpointPool pool = endpointPools.get(provider);
         if (pool == null || !pool.isConfigured()) {
             throw new LlmException("LLM provider is not configured: " + provider);

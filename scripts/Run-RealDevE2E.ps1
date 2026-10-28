@@ -13,7 +13,9 @@ param(
     [switch]$IsolatedClasses,
     [switch]$TracePlanning,
     [switch]$PersonalTodo,
-    [switch]$GenerationImprovements
+    [switch]$GenerationImprovements,
+    # Developer-only: units use the operator's logged-in Codex CLI (small model, low effort) to compare model quality.
+    [switch]$CodexRoute
 )
 $ErrorActionPreference='Stop'
 $selectedGates = @(@($PhaseOneGate, $PhaseTwoGate, $AgentBenchmark, $ViteGeneration, $PlanningIntake) | Where-Object { $_ })
@@ -139,7 +141,7 @@ END $codex$;
         Wsl-Check @('psql','-h','127.0.0.1','-p',"$pgPort",'-U','codepal_codex_it','-d',$taskId,'-w','-v','ON_ERROR_STOP=1','-c',$sanitizeCopy)
         $evidence.copiedApplicationRowsRemovedBeforeBoot = $true
         $evidence.modelPayload = 'Synthetic test prompts/history, fixture/generated source and platform prompts/tool schemas only; Phase Two also uses one synthetic pixel'
-        $evidence.modelDestinations = @('https://openrouter.ai/api/v1', 'https://api.mistral.ai/v1', 'https://integrate.api.nvidia.com/v1', 'https://api.groq.com/openai/v1')
+        $evidence.modelDestinations = @('https://openrouter.ai/api/v1', 'https://api.mistral.ai/v1', 'https://integrate.api.nvidia.com/v1', 'https://api.groq.com/openai/v1') + @(if ($CodexRoute) { 'local Codex CLI (operator ChatGPT login)' })
     }
     # Never execute copied active jobs or retain their live queue/outbox ownership.
     Wsl-Check @('psql','-h','127.0.0.1','-p',"$pgPort",'-U','codepal_codex_it','-d',$taskId,'-w','-c',"update agent_runs set status='FAILED' where status in ('RUNNING','QUEUED','COMMITTING');")
@@ -198,7 +200,8 @@ END $codex$;
             ('--app.agent.models.free-plan=' + ($planningRouteOrder -join ',')),
             ('--app.agent.requirements.models=' + ($requirementsRouteOrder -join ',')),
             '--app.agent.planning.max-route-attempts=3',
-            '--app.agent.models.free-build=mistral:codestral-latest,nvidia:nvidia/nemotron-3-ultra-550b-a55b,groq:openai/gpt-oss-120b',
+            ('--app.agent.models.free-build=' + $(if ($CodexRoute) { 'codex:gpt-5.6-luna,' } else { '' }) + 'mistral:codestral-latest,nvidia:nvidia/nemotron-3-ultra-550b-a55b,groq:openai/gpt-oss-120b'),
+            ('--app.agent.dev.codex-enabled=' + ([bool]$CodexRoute).ToString().ToLower()),
             '--app.agent.models.vision=nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia:meta/llama-3.2-11b-vision-instruct')
     }
     if($Scenario -eq 'reject'){$appArgs+=@('--app.agent.models.free-build=mistral:codestral-latest','--app.agent.models.free-chat=mistral:codestral-latest','--app.agent.providers.mistral.api-keys[0]=invalid-e2e-rejection-test','--app.agent.providers.mistral.api-key=invalid-e2e-rejection-test')}

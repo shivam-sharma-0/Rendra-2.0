@@ -47,6 +47,12 @@
     "images": false,
     "evidence": "Same model and application caps as the OpenRouter free route (published 1000000 context / 65536 completion); NVIDIA chat verified 2026-10-27 after nemotron-3-super became unavailable to the account"
   },
+  "codex:gpt-5.6-luna": {
+    "inputTokens": 65536,
+    "outputTokens": 8192,
+    "images": false,
+    "evidence": "Developer-only route through the operator's logged-in Codex CLI (app.agent.dev.codex-enabled, off by default); application caps only, usage unreported; added 2026-10-28 for local model evaluation"
+  },
   "groq:openai/gpt-oss-120b": {
     "inputTokens": 65536,
     "outputTokens": 8192,

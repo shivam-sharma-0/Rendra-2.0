@@ -146,6 +146,7 @@ public class AgentProperties implements EnvironmentAware {
     private final Llm llm = new Llm();
     private final Models models = new Models();
     private final Sandbox sandbox = new Sandbox();
+    private final Dev dev = new Dev();
     private final Limits limits = new Limits();
     /** Application request limits for shipped routes; unknown routes require explicit configuration. */
     private Map<String, AccountingBound> accountingBounds = AccountingBounds.load();
@@ -478,6 +479,18 @@ public class AgentProperties implements EnvironmentAware {
                 return List.of(apiKey);
             return List.of();
         }
+    }
+
+    /** Developer-only experiments; every switch is off by default and none is a production route. */
+    @Getter
+    @Setter
+    public static class Dev {
+        /** Lets a {@code codex:<model>} route call the operator's own logged-in Codex CLI (local evaluation only). */
+        private boolean codexEnabled = false;
+        private String codexCommand = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")
+                ? "codex.cmd" : "codex";
+        /** Kept low: the experiment measures the pipeline with a stronger model, not the most expensive setting. */
+        private String codexReasoningEffort = "low";
     }
 
     @Getter
