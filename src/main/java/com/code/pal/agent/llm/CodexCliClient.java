@@ -20,6 +20,7 @@ import java.util.stream.Stream;
  * Each call runs {@code codex exec} read-only in an empty temporary directory with the prompt on stdin, keeps only the
  * final message, and reports no token usage (the CLI exposes only a combined total).
  */
+@lombok.extern.slf4j.Slf4j
 final class CodexCliClient {
     private CodexCliClient() {}
 
@@ -43,12 +44,22 @@ final class CodexCliClient {
             try (var stdin = process.getOutputStream()) {
                 stdin.write(prompt(request).getBytes(StandardCharsets.UTF_8));
             }
-            long deadline = System.nanoTime() + (request.budget() == null ? Duration.ofMinutes(10) : request.budget()).toNanos();
+            long started = System.nanoTime();
+            Duration limit = Duration.ofSeconds(Math.max(30, dev.getCodexTimeoutSeconds()));
+            if (request.budget() != null && request.budget().compareTo(limit) < 0) limit = request.budget();
+            long deadline = started + limit.toNanos();
+            log.info("codex_call_started model={} effort={} promptChars={}", request.model(), dev.getCodexReasoningEffort(),
+                    prompt(request).length());
             while (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
                 if (RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted())
                     throw new LlmCancelledException();
-                if (System.nanoTime() > deadline) throw new LlmException("The developer Codex route timed out");
+                if (System.nanoTime() > deadline) {
+                    log.warn("codex_call_timed_out model={} afterMs={}", request.model(), (System.nanoTime() - started) / 1_000_000);
+                    throw new LlmException("The developer Codex route timed out");
+                }
             }
+            log.info("codex_call_finished model={} exit={} elapsedMs={}", request.model(), process.exitValue(),
+                    (System.nanoTime() - started) / 1_000_000);
             if (process.exitValue() != 0 || !Files.isRegularFile(last))
                 throw new LlmException("The developer Codex route failed with exit " + process.exitValue());
             return new LlmClient.LlmResult(Files.readString(last, StandardCharsets.UTF_8).strip(), null, List.of(), null, "stop");

@@ -494,6 +494,8 @@ public class AgentProperties implements EnvironmentAware {
                 ? "codex.cmd" : "codex";
         /** Kept low: the experiment measures the pipeline with a stronger model, not the most expensive setting. */
         private String codexReasoningEffort = "low";
+        /** A hung CLI call fails within this bound instead of holding the run until its lease is recovered. */
+        private int codexTimeoutSeconds = 300;
     }
 
     @Getter
