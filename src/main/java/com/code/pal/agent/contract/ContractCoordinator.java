@@ -516,7 +516,7 @@ public final class ContractCoordinator {
                 fixes.put(path, fixed);
             }
             var assigned = contract.acceptance().browser().stream().filter(action -> unit.acceptanceIds().contains(action.id())).toList();
-            AcceptanceAttributes.nameFields(assigned, fixes).forEach((path, fixed) -> {
+            AcceptanceAttributes.actionButtons(assigned, AcceptanceAttributes.nameFields(assigned, fixes)).forEach((path, fixed) -> {
                 if (!fixed.equals(originals.get(path))) output.add(new UnitGenerator.Delta(path, versions.get(path), fixed));
             });
         }
