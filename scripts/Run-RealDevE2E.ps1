@@ -14,8 +14,9 @@ param(
     [switch]$TracePlanning,
     [switch]$PersonalTodo,
     [switch]$GenerationImprovements,
-    # Developer-only: units use the operator's logged-in Codex CLI (small model, low effort) to compare model quality.
-    [switch]$CodexRoute
+    # Developer-only: units use the operator's logged-in Codex CLI (low effort) to compare model quality; -CodexModel picks the model.
+    [switch]$CodexRoute,
+    [ValidateSet('gpt-5.6-luna','gpt-5.6-sol')][string]$CodexModel='gpt-5.6-sol'
 )
 $ErrorActionPreference='Stop'
 $selectedGates = @(@($PhaseOneGate, $PhaseTwoGate, $AgentBenchmark, $ViteGeneration, $PlanningIntake) | Where-Object { $_ })
@@ -200,7 +201,7 @@ END $codex$;
             ('--app.agent.models.free-plan=' + ($planningRouteOrder -join ',')),
             ('--app.agent.requirements.models=' + ($requirementsRouteOrder -join ',')),
             '--app.agent.planning.max-route-attempts=3',
-            ('--app.agent.models.free-build=' + $(if ($CodexRoute) { 'codex:gpt-5.6-luna,' } else { '' }) + 'mistral:codestral-latest,nvidia:nvidia/nemotron-3-ultra-550b-a55b,groq:openai/gpt-oss-120b'),
+            ('--app.agent.models.free-build=' + $(if ($CodexRoute) { 'codex:' + $CodexModel + ',' } else { '' }) + 'mistral:codestral-latest,nvidia:nvidia/nemotron-3-ultra-550b-a55b,groq:openai/gpt-oss-120b'),
             ('--app.agent.dev.codex-enabled=' + ([bool]$CodexRoute).ToString().ToLower()),
             '--app.agent.models.vision=nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia:meta/llama-3.2-11b-vision-instruct')
     }

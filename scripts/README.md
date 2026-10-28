@@ -217,7 +217,7 @@ unavailable; final app proof remains required. The default account-backed `-Scen
 its separate stricter intake/account checks and results. Intake usage is exported even before generation;
 an intake stop is never masked by a missing build.json read.
 
-`-CodexRoute` (developer evaluation only, added 2026-10-28) makes `codex:gpt-5.6-luna` the first free-build route and sets
+`-CodexRoute` (developer evaluation only, added 2026-10-28) makes `codex:<-CodexModel>` (`gpt-5.6-sol` by default, or `gpt-5.6-luna`) the first free-build route and sets
 `app.agent.dev.codex-enabled=true` for that fixture, so unit generation runs through the operator's own logged-in Codex
 CLI (`codex exec`, read-only sandbox, empty temp directory, reasoning effort `low`); Codestral, NVIDIA and Groq stay as
 alternates. It needs `codex login` on this machine, reports model usage as unknown and is never a production route.
