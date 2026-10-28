@@ -825,6 +825,33 @@ class ContractAcceptanceCompilerTest {
         }
     }
 
+    @Test void aSeparateCreatePageIsOpenedByALinkClickBeforeItsFillsAndItsOwnerAlsoReceivesThem(){
+        // Live E2E 2026-10-28 (run 30): /tasks/create had its own page, but ui_fill ran on "/" where no add form existed.
+        for(String[] creators:List.of(new String[]{"creator"},new String[]{"ui"},new String[]{"creator","other"},new String[]{"creator","opened"})){
+            Map<String,Object> data=addFlow("ui_add");
+            var routes=(List<Map<String,Object>>)data.get("routes");
+            int count=creators.length==2&&creators[1].equals("opened")?1:creators.length;
+            for(int i=0;i<count;i++){
+                String owner=creators[i],file="client/src/pages/Create"+i+".tsx";
+                if(!owner.equals("ui"))units(data).add(new LinkedHashMap<>(Map.of("id",owner,"objective","Create","ownedPaths",List.of(file),"imports",List.of(),"dependsOn",List.of(),"acceptanceIds",List.of())));
+                routes.add(Map.of("path",i==0?"/items/new":"/notes/create","componentPath",owner.equals("ui")?"client/src/App.tsx":file,"owner",owner));
+            }
+            if(count<creators.length)browser(data).add(0,action("ui_new","CLICK","a[href='#/items/new']",null));
+            Map<String,Object> compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),Map.class);
+            var ids=browser(compiled).stream().map(step->step.get("id")).toList();
+            var byId=new HashMap<Object,List<?>>();units(compiled).forEach(unit->byId.put(unit.get("id"),(List<?>)unit.get("acceptanceIds")));
+            if(creators.length==1&&creators[0].equals("creator")){
+                assertEquals(List.of("ui_open_create","ui_fill_title","ui_add"),ids.subList(0,3));
+                assertEquals("a[href='#/items/new']",browser(compiled).getFirst().get("selector"));
+                assertTrue(byId.get("ui").containsAll(List.of("ui_open_create","ui_fill_title","ui_add")));
+                assertEquals(List.of("ui_fill_title","ui_add"),byId.get("creator"));
+            }else{
+                assertFalse(ids.contains("ui_open_create"),String.join(",",creators));
+                if(byId.containsKey("creator"))assertEquals(List.of(),byId.get("creator"));
+            }
+        }
+    }
+
     Map<String,Object> editFlow(String openId,String submitId){
         Map<String,Object> data=addFlow("ui_add");browser(data).get(3).put("id",openId);browser(data).get(5).put("id",submitId);return data;
     }

@@ -82,6 +82,7 @@ final class ContractAcceptanceCompiler {
         changed |= alignOwnersToFiles(data, true);
         changed |= alignOwnersToFiles(data, false);
         changed |= trimOptionalBrowserChecks(data, requiredScope);
+        changed |= openCreatePage(data, mapper);
         changed |= bindAccountApiGuards(data);
         changed |= AccountAcceptance.normalize(data, mapper);
         var criteria = mapper.convertValue(data.get("acceptance"), BehaviorCriteria.class);
@@ -146,6 +147,7 @@ final class ContractAcceptanceCompiler {
         for (var action : criteria.browser())
             changed |= assign(units, frontend, action.id());
         changed |= shareEditChecks(units, frontend, criteria.browser(), (List<?>) data.get("routes"), mapper);
+        changed |= shareCreateChecks(units, frontend, criteria.browser(), (List<?>) data.get("routes"), mapper);
         for (var check : checks) {
             String owner = declared.stream()
                     .filter(api -> api.method().equals(check.method())
@@ -986,6 +988,83 @@ final class ContractAcceptanceCompiler {
         assigned.addAll(shared);
         editor.put("acceptanceIds", assigned);
         log.info("planner_edit_checks_shared owner={} ids={}", editors.getFirst(), shared);
+        return true;
+    }
+
+    /** The one static create route (last segment create, new or add) owned by a unit other than the "/" owner. */
+    private static BuildContract.Route createRoute(List<?> routes, ObjectMapper mapper) {
+        var all = routes.stream().map(value -> mapper.convertValue(value, BuildContract.Route.class)).toList();
+        var creators = all.stream().filter(route -> route.path().matches("(?:/[A-Za-z0-9_-]+)*/(?:create|new|add)")).toList();
+        String root = all.stream().filter(route -> route.path().equals("/")).map(BuildContract.Route::owner)
+                .findFirst().orElse(null);
+        if (creators.size() != 1 || root == null || creators.getFirst().owner().equals(root)
+                || !creators.getFirst().owner().matches("[A-Za-z0-9_-]{1,64}"))
+            return null;
+        return creators.getFirst();
+    }
+
+    /** The browser flow starts on "/". When the add form lives on a separate create route and no click opens it before
+     * the FILLs that prepare ui_add, a link click to that route is inserted there; nothing is removed or weakened. */
+    @SuppressWarnings("unchecked")
+    private static boolean openCreatePage(Map<String, Object> data, ObjectMapper mapper) {
+        if (!(data.get("acceptance") instanceof Map<?, ?> acceptance) || !(acceptance.get("browser") instanceof List<?> raw)
+                || !(data.get("routes") instanceof List<?> routes) || raw.size() >= 24)
+            return false;
+        BuildContract.Route creator;
+        try {
+            creator = createRoute(routes, mapper);
+        } catch (RuntimeException malformed) {
+            return false;
+        }
+        if (creator == null)
+            return false;
+        var browser = (List<Map<String, Object>>) raw;
+        int add = -1;
+        for (int i = 0; i < browser.size(); i++) {
+            if (!(browser.get(i) instanceof Map<?, ?> action) || !(action.get("id") instanceof String id)) return false;
+            if (id.equals("ui_open_create")) return false;
+            if (id.equals("ui_add")) add = i;
+        }
+        int start = add;
+        while (start > 0 && Set.of("FILL", "SELECT").contains(browser.get(start - 1).get("kind"))) start--;
+        if (add < 0 || start == add || start > 0 && "CLICK".equals(browser.get(start - 1).get("kind")))
+            return false;
+        var open = new LinkedHashMap<String, Object>();
+        open.put("id", "ui_open_create");
+        open.put("kind", "CLICK");
+        open.put("selector", "a[href='#" + creator.path() + "']");
+        open.put("value", null);
+        var updated = new ArrayList<Object>(browser);
+        updated.add(start, open);
+        ((Map<String, Object>) acceptance).put("browser", updated);
+        log.info("planner_create_page_opened path={} owner={}", creator.path(), creator.owner());
+        return true;
+    }
+
+    /** With a separate create route, the add form is typed and submitted on that unit's page: it also receives the
+     * FILL/SELECT steps after ui_open_create and ui_add, so it renders their selectors. Nothing is removed from "/". */
+    @SuppressWarnings("unchecked")
+    private static boolean shareCreateChecks(List<Map<String, Object>> units, String frontend,
+            List<BehaviorCriteria.BrowserAction> browser, List<?> routes, ObjectMapper mapper) {
+        var ids = browser.stream().map(BehaviorCriteria.BrowserAction::id).toList();
+        int open = ids.indexOf("ui_open_create"), add = ids.indexOf("ui_add");
+        var creator = open < 0 || add <= open ? null : createRoute(routes, mapper);
+        if (frontend == null || creator == null || creator.owner().equals(frontend))
+            return false;
+        var unit = units.stream().filter(value -> creator.owner().equals(value.get("id"))).findFirst().orElse(null);
+        if (unit == null)
+            return false;
+        var assigned = new ArrayList<>((List<String>) unit.get("acceptanceIds"));
+        var shared = new ArrayList<String>();
+        for (int i = open + 1; i <= add; i++)
+            if ((i == add || Set.of(BehaviorCriteria.BrowserKind.FILL, BehaviorCriteria.BrowserKind.SELECT)
+                    .contains(browser.get(i).kind())) && !assigned.contains(ids.get(i)) && ids.get(i).matches("[A-Za-z0-9_-]{1,64}"))
+                shared.add(ids.get(i));
+        if (shared.isEmpty() || assigned.size() + shared.size() > 48)
+            return false;
+        assigned.addAll(shared);
+        unit.put("acceptanceIds", assigned);
+        log.info("planner_create_checks_shared owner={} ids={}", creator.owner(), shared);
         return true;
     }
 
