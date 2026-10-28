@@ -1,5 +1,6 @@
 package com.code.pal.agent.config;
 
+import com.code.pal.project.domain.ProjectType;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -19,6 +20,12 @@ class AgentPropertiesDevRouteTest {
             properties.decryptKeys();
             assertEquals(enabled ? List.of("codex:gpt-5.6-luna", "mistral:codestral-latest") : List.of("mistral:codestral-latest"),
                     properties.getModels().getFreeBuild());
+            if (enabled) {
+                // Attempt 24: an unparsed "codex:" prefix became part of the model id, so no accounting bound matched.
+                properties.setBillingMode(AgentProperties.BillingMode.FREE);
+                assertEquals(new AgentProperties.ModelSelection("codex", "gpt-5.6-luna"),
+                        properties.preferredModel(ProjectType.BUILD));
+            }
         }
     }
 }

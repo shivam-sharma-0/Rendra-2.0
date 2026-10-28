@@ -802,7 +802,7 @@ public class AgentProperties implements EnvironmentAware {
         int separator = configured.indexOf(':');
         if (separator > 0) {
             String candidate = configured.substring(0, separator).toLowerCase(Locale.ROOT);
-            if (candidate.equals("openrouter") || candidate.equals("nvidia")
+            if (candidate.equals("openrouter") || candidate.equals("nvidia") || candidate.equals("codex")
                     || providers.containsKey(candidate)) {
                 return new ModelSelection(candidate, configured.substring(separator + 1));
             }
