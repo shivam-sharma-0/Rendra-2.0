@@ -344,7 +344,7 @@ app:
       install-network: ${AGENT_SANDBOX_INSTALL_NETWORK:bridge}
       install-timeout-ms: ${AGENT_SANDBOX_INSTALL_TIMEOUT_MS:300000}
       max-dependency-bytes: ${AGENT_SANDBOX_MAX_DEPENDENCY_BYTES:1000000000}
-      dependency-install-attempts: ${AGENT_DEPENDENCY_INSTALL_ATTEMPTS:2}
+      dependency-install-attempts: ${AGENT_DEPENDENCY_INSTALL_ATTEMPTS:3}
       command-state-attempts: ${AGENT_COMMAND_STATE_ATTEMPTS:3}
       command-state-timeout-ms: ${AGENT_COMMAND_STATE_TIMEOUT_MS:10000}
       # Runtime check: the staged site is loaded in headless Chromium (no network) before commit.

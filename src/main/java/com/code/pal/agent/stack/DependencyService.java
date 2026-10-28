@@ -49,6 +49,11 @@ public class DependencyService {
     private static final Pattern TRANSIENT_NETWORK = Pattern.compile("(?i)\\bcode (?:ETIMEDOUT|ECONNRESET|ECONNREFUSED"
             + "|EAI_AGAIN|ENOTFOUND|ESOCKETTIMEDOUT|EPIPE|E429|E50[0234])\\b|problem related to network connectivity");
 
+    /** True for an install failure caused by registry connectivity rather than by the declared dependencies. */
+    public static boolean registryUnreachable(String message) {
+        return message != null && message.contains("Dependencies could not be installed") && TRANSIENT_NETWORK.matcher(message).find();
+    }
+
     private final Map<UUID, ReentrantLock> locks = new ConcurrentHashMap<>();
     private final StackPacks stacks;
     private final ProjectFiles files;
@@ -161,6 +166,14 @@ public class DependencyService {
             if (failure == null) return null;
             if (!failure.retryable() || attempt + 1 == attempts) return failure.message();
             log.warn("dependency_runtime_retry projectId={} stack={} attempt={}", projectId, stack.id(), attempt + 1);
+            if (registryUnreachable(failure.message()))
+                try {
+                    // A flaky registry often recovers within seconds; an immediate retry tends to hit the same reset.
+                    Thread.sleep(2_000L * (attempt + 1));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new LlmCancelledException();
+                }
         }
         throw new IllegalStateException("Unreachable dependency install loop");
     }

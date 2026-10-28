@@ -9,6 +9,7 @@ import com.code.pal.agent.plan.AgentPlanState;
 import com.code.pal.agent.starter.Starter;
 import com.code.pal.agent.route.*;
 import com.code.pal.agent.repair.StructuredRepair;
+import com.code.pal.agent.stack.DependencyService;
 import com.code.pal.agent.tool.AgentContext;
 import com.code.pal.agent.validation.*;
 import com.code.pal.agent.workspace.ProjectFiles;
@@ -406,6 +407,10 @@ public final class ContractCoordinator {
             String req, Set<String> shared, ValidationReport report,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, Runnable beforeIo, Consumer<String> activity, SpecPlanning planning) {
         beforeIo.run();
+        // An unreachable package registry is not a code defect: no model can repair it, so stop without spending calls.
+        if (!report.introducedDiagnostics().isEmpty() && report.introducedDiagnostics().stream().allMatch(diagnostic ->
+                "DEPENDENCY_INSTALL_FAILED".equals(diagnostic.code()) && DependencyService.registryUnreachable(diagnostic.message())))
+            throw new WorkflowStageException("The package registry could not be reached; try again shortly");
         if (fixRelativeImports(ctx, c, units, report)) return;
         if (c.schemaVersion() == 2) {
             int beforeFix = changes.view(ctx).revision();

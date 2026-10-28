@@ -199,8 +199,11 @@ class DependencyServiceTest {
         doAnswer(call -> { installs.add(call.getArgument(1)); return new SandboxPort.CommandResult(false, 1, "npm error code E404\nnpm error 404 Not Found - nope@9", ""); })
                 .when(sandbox).install(any(), anyString(), any());
         project.write("package.json", "{\"dependencies\":{\"nope\":\"9\"}}");
-        assertTrue(service.prepare(project.projectId, ".").failed());
+        var missing = service.prepare(project.projectId, ".");
+        assertTrue(missing.failed());
         assertEquals(1, installs.size(), "a missing package is not retried");
+        assertFalse(DependencyService.registryUnreachable(missing.error()), "a real dependency error still reaches repair");
+        assertTrue(DependencyService.registryUnreachable("client/: Dependencies could not be installed: npm error code ECONNRESET"));
     }
 
     @Test
