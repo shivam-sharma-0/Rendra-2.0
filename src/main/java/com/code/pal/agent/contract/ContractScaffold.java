@@ -149,7 +149,7 @@ public final class ContractScaffold {
     }
 
     public static String revision() {
-        return ContractStore.hash("contract-scaffold-2026-10-27.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
+        return ContractStore.hash("contract-scaffold-2026-10-28.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
                 + "/" + resource("contract/hash-app.tsx"));
     }
 
@@ -209,7 +209,9 @@ public final class ContractScaffold {
         b.append("export const api = {\n");
         for (var a : c.api()) {
             b.append(a.id()).append(": (params: Record<string,string> = {}, ")
-                    .append(a.requestType() == null ? "body?: undefined" : "body: " + ref(a.requestType()))
+                    // PATCH is a partial update: a page that toggles one field must not have to resend the record.
+                    .append(a.requestType() == null ? "body?: undefined" : "body: " + (a.method().equals("PATCH")
+                            && !a.requestType().endsWith("[]") ? "Partial<" + ref(a.requestType()) + ">" : ref(a.requestType())))
                     .append(", token?: string) => request<").append(ref(a.responseType())).append(">(");
             b.append(json(a.path())).append(
                     ".replace(/:([A-Za-z][A-Za-z0-9_]*)/g, (_, key: string) => {if (!params[key]) throw new Error('Missing API parameter'); return encodeURIComponent(params[key])}), ")

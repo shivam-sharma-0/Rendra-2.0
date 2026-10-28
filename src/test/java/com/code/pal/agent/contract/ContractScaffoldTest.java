@@ -28,6 +28,16 @@ class ContractScaffoldTest {
                 "otherProjectAuth", other.get(contract.clientRoot() + "auth-client.ts"),
                 "getMethod", contract.api().stream().filter(api -> api.method().equals("GET")).findFirst().orElseThrow().id())));
     }
+    @Test void patchBodiesArePartialButPutAndPostKeepTheFullRequestType() {
+        // Live E2E 2026-10-28: Home toggled completion with PATCH { completed } and TaskInput demanded every field.
+        var mapper=new ObjectMapper();
+        var patched=mapper.readValue(mapper.writeValueAsString(ContractFixtures.mern()).replace("\"PUT\"","\"PATCH\""),BuildContract.class);
+        String patchApi=scaffold.render(patched,"Fixture",path->null).get(patched.clientRoot()+"api.ts");
+        assertTrue(patchApi.contains("itemPUT: (params: Record<string,string> = {}, body: Partial<Types.ItemInput>"),patchApi);
+        assertTrue(patchApi.contains("itemPOST: (params: Record<string,string> = {}, body: Types.ItemInput,"),patchApi);
+        var put=ContractFixtures.mern();
+        assertTrue(scaffold.render(put,"Fixture",path->null).get(put.clientRoot()+"api.ts").contains("itemPUT: (params: Record<string,string> = {}, body: Types.ItemInput,"));
+    }
     @Test void accountsAlwaysInstallOwnerContextAndOwnerBoundModels() {
         var c=ContractFixtures.accounts();var files=scaffold.render(c,"Fixture",path->null);
         assertTrue(files.get(c.serverRoot()+"register.ts").contains("requireAccount, bindRecordOwner, itemsRouter"));
