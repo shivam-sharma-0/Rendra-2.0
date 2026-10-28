@@ -363,6 +363,9 @@ public class AgentProperties implements EnvironmentAware {
             if (sep <= 0)
                 return true;
             String provider = m.substring(0, sep).toLowerCase(Locale.ROOT);
+            // The developer Codex route authenticates through the local CLI login, not a configured key.
+            if (provider.equals("codex"))
+                return dev.isCodexEnabled();
             Provider p = providers.get(provider);
             return p != null && !p.resolvedKeys().isEmpty();
         }).toList();
