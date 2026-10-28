@@ -98,6 +98,7 @@ then ui_edited ASSERT_TEXT; ui_reload RELOAD then ui_persisted ASSERT_TEXT;
 if completed is requested, ui_complete CLICK on the task checkbox then ui_completed ASSERT_COUNT on checked task checkboxes (value 1);
 ui_delete CLICK then ui_deleted ASSERT_COUNT on task rows (value 0). Add preparatory FILL/CLICK actions as needed.
 Use selectors matching the actual UI. Task text assertions select task rows, never just headings.
+The browser flow starts on /: keep the add form on / (owned by the / route's unit); a separate create page needs a CLICK that opens it before its FILLs.
 Preserve every required check; MERN unit responsibility is assigned by the coordinator.
 Fit CRUD/completion/reload, search, filter and required route checks into one browser flow of at most
 24 actions, including setup. Reuse the created task and edit form. Test one meaningful filter, not every chip;
