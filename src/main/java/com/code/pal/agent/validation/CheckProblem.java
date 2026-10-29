@@ -18,8 +18,9 @@ public record CheckProblem(String title, String detail) {
                 .filter(diagnostic -> diagnostic.code() == null || !diagnostic.code().startsWith("BASELINE_")).findFirst()
                 .or(() -> report.introducedDiagnostics().stream().findFirst());
         String message = first.map(ProjectDiagnostic::message).map(text -> text.replaceAll("\\s+", " ").strip()).orElse("");
+        // A single type check or build carries no check list; its operation names what failed.
         String check = report.checks().stream().filter(ValidationCheck::blocksSuccess).map(ValidationCheck::id)
-                .findFirst().orElse("");
+                .findFirst().orElse(report.operation() == null ? "" : report.operation().name());
         return new CheckProblem("Problem found: " + cause(check, message), message.isEmpty() ? null
                 : message.length() <= MAX_DETAIL ? message : message.substring(0, MAX_DETAIL) + "…");
     }

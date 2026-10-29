@@ -389,10 +389,6 @@ public final class ContractCoordinator {
                 finally { validation.reportProgress(ctx.runId(), null); }
             }
             var report = checked;
-            if (!report.changeValidationPassed()) {
-                var problem = CheckProblem.of(report);
-                BuildActivity.of(activity).problem(problem.title(), problem.detail());
-            }
             if (report.changeValidationPassed() && c.acceptance().api().stream()
                     .anyMatch(step -> report.checks().stream().noneMatch(check -> check.id().equals("API_" + step.id())
                             && check.outcome() == ValidationCheck.Outcome.PASS)))
@@ -406,8 +402,10 @@ public final class ContractCoordinator {
                         "Required browser acceptance is unavailable; staged code was not saved");
             if (report.checks().stream().anyMatch(ValidationCheck::unavailable)
                     || changes.validationProgress(ctx).repairLimitExhausted()
-                    || attempt >= props.getMaxRepairAttempts())
+                    || attempt >= props.getMaxRepairAttempts()) {
+                problem(activity, report);
                 throw new WorkflowStageException("Required application checks did not pass; staged code was not saved");
+            }
             var affected = affected(c, report);
             repair(ctx, run, c, affected, request, approved.requirementsJson(), common.keySet(), report, checkedCall,
                     beforeIo, activity, planning);
@@ -420,9 +418,16 @@ public final class ContractCoordinator {
         return new Outcome(c, "The requested application changes passed the required checks.");
     }
 
+    /** The failed report as the owner reads it, before the repair it starts or the stop it causes. */
+    private static void problem(Consumer<String> activity, ValidationReport report) {
+        var problem = CheckProblem.of(report);
+        BuildActivity.of(activity).problem(problem.title(), problem.detail());
+    }
+
     private void repair(AgentContext ctx, AgentRun run, BuildContract c, List<BuildContract.Unit> units, String request,
             String req, Set<String> shared, ValidationReport report,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, Runnable beforeIo, Consumer<String> activity, SpecPlanning planning) {
+        problem(activity, report);
         beforeIo.run();
         // An unreachable package registry is not a code defect: no model can repair it, so stop without spending calls.
         if (!report.introducedDiagnostics().isEmpty() && report.introducedDiagnostics().stream().allMatch(diagnostic ->

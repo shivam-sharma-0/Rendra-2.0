@@ -144,7 +144,28 @@ class ModelOutputProgressTest {
             if (routed.model().equals("first")) return result(files("export const count=1"));
             throw new LlmHttpException(503, "unavailable");
         }));
-        assertTrue(none.getMessage().contains("alternate route unavailable"), none.getMessage());
+        assertTrue(none.getMessage().contains("made no progress"), none.getMessage());
+    }
+
+    @Test void withEveryAlternateUnreachableTheSameRouteGetsTheOneTurnToldItsAnswerChangedNothing() {
+        // 2026-10-29 owner run: Codestral's repair changed nothing, Groq's key was rejected and NVIDIA was down.
+        var sent = new ArrayList<LlmClient.LlmRequest>();
+        var fixed = call(CallPurpose.UNIT, request(repair("ui_complete")), routed -> {
+            sent.add(routed);
+            if (!routed.model().equals("first")) throw new LlmHttpException(401, "Invalid API key");
+            return result(files(sent.size() == 1 ? "export const count=1" : "export const count=2"));
+        });
+        assertEquals(files("export const count=2"), fixed.content());
+        var routes = sent.stream().map(LlmClient.LlmRequest::model).toList();
+        assertEquals("first", routes.getLast());
+        assertTrue(routes.size() > 2 && !routes.subList(1, routes.size() - 1).contains("first"), routes.toString());
+        var followUp = sent.getLast().messages();
+        assertEquals(List.of("system", "user", "assistant", "user"), followUp.stream().map(LlmClient.LlmMessage::role).toList());
+        assertEquals(files("export const count=1"), followUp.get(2).content());
+        assertEquals(ModelOutputProgress.UNCHANGED, followUp.getLast().content());
+        assertEquals(1, progress.wastedCalls());
+        assertThrows(LlmException.class, () -> call(CallPurpose.UNIT, request(repair("ui_complete")),
+                routed -> result(files("export const count=1"))));
     }
 
     @Test void lineNumberChangesDoNotAllowAnotherCallToTheStagnantRoute() {

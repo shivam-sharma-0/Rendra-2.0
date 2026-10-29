@@ -37,6 +37,10 @@ class CheckProblemTest {
                 new ValidationCheck("TYPE_CHECK", ValidationCheck.Outcome.FAIL, true, "")));
         assertEquals("Problem found: the code has type errors", types.title());
         assertEquals(201, types.detail().length());
+        // 2026-10-29 E2E 38: a wave type check has no check list and read "a required check did not pass".
+        var wave = new ValidationReport(ValidationOperation.TYPE_CHECK, true, false, false, false, 1, "npm", "tsc",
+                List.of(diagnostic("TS2345", "Argument of type 'Todo' is not assignable")), List.of(), 1, 1, 2, "fixture", List.of());
+        assertEquals("Problem found: the code has type errors", CheckProblem.of(wave).title());
         var silent = CheckProblem.of(report(List.of(), new ValidationCheck("RUNTIME", ValidationCheck.Outcome.FAIL, true, "")));
         assertEquals("Problem found: the app did not work as expected in a browser", silent.title());
         assertNull(silent.detail());

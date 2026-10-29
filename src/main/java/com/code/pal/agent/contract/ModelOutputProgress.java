@@ -17,6 +17,8 @@ import java.util.regex.Pattern;
 public final class ModelOutputProgress {
     public record Repeated(AgentProperties.ModelSelection route, int wastedCalls) {}
     private static final Pattern TOKENS = Pattern.compile("\\s+|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`|[\\p{L}\\p{N}_$]+|.", Pattern.DOTALL);
+    static final String UNCHANGED = "Your previous answer changed nothing, so the reported failure is still there. "
+            + "Answer again in the same format with a change to the code the failure points to.";
     private static final Set<String> VOLATILE = Set.of("snapshot", "interfaces", "diagnosticsRevision", "expectedVersion", "version", "content", "line", "column");
     private static final class State {
         String previous;
@@ -51,8 +53,7 @@ public final class ModelOutputProgress {
             var preferred = new AgentProperties.ModelSelection(request.provider(), request.model());
             var route = preferred.equals(state.rejected) ? state.alternate : preferred;
             if (route == null) throw stopped();
-            long started = System.nanoTime();
-            var response = route.equals(preferred) ? physical.apply(request) : alternate(request, route, physical, started);
+            var response = route.equals(preferred) ? physical.apply(request) : alternate(request, route, physical);
             String fingerprint = fingerprint(response);
             boolean unchanged = fingerprint != null && (correcting || repair)
                     && (fingerprint.equals(state.previous) || repair && noSourceChange(data, response));
@@ -63,20 +64,23 @@ public final class ModelOutputProgress {
             var configured = planning ? properties.freePlanningRoutes().stream()
                     .limit(Math.clamp(properties.getPlanning().getMaxRouteAttempts(), 1, 3)).toList() : properties.freeStructuredRoutes();
             if (planning && !properties.getPlanning().isCorrectionFallback()) configured = List.of();
-            var candidates = configured.stream().filter(candidate -> !candidate.equals(route))
-                    .filter(properties::available).toList();
-            if (candidates.isEmpty()) throw stopped();
+            var others = configured.stream().filter(candidate -> !candidate.equals(route)).toList();
+            if (others.isEmpty()) throw stopped();
             // Still one alternate answer: an unreachable route (expired key, outage) only passes the turn to the next.
             LlmClient.LlmResult next = null;
-            for (var candidate : candidates)
+            for (var candidate : others.stream().filter(properties::available).toList())
                 try {
-                    next = alternate(request, candidate, physical, started);
+                    next = alternate(request, candidate, physical);
                     state.alternate = candidate;
                     break;
                 } catch (AlternateUnavailable unavailable) {
                     properties.markModelUnavailable(candidate);
-                    if (candidate.equals(candidates.getLast())) throw unavailable;
                 }
+            if (next == null) {
+                // No configured alternate is reachable: that one answer comes from the same route, told its last changed nothing.
+                next = alternate(unchangedFollowUp(request, response), route, physical);
+                state.alternate = route;
+            }
             String nextFingerprint = fingerprint(next);
             if (nextFingerprint != null && (nextFingerprint.equals(fingerprint) || nextFingerprint.equals(state.previous)
                     || repair && noSourceChange(data, next))) {
@@ -89,8 +93,9 @@ public final class ModelOutputProgress {
     }
 
     private LlmClient.LlmResult alternate(LlmClient.LlmRequest request, AgentProperties.ModelSelection route,
-            Function<LlmClient.LlmRequest, LlmClient.LlmResult> physical, long started) {
-        Duration remaining = request.budget() == null ? null : request.budget().minusNanos(System.nanoTime() - started);
+            Function<LlmClient.LlmRequest, LlmClient.LlmResult> physical) {
+        // Each alternate attempt gets the full per-call budget: a slow first answer must not starve the only other route.
+        Duration remaining = request.budget();
         if (remaining != null && (remaining.isZero() || remaining.isNegative())) throw stopped();
         Integer cap = request.maxTokens();
         var verified = properties.getAccountingBounds().get(route.provider() + ":" + route.model());
@@ -102,6 +107,15 @@ public final class ModelOutputProgress {
         catch (LlmHttpException | RetryableLlmException | LlmStreamException unavailable) {
             throw new AlternateUnavailable(wasted.get());
         }
+    }
+
+    private static LlmClient.LlmRequest unchangedFollowUp(LlmClient.LlmRequest request, LlmClient.LlmResult unchanged) {
+        var messages = new ArrayList<>(request.messages());
+        if (unchanged.content() != null && !unchanged.content().isBlank())
+            messages.add(LlmClient.LlmMessage.assistant(unchanged.content()));
+        messages.add(LlmClient.LlmMessage.user(UNCHANGED));
+        return new LlmClient.LlmRequest(request.provider(), request.model(), messages, request.tools(), request.temperature(),
+                request.budget(), request.toolChoice(), request.maxTokens(), request.jsonSchema());
     }
 
     private static final class AlternateUnavailable extends LlmException {

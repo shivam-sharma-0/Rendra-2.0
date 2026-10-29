@@ -41,7 +41,8 @@ final class FailureExplanation {
         }
         String cause = report.checks().stream().filter(ValidationCheck::blocksSuccess).findFirst()
                 .map(check -> CHECKS.getOrDefault(check.id(), "a required check (" + check.id() + ") did not pass"))
-                .orElse("the checks still failed after my repair attempts");
+                .orElse(report.operation() == null ? "the checks still failed after my repair attempts"
+                        : CHECKS.getOrDefault(report.operation().name(), "the checks still failed after my repair attempts"));
         String first = report.introducedDiagnostics().stream().findFirst().map(FailureExplanation::detail).orElse("");
         return "I couldn't finish this build: " + cause + "." + first + "\n\n" + NOTHING_SAVED + " " + RETRY;
     }
