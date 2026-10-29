@@ -257,8 +257,13 @@ public final class ContractCoordinator {
             requireBasis(ctx, basis);
             var outputs = new ArrayList<UnitGenerator.Delta>();
             var inputs = new ArrayList<UnitGenerator.Input>();
+            // A wave's units are written together, so they are one stage rather than rows that end at once.
+            if (wave.size() == 1)
+                activity.accept("Writing: " + wave.getFirst().objective());
+            else
+                BuildActivity.of(activity).stage("Writing " + wave.size() + " parts",
+                        wave.stream().map(BuildContract.Unit::objective).toList());
             for (var unit : wave) {
-                activity.accept("Writing: " + unit.objective());
                 if (c.schemaVersion() == 1
                         && c.assets().stream().map(BuildContract.Asset::destination).toList().containsAll(unit.ownedPaths()))
                     continue;
@@ -384,6 +389,10 @@ public final class ContractCoordinator {
                 finally { validation.reportProgress(ctx.runId(), null); }
             }
             var report = checked;
+            if (!report.changeValidationPassed()) {
+                var problem = CheckProblem.of(report);
+                BuildActivity.of(activity).problem(problem.title(), problem.detail());
+            }
             if (report.changeValidationPassed() && c.acceptance().api().stream()
                     .anyMatch(step -> report.checks().stream().noneMatch(check -> check.id().equals("API_" + step.id())
                             && check.outcome() == ValidationCheck.Outcome.PASS)))

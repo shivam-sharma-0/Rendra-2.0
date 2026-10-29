@@ -134,7 +134,8 @@ public class AgentActivityMapper {
             case "Preview built" -> activity(Kind.PREVIEW, "Preview updated", List.of(), true, null);
             case "Preview build failed" -> activity(Kind.PREVIEW, "The preview could not be built", List.of(), false, null);
             case "Agent cancelled" -> activity(Kind.STOPPED, "Stopped", List.of(), false, null);
-            case "Agent failed" -> activity(Kind.FAILED, "Something went wrong", List.of(), false, null);
+            case "Agent failed" -> activity(Kind.FAILED, data.path("message").isString() ? "The build stopped" : "Something went wrong",
+                    List.of(), false, clip(data.path("message")));
             case "Agent stopped: run budget" -> activity(Kind.FAILED,"This run reached its AI budget",List.of(),false,clip(data.path("message")));
             case "Agent validation failed", "Agent stopped: daily quota" ->
                     activity(Kind.FAILED, title.startsWith("Agent stopped") ? "Daily AI limit reached" : "The changes did not pass the checks",
@@ -145,7 +146,10 @@ public class AgentActivityMapper {
             case "Run recovered after worker interruption." -> activity(Kind.STATUS, "Interrupted", List.of(), false, null);
             // Agent started / completed, Model called, LLM provider unavailable, Project context prepared / usage
             default -> data.path("progress").asBoolean(false) && !title.isBlank()
-                    ? activity(Kind.PROGRESS, clipTitle(title), List.of(), null, null) : null;
+                    ? new AgentActivity(Kind.PROGRESS, clipTitle(title), List.of(),
+                            data.path("ok").isBoolean() ? data.path("ok").asBoolean() : null, clip(data.path("detail")),
+                            strings(data.path("items")).stream().map(AgentActivityMapper::clipTitle).toList())
+                    : null;
         };
     }
 

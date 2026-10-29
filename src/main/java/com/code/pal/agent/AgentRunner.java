@@ -97,6 +97,7 @@ import com.code.pal.agent.change.PromotionRecoveryPendingException;
 import com.code.pal.agent.change.SequentialCheckpoints;
 import com.code.pal.agent.context.ToolResultMemory;
 import com.code.pal.agent.contract.BatchBudget;
+import com.code.pal.agent.contract.BuildActivity;
 import com.code.pal.agent.contract.ContractCoordinator;
 import com.code.pal.agent.contract.ContractModelCalls;
 import com.code.pal.agent.contract.ModelOutputProgress;
@@ -822,7 +823,7 @@ public class AgentRunner implements AgentRuntime {
         String structuredRequest = state.attachmentContext.isBlank() ? userRequest : userRequest + "\n" + state.attachmentContext;
         var outcome = contractCoordinator.execute(state.ctx, run, size, structuredRequest,
                 state.projectContext.projectContextMessage(), checkedCall, beforeIo,
-                title -> events.emit(run, AgentStepType.STATUS, title, Map.of("progress", true)), planning);
+                buildActivity(run), planning);
         if (run.getMode() == ProjectType.BUILD) {
             beforeIo.run();
             projects.requireCanEdit(run.getUserId(), run.getProjectId());
@@ -1388,15 +1389,17 @@ public class AgentRunner implements AgentRuntime {
         markEnded(state, AgentRuntimeStatus.FAILED, RunStatus.FAILED, "FAILED");
         notifyBuild(run, false);
         String safeFailure = safeError(e);
-        ValidationReport lastFailedReport = e instanceof WorkflowStageException && "Repair limit reached".equals(safeFailure)
-                && validation != null ? validation.lastReport(run.getId()) : null;
+        // A model or stage failure after a failed check: the check is what the owner needs to hear about.
+        ValidationReport lastFailedReport = validation == null ? null : validation.lastReport(run.getId());
         String failureMessage = FailureExplanation.failure(run.getFailureReason(), run.getCodeSavedAt() != null,
                 safeFailure, lastFailedReport);
         if (run.getCodeSavedAt() != null) {
             recordPreview(run, "FAILED");
         }
         updateAssistant(run, failureMessage, MessageStatus.FAILED);
-        events.emit(run, AgentStepType.STATUS, "Agent failed", safeCounters(state.runtime));
+        var failure = new LinkedHashMap<String, Object>(safeCounters(state.runtime));
+        failure.put("message", failureMessage.split("\n\n", 2)[0]);
+        events.emit(run, AgentStepType.STATUS, "Agent failed", failure);
         emitContextUsage(run, state.projectContext, state.runtime);
         return result(run, state.runtime, failureMessage, run.getError());
     }
@@ -1847,6 +1850,27 @@ public class AgentRunner implements AgentRuntime {
                 "contextChars", runtime.contextChars(),
                 "remainingContextChars", runtime.remainingContextChars(),
                 "compactedChars", runtime.compactedChars());
+    }
+
+    /** A structured build's stages as STATUS steps the activity mapper shows as PROGRESS rows. */
+    private BuildActivity buildActivity(AgentRun run) {
+        return new BuildActivity() {
+            @Override
+            public void accept(String title) {
+                events.emit(run, AgentStepType.STATUS, title, Map.of("progress", true));
+            }
+
+            @Override
+            public void stage(String title, List<String> items) {
+                events.emit(run, AgentStepType.STATUS, title, Map.of("progress", true, "items", items));
+            }
+
+            @Override
+            public void problem(String title, String detail) {
+                events.emit(run, AgentStepType.STATUS, title, detail == null ? Map.of("progress", true, "ok", false)
+                        : Map.of("progress", true, "ok", false, "detail", detail));
+            }
+        };
     }
 
     private static Map<String, Object> safeCounters(AgentRuntimeContext runtime) {

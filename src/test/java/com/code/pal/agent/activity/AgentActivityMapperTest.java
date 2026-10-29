@@ -47,6 +47,31 @@ class AgentActivityMapperTest {
     }
 
     @Test
+    void stagesCarryTheirPartsAndAFoundProblemIsAFailedRowWithItsDetail() {
+        AgentActivity writing = visible(AgentStepType.STATUS, "Writing 2 parts",
+                "{\"progress\":true,\"items\":[\"Render the login page\",\"Implement the\\n todos API\"]}");
+        assertEquals(List.of("Render the login page", "Implement the todos API"), writing.items());
+        assertNull(writing.ok());
+
+        AgentActivity problem = visible(AgentStepType.STATUS, "Problem found: the “complete” step did not work in the browser",
+                "{\"progress\":true,\"ok\":false,\"detail\":\"Required interaction ui_complete did not pass\"}");
+        assertEquals(Kind.PROGRESS, problem.kind());
+        assertEquals(Boolean.FALSE, problem.ok());
+        assertEquals("Required interaction ui_complete did not pass", problem.detail());
+    }
+
+    @Test
+    void aFailedRunNamesItsCauseWhenTheRunnerRecordedOne() {
+        // 2026-10-29: a stalled repair after a failed browser check read only "Something went wrong".
+        AgentActivity named = visible(AgentStepType.STATUS, "Agent failed",
+                "{\"modelCalls\":4,\"message\":\"I couldn't finish this build: the app built, but it did not behave as approved.\"}");
+        assertEquals(Kind.FAILED, named.kind());
+        assertEquals("The build stopped", named.title());
+        assertTrue(named.detail().startsWith("I couldn't finish this build"));
+        assertEquals("Something went wrong", visible(AgentStepType.STATUS, "Agent failed", "{\"modelCalls\":4}").title());
+    }
+
+    @Test
     void fileToolsShowOnceWithTheirPaths() {
         hidden(AgentStepType.TOOL_CALL, "createFile", "{\"argumentNames\":[\"content\",\"path\"],\"path\":\"src/App.tsx\"}");
         AgentActivity created = visible(AgentStepType.TOOL_RESULT, "createFile", "{\"success\":true,\"path\":\"src/App.tsx\"}");

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { type AgentRun, type AgentStep, type Message, type MessageFeedback, type Project, type ProjectType, type RequirementSession } from '../../../api/projects'
 import { AppIcon } from '../../../components/icons'
 import { useShellMenu } from '../../../rendra/shell/ShellMenu'
@@ -57,6 +57,10 @@ export function ChatColumn({
   const bottomRef = useRef<HTMLDivElement>(null)
   const chatInnerRef = useRef<HTMLDivElement>(null)
   const ordered = useMemo(() => orderMessages(messages), [messages])
+  // The approved requirements follow the request they were asked about: the first one, which may not be loaded yet.
+  const requestIndex = hasOlder ? -1 : ordered.findIndex((m) => m.role === 'USER')
+  const answers = requirements?.complete
+    ? <RequirementAnswerCard projectName={project?.name} session={requirements} onPreview={onOpenPreview} /> : null
   const latestSavedRun = useMemo(() => [...runs].filter(run => run.codeSavedAt).sort((a, b) => Date.parse(b.codeSavedAt!) - Date.parse(a.codeSavedAt!))[0]?.id, [runs])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
@@ -96,20 +100,25 @@ export function ChatColumn({
           )}
           {loading
             ? <p className="ws-chat__note">Loading conversation…</p>
-            : ordered.map((m) => {
+            : <>
+              {requestIndex < 0 && answers}
+              {ordered.map((m, index) => {
                 const msgRun = m.role === 'ASSISTANT' ? runs.find((r) => r.messageId === m.id) : undefined
                 const msgSteps = msgRun ? stepsByRun[msgRun.id] ?? [] : []
                 return (
-                  <ChatMessage key={m.id} message={m} run={msgRun} steps={msgSteps} currentPreview={msgRun?.id === latestSavedRun}
-                    projectId={project?.id} onRetried={onRetried}
-                    onOpenDetails={() => onOpenDetails(msgRun?.id)} onOpenPreview={onOpenPreview} onOpenThinking={onOpenThinking}
-                    onFeedback={(feedback) => onFeedback(m.id, feedback)} onEdit={onEdit}
-                    onBuild={(action) => onSend(action.message, action.mode, [], action.attachments, action.proposalId)} />
+                  <Fragment key={m.id}>
+                    <ChatMessage message={m} run={msgRun} steps={msgSteps} currentPreview={msgRun?.id === latestSavedRun}
+                      projectId={project?.id} onRetried={onRetried}
+                      onOpenDetails={() => onOpenDetails(msgRun?.id)} onOpenPreview={onOpenPreview} onOpenThinking={onOpenThinking}
+                      onFeedback={(feedback) => onFeedback(m.id, feedback)} onEdit={onEdit}
+                      onBuild={(action) => onSend(action.message, action.mode, [], action.attachments, action.proposalId)} />
+                    {index === requestIndex && answers}
+                  </Fragment>
                 )
               })}
+            </>}
           {rollbackError && <p className="ws-chat__error">{rollbackError}</p>}
           {sendError && <p className="ws-chat__error" role="alert">{sendError}</p>}
-          {requirements?.complete && <RequirementAnswerCard projectName={project?.name} session={requirements} onPreview={onOpenPreview} />}
           {project?.lifecycleStage === 'REQUIREMENTS' && needsRequirementInterview(project) && <RequirementWaiting />}
           <div ref={bottomRef} />
         </div>

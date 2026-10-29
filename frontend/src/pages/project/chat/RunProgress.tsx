@@ -35,25 +35,31 @@ export function RunTimeline({ steps, startedAt, active = false }: { steps: Agent
         : entry.type === 'activity'
           ? <ActivityRow key={entry.key} activity={entry.activity} />
           : entry.type === 'progress'
-            ? <ProgressRow key={entry.key} title={entry.title} startedAt={entry.startedAt} endedAt={entry.endedAt} active={active} />
+            ? <ProgressRow key={entry.key} activity={entry.activity} startedAt={entry.startedAt} endedAt={entry.endedAt} active={active} />
             : <BuildStep key={entry.key} step={entry.step} />)}
     </>
   )
 }
 
-/** One build stage: running (spinner and live time) until the next step arrives, then done with how long it took. */
-function ProgressRow({ title, startedAt, endedAt, active }: { title: string; startedAt: string; endedAt: string | null; active: boolean }) {
-  const running = endedAt === null && active
+/** One build stage: running (spinner and live time) until the next step arrives, then done with how long it took.
+ * A problem a check found (`ok === false`) is a finished, failed row with its detail instead. */
+function ProgressRow({ activity, startedAt, endedAt, active }: { activity: AgentActivity; startedAt: string; endedAt: string | null; active: boolean }) {
+  const problem = activity.ok === false
+  const running = !problem && endedAt === null && active
   useTicker(running)
-  const end = endedAt === null ? (running ? Date.now() : null) : new Date(endedAt).getTime()
+  const end = problem ? null : endedAt === null ? (running ? Date.now() : null) : new Date(endedAt).getTime()
   return (
-    <div className={cx('run-step run-activity', running ? 'is-running' : endedAt !== null && 'run-activity--good')}>
-      <span className="run-activity__icon" aria-hidden>{running ? <span className="msg-spin" /> : <AppIcon name={endedAt === null ? 'clock' : 'check'} />}</span>
+    <div className={cx('run-step run-activity', problem ? 'run-activity--bad' : running ? 'is-running' : endedAt !== null && 'run-activity--good')}>
+      <span className="run-activity__icon" aria-hidden>
+        {running ? <span className="msg-spin" /> : <AppIcon name={problem ? 'warning' : endedAt === null ? 'clock' : 'check'} />}
+      </span>
       <span className="run-activity__body">
         <span className="run-activity__line">
-          <span className="run-step__label">{title}</span>
+          <span className="run-step__label">{activity.title}</span>
           {end !== null && <span className="run-activity__time">{formatSeconds(secondsBetween(startedAt, end))}</span>}
         </span>
+        {activity.detail && <small className="run-activity__detail">{activity.detail}</small>}
+        {activity.items.length > 0 && <ul className="run-activity__items">{activity.items.map((item, i) => <li key={i}>{item}</li>)}</ul>}
       </span>
     </div>
   )

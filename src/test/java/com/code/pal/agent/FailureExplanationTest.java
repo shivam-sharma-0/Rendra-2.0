@@ -89,6 +89,23 @@ class FailureExplanationTest {
     }
 
     @Test
+    void aRepairThatLostItsModelAfterAFailedCheckNamesTheCheckNotAnInternalError() {
+        // 2026-10-29: Codestral made no progress and no alternate was reachable; the owner read "on our side".
+        var diagnostic = new ProjectDiagnostic(null, null, null, DiagnosticSeverity.ERROR,
+                "Required interaction ui_complete did not pass", "browser", "BROWSER_ACCEPTANCE_FAILED");
+        var failed = report(true, List.of(diagnostic), new ValidationCheck("RUNTIME", ValidationCheck.Outcome.FAIL, true, ""));
+        for (var stop : List.of(
+                FailureExplanation.failure(AgentFailureReason.AGENT_FAILED, false, "No-progress alternate route unavailable", failed),
+                FailureExplanation.failure(AgentFailureReason.USER_REVIEW_REQUIRED, false,
+                        "Required application checks did not pass; staged code was not saved", failed))) {
+            assertTrue(stop.contains("did not behave as approved"), stop);
+            assertFalse(stop.contains("on our side"), stop);
+        }
+        assertTrue(FailureExplanation.failure(AgentFailureReason.USER_REVIEW_REQUIRED, false, "Approve the requirements first", failed)
+                .startsWith("Approve the requirements first"));
+    }
+
+    @Test
     void unsupportedIndependentFeatureCoverageIsVisibleEvenWhenAdvisoryScenariosPassed() {
         String note = FailureExplanation.unconfirmedBehaviour(report(true, List.of(),
                 new ValidationCheck("APPROVED_BEHAVIOUR", ValidationCheck.Outcome.PASS, false, "Model scenarios passed"),

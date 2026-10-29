@@ -6,6 +6,7 @@ import com.code.pal.agent.validation.ValidationCheck;
 import com.code.pal.agent.validation.ValidationReport;
 
 import java.util.Map;
+import java.util.Set;
 
 /**
  * What a failed build tells the user: what went wrong in plain words, that nothing was saved, and what to do next.
@@ -22,6 +23,10 @@ final class FailureExplanation {
             "TYPE_CHECK", "the code still had type errors after my repair attempts",
             "BUILD", "the app did not build after my repair attempts",
             "RUNTIME", "the app built, but it did not behave as approved when I tried it in a browser");
+
+    /** Stage stops that only mean "the checks still fail". */
+    private static final Set<String> CHECK_STOPS = Set.of("Repair limit reached",
+            "Required application checks did not pass; staged code was not saved");
 
     private FailureExplanation() {
     }
@@ -50,8 +55,10 @@ final class FailureExplanation {
         if (codeSaved) {
             return "Your code changes were saved. Preview preparation failed; the saved code is available.";
         }
-        if (reason == AgentFailureReason.USER_REVIEW_REQUIRED && "Repair limit reached".equals(reviewMessage)
-                && lastReport != null && !lastReport.changeValidationPassed()) {
+        // A repair that ran out, stalled or lost its model still leaves a failed check: name that, not the stop.
+        boolean checksFailed = lastReport != null && !lastReport.changeValidationPassed();
+        if (checksFailed && (reason == AgentFailureReason.AGENT_FAILED
+                || reason == AgentFailureReason.USER_REVIEW_REQUIRED && CHECK_STOPS.contains(reviewMessage))) {
             return validation(lastReport);
         }
         return switch (reason) {
