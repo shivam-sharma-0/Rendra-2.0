@@ -386,7 +386,12 @@ public class AgentRunner implements AgentRuntime {
         LlmCallContext.Scope callContext = LlmCallContext
                 .bind(new LlmCallContext(run.getUserId(), run.getProjectId(), run.getId(), CallPurpose.AGENT, true));
         try {
-            return execute(state);
+            try {
+                return execute(state);
+            } finally {
+                // Terminal bookkeeping must not observe the run's own Stop: fenced writes refuse a cancelled thread.
+                boundCancellation.close();
+            }
         } catch (PromotionRecoveryPendingException pending) {
             return saveRecoveryPending(state, pending);
         } catch (TrustedOperationPendingException pending) {
@@ -406,7 +411,6 @@ public class AgentRunner implements AgentRuntime {
             return failed(state, e);
         } finally {
             callContext.close();
-            boundCancellation.close();
             cleanup(state);
         }
     }

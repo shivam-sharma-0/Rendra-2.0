@@ -85,6 +85,24 @@ class AgentRunnerOwnershipTest {
     }
 
     @Test
+    void aUserStopIsSavedAsCancelledThoughFencedWritesRefuseAStoppedThread() {
+        var user = Message.user(run.getProjectId(), "user", "hi", ProjectType.CHAT, 7L);
+        QueuedRequestFixture.stubOriginal(messages, run, user);
+        when(model.chatStreaming(any(), any())).thenAnswer(call -> {
+            RunCancellation.current().cancel();
+            throw new LlmCancelledException();
+        });
+        var runner = runner();
+        // Like ProjectMutationLocks: a fenced write does not start on a thread whose run was stopped.
+        when(runs.save(any())).thenAnswer(call -> {
+            if (RunCancellation.current().isCancelled()) throw new LlmCancelledException();
+            return call.getArgument(0);
+        });
+        assertEquals(RunStatus.CANCELLED, runner.run(run).status());
+        assertEquals("Cancelled by user", run.getError());
+    }
+
+    @Test
     void providerInterruptionAfterOwnershipLossIsNotAUserCancellation() {
         var user = Message.user(run.getProjectId(), "user", "hi", ProjectType.CHAT, 7L);
         QueuedRequestFixture.stubOriginal(messages, run, user);
