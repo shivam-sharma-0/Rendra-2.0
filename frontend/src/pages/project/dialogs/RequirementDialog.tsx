@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { type RequirementSession } from '../../../api/projects'
 import { AppIcon } from '../../../components/icons'
 import { NeuAlert, NeuButton, NeuDialog, NeuIconButton } from '../../../components/neu'
@@ -91,18 +91,26 @@ export function RequirementDialog({
     setOther(question?.otherText ?? '')
   }, [question?.id, question?.selectedOption, question?.otherText, question?.recommendedOption, question?.options])
 
+  // Questions only, no review step: a clear request (no questions) or a finished interview starts the build itself.
+  const [finished, setFinished] = useState(false)
+  // A failed save or start hands the choice back: the buttons work again and Build retries.
+  const starting = finished && !error
+  const approving = useRef(false)
+  const approvable = session.complete && session.status === 'APPROVAL_REQUIRED' && !session.processing
+  const autoApprove = approvable && !busy && !error && (questions.length === 0 || starting)
+  useEffect(() => {
+    if (!autoApprove || approving.current) return
+    approving.current = true
+    void onApprove().finally(() => { approving.current = false })
+  }, [autoApprove, onApprove])
+
   if (!question && !session.complete) return <div role="status" aria-live="polite">Preparing requirement questions...</div>
-  if (!question) return (
-    <NeuDialog locked size="lg" className="rq-dialog" title={session.review ? 'Your application plan' : 'Review your request'} onClose={() => {}}
-      description={session.review ? 'The standard setup is handled. Review what Rendra will build.' : 'A detailed plan was unavailable. Your original request is preserved for the build.'}
-      footer={<NeuButton variant="accent" onClick={() => void onApprove()} disabled={busy || session.processing || session.status !== 'APPROVAL_REQUIRED'}>{busy ? 'Saving…' : 'Approve and build'}</NeuButton>}>
-      {session.review?.goal && <p>{session.review.goal}</p>}
-      {!!session.review?.pages.length && <p>Pages: {session.review.pages.join(', ')}</p>}
-      {session.review?.features.length ? <ul>{session.review.features.map((feature) => <li key={feature.id}>{feature.description || feature.id}</li>)}</ul>
-        : <p>The build will follow your request, including its required pages and working features.</p>}
-      {error && <NeuAlert>{error}</NeuAlert>}
+  if (!question) return error ? (
+    <NeuDialog locked size="lg" className="rq-dialog" title="The build could not start" onClose={() => {}}
+      footer={<NeuButton variant="accent" onClick={() => void onApprove()} disabled={busy || !approvable}>{busy ? 'Starting…' : 'Try again'}</NeuButton>}>
+      <NeuAlert>{error}</NeuAlert>
     </NeuDialog>
-  )
+  ) : null
   const total = questions.length
   const last = index === total - 1
   const isOther = question.options.some((option) => option.id === selected && customOption(option))
@@ -116,7 +124,8 @@ export function RequirementDialog({
   }
   const saveAndContinue = async () => {
     await onAnswer(question.id, selected, isOther ? other : null)
-    if (!last) setIndex((value) => Math.min(value + 1, total - 1))
+    if (last) setFinished(true)
+    else setIndex((value) => Math.min(value + 1, total - 1))
   }
 
   return (
@@ -136,25 +145,14 @@ export function RequirementDialog({
             <AppIcon name="caretRight" />
           </NeuIconButton>
           <span className="rq-grow" />
-          <NeuButton onClick={() => void onSkipAll()} disabled={busy || hasUnansweredSetup(session)}>Skip all</NeuButton>
-          <NeuButton variant="accent" onClick={() => void (readyToApprove ? onApprove() : saveAndContinue())} disabled={busy || session.processing || !answered}>{busy ? 'Saving…' : session.processing ? 'Reviewing...' : readyToApprove ? 'Approve requirements' : last ? 'Review answers' : 'Next'}</NeuButton>
+          <NeuButton onClick={() => { setFinished(true); void onSkipAll() }} disabled={busy || starting || hasUnansweredSetup(session)}>Skip all</NeuButton>
+          <NeuButton variant="accent" onClick={() => void (readyToApprove ? onApprove() : saveAndContinue())} disabled={busy || starting || session.processing || !answered}>{busy || starting ? 'Starting…' : session.processing ? 'Saving…' : last || readyToApprove ? 'Build' : 'Next'}</NeuButton>
         </>
       )}
     >
       <ol className="rq-progress" aria-label={`Question ${index + 1} of ${total}`}>
         {questions.map((q, i) => <li key={q.id} className={cx(i < index && 'is-done', i === index && 'is-current')} />)}
       </ol>
-      {readyToApprove && <dl>{questions.map((q) => <div key={q.id}><dt>{q.prompt}</dt><dd>{answerOf(q) ?? 'Not specified'}</dd></div>)}</dl>}
-      {readyToApprove && session.review && (
-        <section aria-label="Planned application">
-          <h3>What will be built</h3>
-          {session.review.goal && <p>{session.review.goal}</p>}
-          <ul>{session.review.features.map((feature, position) => <li key={`${feature.id}-${position}`}>{feature.description || feature.id}</li>)}</ul>
-          {session.review.answersChanged && <p>Your saved answers take priority over this earlier draft.</p>}
-          {session.review.features.some((feature) => !feature.checkPlanned) && <p>Some features still need verification during the build. They remain part of your request.</p>}
-        </section>
-      )}
-      {session.reviewStatus === 'FALLBACK' && <p role="status">Automatic review was unavailable. Check these answers before approving.</p>}
 
       <div className="rq-options" role="radiogroup" aria-label={question.prompt}>
         {visibleOptions(question).map((option) => {

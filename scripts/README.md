@@ -234,5 +234,6 @@ Planning and unit-output corrections have distinct ledger purposes; coding repai
 
 `node scripts/Test-RequirementDialog.cjs` and `node --test scripts/Test-RequirementsHook.cjs` exercise the
 actual UI callbacks with controlled hook state: inferred setup stays hidden, unresolved setup cannot be
-accepted by Skip all, approval uses the saved revision, and missing detailed planning is not shown as ready.
+accepted by Skip all, approval uses the saved revision, the popup shows questions only (no plan or review), a
+request with no questions approves itself, and a finished interview approves once its answers are saved.
 These are offline component/hook checks, not browser, backend or generated-app certificates.

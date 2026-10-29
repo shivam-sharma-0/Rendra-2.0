@@ -14,12 +14,13 @@ const question = { id: 'auth', key: 'access_rule', prompt: 'Which access rule?',
   options: [{ id: 'NONE', label: 'No sign-in' }, { id: 'ACCOUNTS', label: 'Real accounts' }] };
 const session = { questions: [question], status: 'APPROVAL_REQUIRED', complete: true, processing: false, revision: 2, reviewStatus: 'MODEL' };
 
-function render(value, state = {}, component = 'RequirementDialog') {
+function render(value, state = {}, component = 'RequirementDialog', props = {}) {
   let index = 0;
+  const effects = [];
   const module = { exports: {} };
   const element = (type, props) => ({ type, props });
   const context = { exports: module.exports, module, require: (id) => {
-    if (id === 'react') return { useEffect() {}, useState(initial) { const current = index++; return [Object.hasOwn(state, current) ? state[current] : initial, () => {}]; } };
+    if (id === 'react') return { useEffect(effect) { effects.push(effect); }, useRef(initial) { return { current: initial }; }, useState(initial) { const current = index++; return [Object.hasOwn(state, current) ? state[current] : initial, () => {}]; } };
     if (id === 'react/jsx-runtime') return { jsx: element, jsxs: element };
     if (id.endsWith('/neu')) return Object.fromEntries(['NeuAlert', 'NeuButton', 'NeuDialog', 'NeuIconButton'].map(name => [name, name]));
     if (id.endsWith('/icons')) return { AppIcon: 'AppIcon' };
@@ -31,8 +32,10 @@ function render(value, state = {}, component = 'RequirementDialog') {
   vm.runInNewContext(compiled, context, { filename: 'RequirementDialog.js' });
   const events = [];
   const tree = module.exports[component]({ session: value, busy: false, error: '', onPreview:() => {},
-    onAnswer: async (...args) => events.push(['answer', ...args]), onApprove: async () => events.push(['approve']), onSkipAll: async () => {} });
-  return { tree, events };
+    onAnswer: async (...args) => events.push(['answer', ...args]), onApprove: async () => events.push(['approve']), onSkipAll: async () => {}, ...props });
+  // Runs the render's effects once, as React would after committing it.
+  const commit = () => effects.forEach(effect => effect());
+  return { tree, events, commit };
 }
 function all(value, found = []) {
   if (!value || typeof value !== 'object') return found;
@@ -52,7 +55,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(result.events.map(event => event[0]), ['approve']);
 
   result = render(session, { 1: 'ACCOUNTS' });
-  assert.equal(button(result).props.children, 'Review answers');
+  assert.equal(button(result).props.children, 'Build');
   button(result).props.onClick(); await settle(); assert.equal(result.events[0][2], 'ACCOUNTS');
   assert.equal(result.events.length, 1, 'unsaved choice must be saved before approval');
 
@@ -63,23 +66,36 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
   button(result).props.onClick(); await settle();
   assert.equal(result.events[0][2], 'custom_text'); assert.equal(result.events[0][3], 'Keyboard shortcuts');
 
-  result = render({ ...session, reviewStatus: 'FALLBACK' });
-  assert.ok(all(result.tree).some(node => node.props.children === 'Automatic review was unavailable. Check these answers before approving.'));
-
-  result = render({ ...session, review: { goal: 'Track tasks', pages: ['Tasks'], answersChanged: true,
+  // 2026-10-29 owner: the popup holds questions only, never a plan or review to read.
+  result = render({ ...session, reviewStatus: 'FALLBACK', review: { goal: 'Track tasks', pages: ['Tasks'], answersChanged: true,
     features: [{ id: 'loading', description: 'Show progress', checkPlanned: false }] } });
-  assert.ok(all(result.tree).some(node => node.props.children === 'Show progress'));
-  assert.ok(all(result.tree).some(node => node.props.children === 'Your saved answers take priority over this earlier draft.'));
-  assert.ok(all(result.tree).some(node => node.props.children === 'Some features still need verification during the build. They remain part of your request.'));
+  assert.equal(JSON.stringify(result.tree).includes('Show progress'), false);
+  assert.equal(JSON.stringify(result.tree).includes('Automatic review was unavailable'), false);
+  result.commit(); await settle();
+  assert.deepEqual(result.events, [], 'a question still on screen is answered or built by the owner');
+
+  // Answering the last question (or Skip all) starts the build once the server accepts the answers.
+  result = render(session, { 3: true }); result.commit(); await settle();
+  assert.deepEqual(result.events.map(event => event[0]), ['approve']);
+  result = render({ ...session, processing: true }, { 3: true }); result.commit(); await settle();
+  assert.deepEqual(result.events, [], 'answers still being saved are not approved');
+  result = render(session, { 3: true }, 'RequirementDialog', { error: 'Network down' }); result.commit(); await settle();
+  assert.deepEqual(result.events, [], 'a failed save hands the choice back instead of retrying by itself');
+  assert.equal(button(result).props.disabled, false);
 
   result = render({ ...session, questions: [], complete: false, processing: true });
   assert.equal(result.tree.props.role, 'status');
 
   const automatic = { ...session, questions: [{...question, key:'platform_auth', prompt:'Technical auth choice?'}],
     review:{goal:'A complete task application', pages:['Tasks', 'Task details', 'Settings'], features:[], answersChanged:false} };
+  // A clear request has no questions: no popup, the build starts.
   result = render(automatic);
-  assert.equal(result.tree.props.title, 'Your application plan');
-  assert.equal(all(result.tree).some(node => node.props.role === 'radiogroup'), false);
+  assert.equal(result.tree, null);
+  result.commit(); await settle();
+  assert.deepEqual(result.events.map(event => event[0]), ['approve']);
+  result = render(automatic, {}, 'RequirementDialog', { error: 'Could not approve requirements.' });
+  assert.equal(result.tree.props.title, 'The build could not start');
+  assert.equal(button(result).props.children, 'Try again');
   button(result).props.onClick(); await settle();
   assert.deepEqual(result.events.map(event => event[0]), ['approve']);
   result = render(automatic, {}, 'RequirementAnswerCard');
@@ -90,9 +106,8 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(all(result.tree).find(node => node.type === 'NeuButton' && node.props.children === 'Skip all').props.disabled, true);
   assert.equal(button(result).props.disabled, true, 'an unresolved setup recommendation must require an explicit choice');
   result = render({...automatic, review:null});
-  assert.equal(result.tree.props.title, 'Review your request');
-  assert.equal(JSON.stringify(result.tree).includes('A detailed plan was unavailable'), true);
+  assert.equal(result.tree, null);
   result = render({...automatic, review:null}, {}, 'RequirementAnswerCard');
   assert.equal(JSON.stringify(result.tree).includes('App plan ready'), false);
-  process.stdout.write('13 requirement dialog callback/state checks passed (no browser or network).\n');
+  process.stdout.write('16 requirement dialog callback/state checks passed (no browser or network).\n');
 })().catch(error => { process.stderr.write(error.stack + '\n'); process.exitCode = 1; });
