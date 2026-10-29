@@ -140,6 +140,7 @@ public class ChangeSetService {
             if (checkpoint != null) {
                 checkpointRestored = true;
                 set.revision = checkpoint.revision();
+                set.sourceRevision = set.revision;
                 set.repairAttempts = checkpoint.repairAttempts();
                 set.resumedPlan = checkpoint.plan();
                 for (var file : checkpoint.files()) {
@@ -184,6 +185,7 @@ public class ChangeSetService {
                             : c.before().equals(FileVersions.ABSENT) ? FileOperation.CREATE : FileOperation.PATCH)
                     .build()).toList());
             set.revision++;
+            set.sourceRevision = set.revision;
             set.validatedRevision = -1;
         } catch (RuntimeException uncertain) {
             set.batchRecoveryRequired = true;
@@ -338,6 +340,7 @@ public class ChangeSetService {
                 set.repairPending = false;
             }
             set.revision++;
+            set.sourceRevision = set.revision;
             set.validatedRevision = -1;
             return prepared.values().stream().map(entry -> new MutationResult(entry.path(), null, FileOperation.CREATE,
                     FileVersions.ABSENT, textVersion(entry.content()), set.revision)).toList();
@@ -483,6 +486,7 @@ public class ChangeSetService {
                 set.repairPending = false;
             }
             set.revision++;
+            set.sourceRevision = set.revision;
             set.validatedRevision = -1;
         }
     }
@@ -684,6 +688,7 @@ public class ChangeSetService {
             rememberBaseline(set, name);
             int repairs = set.repairAttempts;
             boolean pending = set.repairPending;
+            int source = set.sourceRevision;
             try {
                 writeAttempted[0] = true;
                 files.writeText(set.projectId, set.stage, name, after);
@@ -694,6 +699,7 @@ public class ChangeSetService {
                         beforeVersion, textVersion(after));
                 set.repairAttempts = repairs;
                 set.repairPending = pending; // System metadata does not charge a model repair.
+                set.sourceRevision = source; // nor invalidate compiler and browser results for the code.
             } catch (RuntimeException unknown) {
                 set.batchRecoveryRequired = true;
                 throw new AgentToolException("BRIEF_SYNC_RECOVERY_REQUIRED",
@@ -1034,6 +1040,7 @@ public class ChangeSetService {
         if (source != null && operation != FileOperation.COPY)
             set.touched.add(source);
         set.revision++;
+        set.sourceRevision = set.revision;
         set.validatedRevision = -1;
         changes.save(FileChange.builder().runId(set.runId).projectId(set.projectId).path(path).sourcePath(source)
                 .operation(operation).beforeVersion(before).afterVersion(after).build());
@@ -1064,7 +1071,7 @@ public class ChangeSetService {
 
     public WorkspaceView view(AgentContext context) {
         ActiveChangeSet set = requireActive(context);
-        return new WorkspaceView(".", set.stage, set.container, set.revision, List.copyOf(set.touched));
+        return new WorkspaceView(".", set.stage, set.container, set.revision, List.copyOf(set.touched), set.sourceRevision);
     }
 
     /** Read-only view of the currently staged contents; never exposes the live workspace for editing. */
@@ -1250,6 +1257,8 @@ public class ChangeSetService {
         AgentPlanState.Snapshot resumedPlan;
         FailedDraftService.Basis failedDraftBasis;
         int revision;
+        /** The revision of the last change other than the system brief: all that commands and the browser can observe. */
+        int sourceRevision;
         int validatedRevision = -1;
         int repairAttempts;
         boolean repairPending;
@@ -1277,9 +1286,15 @@ public class ChangeSetService {
     public record CommitResult(String snapshotRef, List<String> changedPaths) {
     }
 
-    /** Project-relative roots: {@code liveRoot} is always {@code "."}. */
+    /**
+     * Project-relative roots: {@code liveRoot} is always {@code "."}. {@code sourceRevision} ignores the system brief's
+     * own writes, so it keys results of commands and browser checks.
+     */
     public record WorkspaceView(String liveRoot, String stagedRoot, String container, int revision,
-            List<String> touchedPaths) {
+            List<String> touchedPaths, int sourceRevision) {
+        public WorkspaceView(String liveRoot, String stagedRoot, String container, int revision, List<String> touchedPaths) {
+            this(liveRoot, stagedRoot, container, revision, touchedPaths, revision);
+        }
     }
 
     public record StagedFile(String path, String content, boolean deleted) {

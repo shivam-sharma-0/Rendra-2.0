@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import com.code.pal.project.capability.BuildDecisions;
 import java.util.stream.Collectors;
@@ -155,6 +156,8 @@ public class ProjectValidationService {
     }
 
     private ValidationReport validateAll(AgentContext context, boolean compilersProven) {
+        var timing = new LinkedHashMap<String, Long>();
+        long[] mark = {System.nanoTime()};
         String capabilityProblem = buildDecisions == null ? null
                 : buildDecisions.validate(context.projectId(), files, context.root());
         if (capabilityProblem != null) {
@@ -165,7 +168,9 @@ public class ProjectValidationService {
             lastReports.put(context.runId(), report);
             return report;
         }
+        lap(timing, "capabilities", mark);
         ChangeSetService.ValidationResult structure = changeSets.validate(context);
+        lap(timing, "structure", mark);
         if (!structure.valid()) {
             List<ProjectDiagnostic> diagnostics = structure.issues().stream()
                     .map(issue -> new ProjectDiagnostic(issue.path(), null, null, DiagnosticSeverity.ERROR,
@@ -190,6 +195,8 @@ public class ProjectValidationService {
             lastReports.put(context.runId(), report);
             return report;
         }
+        lap(timing, "scripts", mark);
+        log.info("validation_gate_timing runId={} ms={}", context.runId(), timing);
         List<Comparison> comparisons = new ArrayList<>();
         List<ValidationCheck> checks = new ArrayList<>();
         checks.add(new ValidationCheck("STRUCTURE", ValidationCheck.Outcome.PASS, true,
@@ -404,7 +411,8 @@ public class ProjectValidationService {
     }
 
     private RevisionResults revisionResults(AgentContext context) {
-        int revision = changeSets.view(context).revision();
+        // The final gate's brief synchronization alone must not re-run the compilers or the browser.
+        int revision = changeSets.view(context).sourceRevision();
         return results.compute(context.runId(),
                 (run, existing) -> existing != null && existing.revision == revision ? existing
                         : new RevisionResults(revision));
@@ -423,18 +431,31 @@ public class ProjectValidationService {
 
     private Comparison compare(AgentContext context, CommandPlan plan) {
         String name = plan.operation().name().toLowerCase(Locale.ROOT);
-        String baseline = changeSets.createValidationBaseline(context, name);
+        // Where a comparison's time goes (tree copies, dependency checks, commands, cleanup).
+        var timing = new LinkedHashMap<String, Long>();
+        long[] mark = {System.nanoTime()};
+        // The live project is fixed for the run: its recorded result needs no copy, install or second run.
+        CommandOutcome recorded = recordedBaseline(context, plan);
+        String baseline = recorded != null ? null : changeSets.createValidationBaseline(context, name);
+        lap(timing, "baselineCopy", mark);
         try {
             String candidate = changeSets.createValidationCandidate(context, name);
+            lap(timing, "candidateCopy", mark);
             try {
                 stack(context).preserveTrustedCommands(files, context.projectId(), ".", candidate);
                 List<String> touched = changeSets.view(context).touchedPaths();
-                DependencyService.Preparation baselineDeps = dependencies.prepare(context.projectId(), baseline);
+                lap(timing, "prepare", mark);
+                DependencyService.Preparation baselineDeps = recorded != null ? null
+                        : dependencies.prepare(context.projectId(), baseline);
                 DependencyService.Preparation candidateDeps = dependencies.prepare(context.projectId(), candidate);
-                CommandOutcome before = baselineDeps.failed() ? notStarted(context, baseline, baselineDeps.error())
+                lap(timing, "dependencies", mark);
+                boolean baselineDepsFailed = baselineDeps != null && baselineDeps.failed();
+                CommandOutcome before = recorded != null ? recorded
+                        : baselineDepsFailed ? notStarted(context, baseline, baselineDeps.error())
                         : baselineOutcome(context, plan, baseline);
+                lap(timing, "baseline", mark);
                 if (candidateDeps.failed()) {
-                    if (baselineDeps.failed()) {
+                    if (baselineDepsFailed) {
                         // The project's own dependencies do not install either (registry down, or already broken):
                         // nothing the change can be blamed for, and nothing it can repair.
                         CommandOutcome after = notStarted(context, candidate, candidateDeps.error());
@@ -449,6 +470,7 @@ public class ProjectValidationService {
                             "dependencies", "DEPENDENCY_INSTALL_FAILED")), List.of(), false);
                 }
                 CommandOutcome after = execute(context, plan, candidate);
+                lap(timing, "candidate", mark);
                 List<ProjectDiagnostic> baselineDiagnostics = diagnostics(before, plan.operation(), touched);
                 List<ProjectDiagnostic> currentDiagnostics = diagnostics(after, plan.operation(), touched);
                 Set<String> baselineKeys = baselineDiagnostics.stream()
@@ -479,24 +501,57 @@ public class ProjectValidationService {
             }
         } finally {
             try {
-                sandbox.removeTree(context.projectId(), baseline);
+                if (baseline != null)
+                    sandbox.removeTree(context.projectId(), baseline);
             } catch (RuntimeException ignored) {
             }
+            lap(timing, "cleanup", mark);
+            log.info("validation_timing runId={} operation={} ms={}", context.runId(), plan.operation(), timing);
         }
+    }
+
+    private static void lap(Map<String, Long> timing, String phase, long[] mark) {
+        long now = System.nanoTime();
+        timing.put(phase, TimeUnit.NANOSECONDS.toMillis(now - mark[0]));
+        mark[0] = now;
     }
 
     private CommandOutcome notStarted(AgentContext context, String root, String reason) {
         return new CommandOutcome(false, false, -1, reason, sandbox.commandPath(context.projectId(), root));
     }
 
-    private record BaselineResult(String identity, Map<List<String>, CommandOutcome> commands) {}
+    /** {@code live}: the live project's identity when the baseline copy was taken, or null when it was unprovable. */
+    private record BaselineResult(String identity, String live, Map<List<String>, CommandOutcome> commands) {}
+
+    /** The baseline outcome already recorded for this command and the unchanged live project, or null. */
+    private CommandOutcome recordedBaseline(AgentContext context, CommandPlan plan) {
+        BaselineResult recorded = baselines.get(context.runId());
+        CommandOutcome outcome = recorded == null || recorded.live() == null ? null
+                : recorded.commands().get(List.copyOf(plan.command()));
+        if (outcome == null)
+            return null;
+        try {
+            return recorded.live().equals(ReleaseSource.capture(files, context.projectId(), ".")) ? outcome : null;
+        } catch (RuntimeException unprovable) {
+            return null;
+        }
+    }
+
+    private String liveIdentity(AgentContext context) {
+        try {
+            return ReleaseSource.capture(files, context.projectId(), ".");
+        } catch (RuntimeException unprovable) {
+            return null;
+        }
+    }
 
     private CommandOutcome baselineOutcome(AgentContext context, CommandPlan plan, String root) {
         // Includes manifests, lockfiles, configuration and all other source files. No cache is used if proof fails.
         String identity = ReleaseSource.capture(files, context.projectId(), root);
+        String live = liveIdentity(context);
         BaselineResult baseline = baselines.compute(context.runId(), (id, previous) ->
-                previous != null && previous.identity().equals(identity) ? previous
-                        : new BaselineResult(identity, new ConcurrentHashMap<>()));
+                previous != null && previous.identity().equals(identity) && Objects.equals(previous.live(), live) ? previous
+                        : new BaselineResult(identity, live, new ConcurrentHashMap<>()));
         List<String> command = List.copyOf(plan.command());
         CommandOutcome previous = baseline.commands().get(command);
         if (previous != null) {

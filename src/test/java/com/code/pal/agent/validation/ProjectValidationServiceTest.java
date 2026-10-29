@@ -196,6 +196,31 @@ class ProjectValidationServiceTest {
     }
 
     @Test
+    void theGateWritingOnlyTheBriefReusesTheCompilerAndBrowserResults() throws Exception {
+        // 2026-10-29: the final gate's RENDRA.md sync bumped the revision, so type-check and build ran a third time.
+        runtime = mock(RuntimeCheckService.class);
+        when(runtime.evaluate(any())).thenReturn(new RuntimeCheckService.Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.PASS,true,"Fixture passed"),List.of()));
+        Fixture fixture = fixture(3);
+        var memory = mock(com.code.pal.project.brief.ApprovedProjectMemory.class);
+        when(memory.synchronize(any(), any(), anyString(), any())).thenAnswer(call -> call.getArgument(2) + "synced\n");
+        fixture.changeSets.useApprovedMemory(memory);
+        fixture.changeSets.create(fixture.context, "src/extra.ts", "export const x = 1;\n");
+
+        assertTrue(fixture.validation.run(fixture.context, ValidationOperation.TYPE_CHECK, null).changeValidationPassed());
+        int revision = fixture.changeSets.view(fixture.context).revision(), ran = executionCount();
+        assertTrue(fixture.validation.validateAll(fixture.context).changeValidationPassed());
+        assertTrue(fixture.changeSets.view(fixture.context).revision() > revision, "the gate wrote the brief");
+        assertEquals(ran, executionCount(), "only the brief changed: the type check is reused");
+        fixture.validation.validateAll(fixture.context);
+        verify(runtime, times(1)).evaluate(any());
+
+        fixture.changeSets.create(fixture.context, "src/more.ts", "export const y = 2;\n");
+        fixture.validation.validateAll(fixture.context);
+        assertEquals(ran + 1, executionCount(), "a code change is validated again");
+        verify(runtime, times(2)).evaluate(any());
+    }
+
+    @Test
     void baselineReuseInvalidatesForChangedSourceAndRunCleanup() throws Exception {
         var fixture = fixture(6);
         fixture.changeSets.create(fixture.context, "src/one.ts", "export const one=1;");
