@@ -3,7 +3,7 @@ import { AppIcon } from '../../../components/icons'
 import { EmptyState } from '../../../components/ui/States'
 import { cx } from '../../../lib/cx'
 import { RunTimeline } from '../chat/RunProgress'
-import { runOutcome, runWhen } from '../runUtils'
+import { isActive, runOutcome, runWhen } from '../runUtils'
 
 const STAGES = [
   ['REQUIREMENTS', 'Requirements'], ['DESIGN', 'Design'], ['BUILDING', 'Build'],
@@ -70,7 +70,7 @@ export function DetailsPanel({ run, steps, stage, requirements }: { run: AgentRu
       <section className="pv-well pv-steps">
         <h4>Steps</h4>
         {steps.length
-          ? <div className="run-steps"><RunTimeline steps={steps} startedAt={run.createdAt} /></div>
+          ? <div className="run-steps"><RunTimeline steps={steps} startedAt={run.createdAt} active={isActive(run)} /></div>
           : <p className="pv-note">No steps recorded for this run.</p>}
       </section>
     </div>

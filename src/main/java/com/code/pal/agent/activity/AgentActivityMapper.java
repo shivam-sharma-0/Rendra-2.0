@@ -18,7 +18,8 @@ import java.util.Set;
  * every step is still stored for logs, recovery and analysis. Works on old steps too, so earlier runs
  * read the same way (they may lack file paths, which were not recorded before).
  *
- * <p>Unknown status titles are internal by default: a new user-facing status must be added here.
+ * <p>Unknown status titles are internal by default: a new user-facing status must be added here, or be emitted as a
+ * structured build stage ({@code {"progress":true}} data), which shows as its own clipped title.
  */
 @Component
 public class AgentActivityMapper {
@@ -143,7 +144,8 @@ public class AgentActivityMapper {
                     activity(Kind.STATUS, "Interrupted — the workspace was restored", List.of(), false, null);
             case "Run recovered after worker interruption." -> activity(Kind.STATUS, "Interrupted", List.of(), false, null);
             // Agent started / completed, Model called, LLM provider unavailable, Project context prepared / usage
-            default -> null;
+            default -> data.path("progress").asBoolean(false) && !title.isBlank()
+                    ? activity(Kind.PROGRESS, clipTitle(title), List.of(), null, null) : null;
         };
     }
 
@@ -208,6 +210,12 @@ public class AgentActivityMapper {
     private static String clipText(String value) {
         String trimmed = value.strip();
         return trimmed.length() <= MAX_TEXT ? trimmed : trimmed.substring(0, MAX_TEXT) + "…";
+    }
+
+    /** A build stage line: one line, at most 120 characters (unit objectives come from the plan). */
+    private static String clipTitle(String value) {
+        String line = value.strip().replaceAll("\\s+", " ");
+        return line.length() <= 120 ? line : line.substring(0, 120) + "…";
     }
 
     private static String text(String value, String fallback) {

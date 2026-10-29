@@ -818,7 +818,7 @@ public class AgentRunner implements AgentRuntime {
         String structuredRequest = state.attachmentContext.isBlank() ? userRequest : userRequest + "\n" + state.attachmentContext;
         var outcome = contractCoordinator.execute(state.ctx, run, size, structuredRequest,
                 state.projectContext.projectContextMessage(), checkedCall, beforeIo,
-                title -> events.emit(run, AgentStepType.STATUS, title, null), planning);
+                title -> events.emit(run, AgentStepType.STATUS, title, Map.of("progress", true)), planning);
         if (run.getMode() == ProjectType.BUILD) {
             beforeIo.run();
             projects.requireCanEdit(run.getUserId(), run.getProjectId());

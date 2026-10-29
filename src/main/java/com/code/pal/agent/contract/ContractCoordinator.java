@@ -258,7 +258,7 @@ public final class ContractCoordinator {
             var outputs = new ArrayList<UnitGenerator.Delta>();
             var inputs = new ArrayList<UnitGenerator.Input>();
             for (var unit : wave) {
-                activity.accept(unit.objective());
+                activity.accept("Writing: " + unit.objective());
                 if (c.schemaVersion() == 1
                         && c.assets().stream().map(BuildContract.Asset::destination).toList().containsAll(unit.ownedPaths()))
                     continue;
@@ -356,11 +356,13 @@ public final class ContractCoordinator {
                 continue;
             }
             beforeIo.run();
+            activity.accept("Checking types");
             var report = validation.run(ctx, ValidationOperation.TYPE_CHECK, null);
             if (report.available() && !report.changeValidationPassed())
                 repair(ctx, run, c, wave, request, approved.requirementsJson(), common.keySet(), report, checkedCall,
                         beforeIo, activity, planning);
             beforeIo.run();
+            activity.accept("Building the app");
             report = validation.run(ctx, ValidationOperation.BUILD, null);
             if (report.available() && !report.changeValidationPassed())
                 repair(ctx, run, c, wave, request, approved.requirementsJson(), common.keySet(), report, checkedCall,
@@ -374,8 +376,14 @@ public final class ContractCoordinator {
             requireBasis(ctx, basis);
             ContractCompletion.require(c, path -> files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null);
             activity.accept("Checking required behavior");
-            var report = c.schemaVersion() == 2 && bundleValidation != null
-                    ? bundleReport(ctx, run, c, null, completedBatches) : validation.validateAll(ctx);
+            ValidationReport checked;
+            if (c.schemaVersion() == 2 && bundleValidation != null) checked = bundleReport(ctx, run, c, null, completedBatches);
+            else {
+                validation.reportProgress(ctx.runId(), activity);
+                try { checked = validation.validateAll(ctx); }
+                finally { validation.reportProgress(ctx.runId(), null); }
+            }
+            var report = checked;
             if (report.changeValidationPassed() && c.acceptance().api().stream()
                     .anyMatch(step -> report.checks().stream().noneMatch(check -> check.id().equals("API_" + step.id())
                             && check.outcome() == ValidationCheck.Outcome.PASS)))
@@ -449,7 +457,7 @@ public final class ContractCoordinator {
             }
         } else
             for (var input : repairInputs) {
-                activity.accept("Repairing " + input.unit().objective());
+                activity.accept("Repairing: " + input.unit().objective());
                 try (var scope = UnitWriteScope.worker(ctx)) {
                     var result = generator.generate(input, props.preferredModel(ProjectType.BUILD), checked);
                     if (unitCheckpoints != null)

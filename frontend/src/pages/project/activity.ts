@@ -4,6 +4,7 @@ import type { ActivityKind, AgentActivity, AgentStep } from '../../api/projects'
 export type TimelineEntry =
   | { type: 'thinking'; key: string; step: AgentStep; since: string }
   | { type: 'activity'; key: string; activity: AgentActivity }
+  | { type: 'progress'; key: string; title: string; startedAt: string; endedAt: string | null }
   | { type: 'legacy'; key: string; step: AgentStep }
 
 /** Activities that change the project's files (the build card shows once one of them happens). */
@@ -22,6 +23,11 @@ export function timelineEntries(steps: AgentStep[], startedAt: string): Timeline
     const activity = step.activity
     if (!activity) {
       entries.push({ type: 'legacy', key: `s${step.seq}`, step })
+      return
+    }
+    if (activity.kind === 'PROGRESS') {
+      // A build stage lasts until the next recorded step, whatever its kind.
+      entries.push({ type: 'progress', key: `s${step.seq}`, title: activity.title, startedAt: step.createdAt, endedAt: steps[index + 1]?.createdAt ?? null })
       return
     }
     if (activity.kind === 'THINKING') {

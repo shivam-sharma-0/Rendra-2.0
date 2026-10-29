@@ -136,3 +136,7 @@
 .msg-suggestion__build:hover:not(:disabled) { box-shadow: var(--neu-raised-sm); }
 .msg-suggestion__build:focus-visible { outline: 2px solid var(--neu-focus); outline-offset: 3px; }
 .msg-suggestion__build:disabled { opacity: .6; cursor: default; }
+.msg-build-card__live { display: flex; align-items: center; gap: 8px; margin: -6px 0 14px; font-size: 13px; color: var(--neu-ink); }
+.msg-build-card__live .msg-spin { flex: none; width: 12px; height: 12px; }
+.msg-build-card__stage { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-build-card__total { flex: none; font-variant-numeric: tabular-nums; color: var(--neu-faint); }

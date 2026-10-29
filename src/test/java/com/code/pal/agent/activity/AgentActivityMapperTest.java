@@ -33,6 +33,20 @@ class AgentActivityMapperTest {
     }
 
     @Test
+    void structuredBuildStagesShowTheirClippedTitleWhileUnmarkedStatusesStayInternal() {
+        // 2026-10-29: the contract pipeline's stages were stored but hidden, so the panel sat on "Waiting to start".
+        AgentActivity stage = visible(AgentStepType.STATUS, "Writing: Render the home page\n with task list", "{\"progress\":true}");
+        assertEquals(Kind.PROGRESS, stage.kind());
+        assertEquals("Writing: Render the home page with task list", stage.title());
+        assertNull(stage.ok());
+        assertEquals(121, visible(AgentStepType.STATUS, "x".repeat(400), "{\"progress\":true}").title().length());
+        hidden(AgentStepType.STATUS, "Writing: Render the home page", null);
+        hidden(AgentStepType.STATUS, "Writing: Render the home page", "{\"progress\":false}");
+        hidden(AgentStepType.STATUS, "  ", "{\"progress\":true}");
+        assertEquals("Waiting to start", visible(AgentStepType.STATUS, "Queued", "{\"progress\":true}").title());
+    }
+
+    @Test
     void fileToolsShowOnceWithTheirPaths() {
         hidden(AgentStepType.TOOL_CALL, "createFile", "{\"argumentNames\":[\"content\",\"path\"],\"path\":\"src/App.tsx\"}");
         AgentActivity created = visible(AgentStepType.TOOL_RESULT, "createFile", "{\"success\":true,\"path\":\"src/App.tsx\"}");

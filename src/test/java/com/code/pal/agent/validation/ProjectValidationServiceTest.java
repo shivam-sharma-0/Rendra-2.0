@@ -12,6 +12,7 @@ import com.code.pal.project.domain.ProjectType;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -40,6 +41,22 @@ class ProjectValidationServiceTest {
     private int executionCount() throws Exception {
         return java.nio.file.Files.readAllLines(executions).size();
     }
+    @Test void theFinalGateReportsItsStagesOnlyWhileARunListenerIsRegistered() throws Exception {
+        // 2026-10-29: the final gate ran for minutes with no visible stage; a failing listener must not change validation.
+        runtime=mock(RuntimeCheckService.class);
+        when(runtime.evaluate(any())).thenReturn(new RuntimeCheckService.Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.PASS,true,"ok"),List.of()));
+        var f=fixture(3);f.changeSets.create(f.context,"src/feature.ts","export const feature = true;\n");
+        var stages=new ArrayList<String>();
+        f.validation.reportProgress(f.context.runId(),title->{stages.add(title);throw new IllegalStateException("display only");});
+        boolean passed=f.validation.validateAll(f.context).changeValidationPassed();
+        assertTrue(stages.contains("Final check: types"),stages.toString());
+        assertTrue(stages.contains("Testing the app in a browser"),stages.toString());
+        f.validation.reportProgress(f.context.runId(),null);stages.clear();
+        f.validation.forgetResults(f.context.runId());
+        assertEquals(passed,f.validation.validateAll(f.context).changeValidationPassed());
+        assertEquals(List.of(),stages);
+    }
+
     @Test void aRuntimeFailureDefersApiChecksWithoutFalselyEndingCodeRepair() throws Exception {
         runtime=mock(RuntimeCheckService.class);
         when(runtime.evaluate(any())).thenReturn(new RuntimeCheckService.Result(new ValidationCheck("RUNTIME",ValidationCheck.Outcome.FAIL,true,"UI failed"),List.of(new ProjectDiagnostic(null,null,null,DiagnosticSeverity.ERROR,"Missing task row","runtime","BROWSER_ACCEPTANCE_FAILED"))));

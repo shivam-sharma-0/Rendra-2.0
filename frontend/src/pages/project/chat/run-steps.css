@@ -55,3 +55,4 @@
 .run-activity--good .run-activity__icon { color: #16A36A; }
 .run-activity--bad .run-activity__icon, .run-activity--bad .run-activity__detail { color: var(--neu-danger); }
 .dark .run-activity--good .run-activity__icon { color: #6EE7B7; }
+.run-activity__time { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--neu-faint); }

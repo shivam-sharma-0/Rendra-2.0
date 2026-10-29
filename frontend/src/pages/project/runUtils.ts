@@ -60,6 +60,12 @@ export function secondsBetween(fromIso: string, toMs: number): number {
   return Math.max(0, Math.round((toMs - new Date(fromIso).getTime()) / 1000))
 }
 
+/** A short elapsed label: "45s", "2m 05s". */
+export function formatSeconds(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
+}
+
 /* ── Version history (Figma 18) — every agent run, newest first, with per-run restore ─────────── */
 /** How a run's status reads: its label and a tone (coloured by the .pv-chip--<tone> styles). */
 export type StatusTone = 'ok' | 'busy' | 'wait' | 'failed' | 'idle'

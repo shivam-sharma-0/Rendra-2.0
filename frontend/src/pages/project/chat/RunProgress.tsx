@@ -3,7 +3,7 @@ import { type ActivityKind, type AgentActivity, type AgentRun, type AgentStep } 
 import { AppIcon, type AppIconName } from '../../../components/icons'
 import { cx } from '../../../lib/cx'
 import { timelineEntries } from '../activity'
-import { fileFromStep, friendlyToolTitle, reasoningFromStep, secondsBetween } from '../runUtils'
+import { fileFromStep, formatSeconds, friendlyToolTitle, reasoningFromStep, secondsBetween } from '../runUtils'
 import { useTicker } from '../useTicker'
 import { Markdown } from './Markdown'
 import './run-steps.css'
@@ -25,16 +25,51 @@ export function BuildProgress({ run, steps }: { run: AgentRun; steps: AgentStep[
   )
 }
 
-/** A run's user-facing timeline (chat build card and Details panel): thinking, files, checks, outcomes. */
-export function RunTimeline({ steps, startedAt }: { steps: AgentStep[]; startedAt: string }) {
+/** A run's user-facing timeline (chat build card and Details panel): thinking, stages, files, checks, outcomes.
+ * `active`: the run is still going, so its last unfinished stage shows as running. */
+export function RunTimeline({ steps, startedAt, active = false }: { steps: AgentStep[]; startedAt: string; active?: boolean }) {
   return (
     <>
       {timelineEntries(steps, startedAt).map((entry) => entry.type === 'thinking'
         ? <ThinkingStep key={entry.key} step={entry.step} previousCreatedAt={entry.since} />
         : entry.type === 'activity'
           ? <ActivityRow key={entry.key} activity={entry.activity} />
-          : <BuildStep key={entry.key} step={entry.step} />)}
+          : entry.type === 'progress'
+            ? <ProgressRow key={entry.key} title={entry.title} startedAt={entry.startedAt} endedAt={entry.endedAt} active={active} />
+            : <BuildStep key={entry.key} step={entry.step} />)}
     </>
+  )
+}
+
+/** One build stage: running (spinner and live time) until the next step arrives, then done with how long it took. */
+function ProgressRow({ title, startedAt, endedAt, active }: { title: string; startedAt: string; endedAt: string | null; active: boolean }) {
+  const running = endedAt === null && active
+  useTicker(running)
+  const end = endedAt === null ? (running ? Date.now() : null) : new Date(endedAt).getTime()
+  return (
+    <div className={cx('run-step run-activity', running ? 'is-running' : endedAt !== null && 'run-activity--good')}>
+      <span className="run-activity__icon" aria-hidden>{running ? <span className="msg-spin" /> : <AppIcon name={endedAt === null ? 'clock' : 'check'} />}</span>
+      <span className="run-activity__body">
+        <span className="run-activity__line">
+          <span className="run-step__label">{title}</span>
+          {end !== null && <span className="run-activity__time">{formatSeconds(secondsBetween(startedAt, end))}</span>}
+        </span>
+      </span>
+    </div>
+  )
+}
+
+/** The chat build card's live line: the stage running now and the run's total time. */
+export function LiveBuildStage({ run, steps }: { run: AgentRun; steps: AgentStep[] }) {
+  useTicker(true)
+  const stage = [...steps].reverse().find((step) => step.activity?.kind === 'PROGRESS')
+  const total = formatSeconds(secondsBetween(run.createdAt, Date.now()))
+  return (
+    <div className="msg-build-card__live" role="status">
+      <span className="msg-spin" />
+      <span className="msg-build-card__stage">{stage?.activity?.title ?? (run.status === 'QUEUED' ? 'Waiting to start' : 'Starting…')}</span>
+      <span className="msg-build-card__total">{total}</span>
+    </div>
   )
 }
 

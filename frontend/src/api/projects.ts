@@ -38,7 +38,7 @@ export type AgentRun = {
   failureReason?: 'DAILY_QUOTA_EXCEEDED' | 'RUN_TOKEN_BUDGET_EXCEEDED' | 'RUN_LIMIT_REACHED' | 'BUILD_VALIDATION_FAILED' | 'PROVIDER_REQUEST_REJECTED' | 'USER_REVIEW_REQUIRED' | 'AGENT_FAILED' | null
 }
 export type ActivityKind = 'THINKING' | 'READ' | 'CREATE' | 'EDIT' | 'DELETE' | 'MOVE' | 'PLAN' | 'CHECK' | 'REVIEW'
-  | 'ATTACHMENTS' | 'SAVED' | 'PREVIEW' | 'STATUS' | 'STOPPED' | 'FAILED' | 'ASK_USER' | 'MESSAGE'
+  | 'ATTACHMENTS' | 'SAVED' | 'PREVIEW' | 'STATUS' | 'PROGRESS' | 'STOPPED' | 'FAILED' | 'ASK_USER' | 'MESSAGE'
 /** What a step means to the user (from the backend's AgentActivityMapper). `ok`: outcome, or null while running / when none. */
 export type AgentActivity = { kind: ActivityKind; title: string; paths: string[]; ok: boolean | null; detail: string | null; items: string[] }
 /** A user-facing timeline step; internal steps (model calls, counters) are not sent. `activity` is absent from older servers. */

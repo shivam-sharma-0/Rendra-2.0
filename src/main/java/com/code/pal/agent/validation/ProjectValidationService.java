@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import com.code.pal.project.capability.BuildDecisions;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +43,22 @@ public class ProjectValidationService {
     /** Browser check of the staged site; null where no browser is wired (focused tests). */
     private final RuntimeCheckService runtime;
     private final Map<UUID, ValidationReport> lastReports = new ConcurrentHashMap<>();
+    /** Per-run listener for the final gate's stages (types, build, browser, API); never affects any outcome. */
+    private final Map<UUID, Consumer<String>> progress = new ConcurrentHashMap<>();
+
+    /** Reports the stages of this run's next final gate to {@code listener}; null stops reporting. */
+    public void reportProgress(UUID runId, Consumer<String> listener) {
+        if (runId == null) return;
+        if (listener == null) progress.remove(runId);
+        else progress.put(runId, listener);
+    }
+
+    private void stage(AgentContext context, String title) {
+        var listener = context.runId() == null ? null : progress.get(context.runId());
+        if (listener == null) return;
+        try { listener.accept(title); }
+        catch (RuntimeException ignored) { /* Progress is display only; a failed emit never changes validation. */ }
+    }
     /**
      * Comparisons already run for a staged revision, per run. The live project is locked for the run and
      * the candidate is the staged revision, so an operation's result cannot change until the agent writes
@@ -190,6 +207,7 @@ public class ProjectValidationService {
                         plan.unavailableReason()));
                 continue;
             }
+            stage(context, operation == ValidationOperation.TYPE_CHECK ? "Final check: types" : "Final check: build");
             var comparison = compareOnce(context, plan);
             comparisons.add(comparison);
             checks.add(new ValidationCheck(operation.name(),
@@ -221,6 +239,7 @@ public class ProjectValidationService {
             RuntimeCheckService.Result runtimeResult = criteriaKey.equals(revisionResults(context).runtimeCriteria)
                     ? revisionResults(context).runtime : null;
             if (runtimeResult == null) {
+                if (runtime != null) stage(context, "Testing the app in a browser");
                 runtimeResult = runtime == null
                         ? new RuntimeCheckService.Result(new ValidationCheck("RUNTIME", ValidationCheck.Outcome.SKIPPED,
                                 properties.getSandbox().isRuntimeCheck(), "Runtime probe is not wired"), List.of())
@@ -254,6 +273,7 @@ public class ProjectValidationService {
         // Collect real API evidence before selecting repairs; deferred checks are not evidence of a code defect.
         if (commandsPassed && checks.stream().noneMatch(ValidationCheck::unavailable)
                 && "mern".equals(stacks.detect(files, context.projectId(), context.root()).id())) {
+            if (mernBehavior != null) stage(context, "Testing the API and accounts");
             var apiChecks = mernBehavior == null ? List.of(new ValidationCheck("API_BEHAVIOR",
                     ValidationCheck.Outcome.SKIPPED, true, "Candidate API validator is not wired"))
                     : mernBehavior.check(context);

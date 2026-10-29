@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { agentApi, type AgentRun } from '../../../api/projects'
 import { newAiMessageId, newUserMessageId } from '../../../lib/ids'
 import { ApiClientError } from '../../../auth/api'
@@ -11,9 +11,9 @@ function retryable(run: AgentRun) {
 }
 
 /** The normal build surface; file activity remains available through Details. */
-export function BuildReplyCard({ run, projectId, explanation, currentPreview = true, onOpenDetails, onOpenPreview, onRetried }: {
+export function BuildReplyCard({ run, projectId, explanation, currentPreview = true, onOpenDetails, onOpenPreview, onRetried, children }: {
   run: AgentRun; projectId?: string; explanation?: string; currentPreview?: boolean
-  onOpenDetails: () => void; onOpenPreview: () => void; onRetried?: (run: AgentRun) => void
+  onOpenDetails: () => void; onOpenPreview: () => void; onRetried?: (run: AgentRun) => void; children?: ReactNode
 }) {
   const outcome = buildReply(run)
   const [retrying, setRetrying] = useState(false)
@@ -69,6 +69,7 @@ export function BuildReplyCard({ run, projectId, explanation, currentPreview = t
   return <section className="msg-build-card" aria-label="Build result" data-run-id={run.id}>
     <b>{outcome.title}</b>
     <p role="status" style={{ whiteSpace: 'pre-line' }}>{outcome.preview && !currentPreview ? 'This is an earlier saved build. Open Details to inspect it.' : text}</p>
+    {children}
     {retryError && <p role="alert">{retryError}</p>}
     <div className="msg-build-card__actions">
       {canRetry && <button type="button" onClick={() => void retry()} disabled={retrying}>{retrying ? 'Retrying…' : 'Retry'}</button>}

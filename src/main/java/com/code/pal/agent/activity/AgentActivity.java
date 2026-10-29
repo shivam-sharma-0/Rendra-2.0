@@ -42,6 +42,8 @@ public record AgentActivity(Kind kind, String title, List<String> paths, Boolean
         PREVIEW,
         /** Queued, restored, recovered. */
         STATUS,
+        /** A stage of a structured build (planning, writing a page, checks, repair); it runs until the next step. */
+        PROGRESS,
         STOPPED,
         FAILED,
         ASK_USER,

@@ -6,13 +6,13 @@ import { formatMessageTime, isActive } from '../runUtils'
 import { Markdown } from './Markdown'
 import { MessageActions } from './MessageActions'
 import { PlanApproval } from './PlanApproval'
-import { ThinkingLine } from './RunProgress'
+import { LiveBuildStage, ThinkingLine } from './RunProgress'
 import { BuildReplyCard } from './BuildReplyCard'
 import { BuildSuggestion } from './BuildSuggestion'
 import { buildReply, readableBuildText } from './buildReply'
 
 /** One turn of the conversation: an assistant reply (thinking / build progress while pending) or a user message. */
-export function ChatMessage({ message, run, projectId, currentPreview = true, onOpenDetails, onOpenPreview, onRetried, onFeedback, onEdit, onBuild }: {
+export function ChatMessage({ message, run, steps, projectId, currentPreview = true, onOpenDetails, onOpenPreview, onRetried, onFeedback, onEdit, onBuild }: {
   message: Message; run?: AgentRun; steps: AgentStep[]; projectId?: string
   onRetried?: (run: AgentRun) => void
   currentPreview?: boolean
@@ -37,7 +37,9 @@ export function ChatMessage({ message, run, projectId, currentPreview = true, on
   return (
     <article className="msg msg--agent" data-message-id={message.id} data-role="ASSISTANT">
       {build && run && <BuildReplyCard run={run} projectId={projectId} explanation={message.content} currentPreview={currentPreview}
-        onOpenDetails={onOpenDetails} onOpenPreview={onOpenPreview} onRetried={onRetried} />}
+        onOpenDetails={onOpenDetails} onOpenPreview={onOpenPreview} onRetried={onRetried}>
+        {active && <LiveBuildStage run={run} steps={steps} />}
+      </BuildReplyCard>}
       {pending || (build && active)
         ? (!build && <ThinkingLine since={run?.createdAt ?? message.createdAt} queued={run?.status === 'QUEUED'} />)
         : (
