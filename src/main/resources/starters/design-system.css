@@ -1,4 +1,4 @@
-/* Optional, ordinary HTML classes; override tokens for the product's visual direction. */
+/* Plain HTML looks finished on its own; the optional app-* classes and tokens set the product's visual direction. */
 :root {
   --app-background: #f7f8fa;
   --app-surface: #ffffff;
@@ -10,6 +10,8 @@
   --app-radius: 0.875rem;
   --app-content-width: 76rem;
   --app-space: clamp(1rem, 2.5vw, 2rem);
+  --app-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --app-danger: #b42318;
 }
 
 @layer base {
@@ -19,7 +21,7 @@
     margin: 0;
     background: var(--app-background);
     color: var(--app-text);
-    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: var(--app-font);
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
   }
@@ -32,6 +34,52 @@
   h1, h2, h3 { line-height: 1.15; text-wrap: balance; }
   p { text-wrap: pretty; }
   input, textarea, select { max-width: 100%; }
+  /* Tailwind's preflight strips these elements; generated pages often use them without classes. */
+  h1 { margin: 0 0 0.5em; font-size: clamp(1.6rem, 3.5vw, 2.25rem); }
+  h2 { margin: 1.25em 0 0.5em; font-size: 1.35rem; }
+  h3 { margin: 1em 0 0.4em; font-size: 1.1rem; }
+  p { margin: 0 0 0.75em; }
+  a { color: var(--app-accent); text-underline-offset: 0.2em; }
+  form { display: grid; gap: 0.9rem; }
+  label { display: grid; gap: 0.35rem; font-weight: 500; }
+  label:has(> input[type="checkbox"], > input[type="radio"]) { display: inline-flex; align-items: center; gap: 0.5rem; }
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), textarea, select {
+    width: 100%;
+    min-height: 2.6rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--app-border);
+    border-radius: calc(var(--app-radius) * 0.65);
+    background: var(--app-surface);
+    color: var(--app-text);
+  }
+  textarea { min-height: 6rem; resize: vertical; }
+  input[type="checkbox"], input[type="radio"] { width: 1.1rem; height: 1.1rem; accent-color: var(--app-accent); }
+  button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    min-height: 2.5rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--app-border);
+    border-radius: calc(var(--app-radius) * 0.65);
+    background: var(--app-surface);
+    color: var(--app-text);
+    font-weight: 600;
+  }
+  button[type="submit"], button[data-action="add"], button[data-action="save"], button[data-action="create"] {
+    border-color: var(--app-accent);
+    background: var(--app-accent);
+    color: var(--app-on-accent);
+  }
+  button[aria-pressed="true"] { border-color: var(--app-accent); color: var(--app-accent); }
+  button:hover:not(:disabled) { filter: brightness(0.96); }
+  button:disabled { opacity: 0.55; }
+  ul, ol { margin: 0; padding-left: 1.25rem; }
+  li + li { margin-top: 0.5rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--app-border); text-align: left; }
+  [role="alert"] { color: var(--app-danger); }
 }
 
 @layer components {
@@ -79,6 +127,14 @@
     color: var(--app-text);
   }
   .app-muted { color: var(--app-muted); }
+  /* The generated app shell: brand, navigation and the page column. */
+  .app-header { border-bottom: 1px solid var(--app-border); background: var(--app-surface); }
+  .app-header__bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; min-height: 3.75rem; }
+  .app-brand { color: var(--app-text); font-size: 1.1rem; font-weight: 700; text-decoration: none; }
+  .app-nav { display: flex; flex-wrap: wrap; gap: 1rem; }
+  .app-nav a { color: var(--app-muted); font-weight: 500; text-decoration: none; }
+  .app-nav a:hover { color: var(--app-text); }
+  .app-main { padding-block: var(--app-space); }
 }
 
 @media (prefers-reduced-motion: reduce) {

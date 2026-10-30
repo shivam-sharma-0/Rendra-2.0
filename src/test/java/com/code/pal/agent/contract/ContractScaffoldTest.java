@@ -53,6 +53,9 @@ class ContractScaffoldTest {
         for(var c:List.of(ContractFixtures.staticSite(),ContractFixtures.vite(),ContractFixtures.mern())){
             var first=scaffold.render(c,"Fixture",p->null);assertEquals(first,scaffold.render(c,"Fixture",p->null));
             assertTrue(first.get(c.clientRoot()+"theme.css").contains("--rendra-accent: #123456"));
+            // The design system reads --app-*: the approved palette must reach it (2026-10-29 review).
+            assertTrue(first.get(c.clientRoot()+"theme.css").contains("--app-accent: var(--rendra-accent);"));
+            assertEquals(c.theme().containsKey("foreground"),first.get(c.clientRoot()+"theme.css").contains("--app-text: var(--rendra-foreground);"));
             if(c.stack()==BuildContract.Stack.MERN){
                 assertEquals(first.get(c.clientRoot()+"types.ts"),first.get(c.serverRoot()+"types.ts"));
                 assertTrue(first.get(c.serverRoot()+"register.ts").contains("app.use(\"/api/items\", itemsRouter)"));

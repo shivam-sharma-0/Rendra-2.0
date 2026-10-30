@@ -29,7 +29,10 @@ class ContractScaffoldRouterTest {
         var contract = routed();
         String app = new ContractScaffold(new ObjectMapper()).render(contract, "Fixture", path -> null).get("src/App.tsx");
         assertTrue(app.contains("window.location.hash"));
-        assertTrue(app.contains("<HashRouter><Routes>"), "Use the preinstalled reactive hash router");
+        assertTrue(app.contains("<HashRouter>") && app.contains("<Routes>"), "Use the preinstalled reactive hash router");
+        // The shell names the app and links the plain pages (2026-10-29 review: pages had no header or navigation).
+        assertTrue(app.contains("const APP_NAME = \"Fixture\"") && app.contains("className=\"app-brand\">{APP_NAME}"));
+        assertTrue(app.contains("className=\"app-nav\"") && app.contains("!route.path.includes(':')"));
         assertTrue(app.contains("useParams()"), "Keep dynamic route params available to generated pages");
         assertTrue(app.contains("replaceState"), "The initial home hash must replace history, not add a duplicate entry");
         assertTrue(app.contains("<Link to=\"/\""));
@@ -43,7 +46,7 @@ class ContractScaffoldRouterTest {
         var v1 = new BuildContract(1, v2.id(), v2.stack(), v2.storage(), v2.auth(), v2.limits(), v2.theme(),
                 v2.routes(), v2.types(), v2.models(), v2.api(), v2.assets(), v2.envNames(), v2.units(), v2.acceptance());
         String app = new ContractScaffold(new ObjectMapper()).render(v1, "Fixture", path -> null).get("src/App.tsx");
-        assertTrue(app.contains("<HashRouter><Routes>"));
+        assertTrue(app.contains("<HashRouter>") && app.contains("<Routes>"));
         assertFalse(app.contains("BrowserRouter"));
     }
 

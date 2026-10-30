@@ -24,7 +24,7 @@ public enum Starter {
     MERN("mern");
 
     private static final String BASE = "starters/";
-    public static final String TEMPLATE_VERSION = "2026-10-19.1";
+    public static final String TEMPLATE_VERSION = "2026-10-30.1";
     public static final String RUNTIME_IMAGE = "node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c";
     private static final List<String> VITE_FILES = List.of("package.json", "package-lock.json", "tsconfig.json", "vite.config.ts",
             "index.html", "src/main.tsx", "src/index.css", "src/router.tsx");
@@ -64,7 +64,9 @@ public enum Starter {
             files.put("client/vite.config.ts", read("mern/client/vite.config.ts"));
             for (String path : SERVER_FILES) files.put(path, read("mern/" + path));
         }
-        files.replaceAll((path, content) -> path.endsWith("index.html") ? content.replace("{{title}}", escapeHtml(title(title))) : content);
+        // The title doubles as the description until the model writes a better one; both satisfy the production baseline.
+        files.replaceAll((path, content) -> path.endsWith("index.html")
+                ? content.replace("{{title}}", escapeHtml(title(title))).replace("{{description}}", escapeHtml(title(title))) : content);
         return files;
     }
 

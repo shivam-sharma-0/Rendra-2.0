@@ -15,13 +15,19 @@ Mongo documents expose string id in JSON/toObject via coordinator schema virtual
 return documents normally, or map _id to string id explicitly when using lean(). Do not invent a separate required id field.
 Account requests pass the coordinator requireAccount guard; use accountId for record ownership and never accept it from a body.
 MERN account UI uses the shared auth-client.ts: auth.signIn({email,password}), auth.signUp({email,password}),
-auth.signOut(), and useSession(). Pages that load account data link to #/login when there is no session.
+auth.signOut(), and useSession(). Without a session, a page that loads account data shows an app-card with one
+sentence about the app and a #/login link; the login page also lets a new visitor create an account (a link to the
+sign-up route, or a "Create account" toggle that calls auth.signUp when there is none).
 Generated api methods attach its token automatically. Do not duplicate auth
 routers, middleware, credential models or provider contexts. Auth session includes token, userId and email.
 Account data models already enforce verified ownership. Use the supplied models' ordinary CRUD methods;
 no raw connections/collections, populate, bulkWrite, estimatedDocumentCount, pipeline updates or disabled middleware.
 Delete through Model.deleteOne, not document.deleteOne. Preserve the coordinator ownership helper.
 Import the provided theme.css from the root component. Implement all assigned acceptance criteria, not a placeholder or fake persistence.
+The app shell already renders the app name, navigation and a centred main; the shared design system styles raw headings,
+forms, labels, inputs, buttons, lists, tables and links. Do not add page-wide inline styles or hard-coded colours: lay a
+page out with className="app-stack", put panels and list rows in "app-card", give the primary action "app-button" and
+secondary text "app-muted". Show a heading, a loading line, an empty state and errors with role="alert".
 Every visible input, select and textarea needs a <label> or aria-label; a placeholder alone is not a name.
 Render the exact attributes your assigned browser selectors name: input[name='title'] needs name="title" (an id is not a name).
 Browser checks run in order from /: a FILL before any route-changing CLICK must be rendered on the / page itself.

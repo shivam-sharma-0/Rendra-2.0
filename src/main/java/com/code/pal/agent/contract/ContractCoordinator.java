@@ -643,8 +643,22 @@ public final class ContractCoordinator {
     }
 
     private Map<String, String> render(AgentContext ctx, BuildContract contract) {
-        return scaffold.render(contract, "App", path -> files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null,
-                ctx.projectId());
+        return scaffold.render(contract, appName(ctx.projectId()),
+                path -> files.regularFile(ctx.projectId(), ctx.root(), path) ? bounded(ctx, path) : null, ctx.projectId());
+    }
+
+    /** The approved product title names the page and the app shell; "App" only when none was approved. */
+    private String appName(UUID project) {
+        var approved = memory.current(project);
+        if (approved == null || approved.specJson() == null)
+            return "App";
+        try {
+            var draft = mapper.readTree(approved.specJson());
+            String title = (draft.has("requestedScope") ? draft.path("requestedScope") : draft).path("title").asString("").strip();
+            return title.isEmpty() ? "App" : title;
+        } catch (RuntimeException unreadable) {
+            return "App";
+        }
     }
 
     private void requireSpec(AgentContext ctx, ContractStore.Binding basis, ApprovedSpec spec) {

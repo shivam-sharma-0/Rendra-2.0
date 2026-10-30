@@ -17,6 +17,9 @@ import java.util.function.Function;
 /** Pure rendering. The coordinator owns all mutations; no LLM, installation or connector activation here. */
 @Component
 public final class ContractScaffold {
+    /** Contract theme key → design-system token it drives (muted is the planner's quiet line colour, not text). */
+    private static final Map<String, String> DESIGN_TOKENS = Map.of("background", "background", "foreground", "text",
+            "accent", "accent", "muted", "border", "radius", "radius", "spacing", "space", "font", "font");
     private final ObjectMapper mapper;
 
     public ContractScaffold(ObjectMapper mapper) {
@@ -60,6 +63,11 @@ public final class ContractScaffold {
                 case "mono" -> "monospace";
                 default -> "serif";
                 } : v).append(";\n"));
+        // The design system reads --app-*: the approved palette must reach it, not only pages that ask for --rendra-*.
+        new TreeMap<>(DESIGN_TOKENS).forEach((key, token) -> {
+            if (c.theme().containsKey(key))
+                theme.append("  --app-").append(token).append(": var(--rendra-").append(key).append(");\n");
+        });
         out.put(root + "theme.css", theme.append("}\n").toString());
         out.put(root + "contract.json", mapper.writeValueAsString(
                 Map.of("version", c.schemaVersion(), "id", c.id(), "envNames", new TreeSet<>(c.envNames()))));
@@ -96,6 +104,7 @@ public final class ContractScaffold {
             String directory = app.substring(0, app.lastIndexOf('/') + 1);
             out.put(app, "import " + json(relative(directory, root + "theme.css", true)) + "\nimport { routes } from "
                     + json(relative(directory, root + "routes.ts", true))
+                    + "\nconst APP_NAME = " + json(title == null || title.isBlank() ? "App" : title.strip())
                     // Every planner and unit prompt asks for #/path links; a pathname router ignores them.
                     + "\n" + resource("contract/hash-app.tsx"));
         }
@@ -149,7 +158,7 @@ public final class ContractScaffold {
     }
 
     public static String revision() {
-        return ContractStore.hash("contract-scaffold-2026-10-28.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
+        return ContractStore.hash("contract-scaffold-2026-10-30.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
                 + "/" + resource("contract/hash-app.tsx"));
     }
 

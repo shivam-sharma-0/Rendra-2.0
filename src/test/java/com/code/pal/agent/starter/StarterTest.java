@@ -32,6 +32,10 @@ class StarterTest {
                 "src/index.css", "src/router.tsx", "src/design-system.css"), List.copyOf(files.keySet()));
         assertTrue(files.get("index.html").contains("<title>Tip &lt;Calc&gt; &amp; &quot;more&quot;</title>"));
         assertTrue(files.get("index.html").contains("src=\"/src/main.tsx\""));
+        // A fresh app meets the production baseline: a description and an icon (2026-10-29 review).
+        assertTrue(files.get("index.html").contains("<meta name=\"description\" content=\"Tip &lt;Calc&gt; &amp; &quot;more&quot;\" />"));
+        assertTrue(files.get("index.html").contains("<link rel=\"icon\" href=\"data:image/svg+xml,"));
+        assertTrue(files.get("src/design-system.css").contains("button[type=\"submit\"]"), "raw elements are styled");
         assertTrue(files.get("src/index.css").startsWith("@import \"tailwindcss\";"));
         assertTrue(files.get("vite.config.ts").contains("plugins: [react(), tailwindcss()]"));
         assertTrue(files.get("src/main.tsx").contains("import App from './App'"), "the model writes src/App.tsx");
