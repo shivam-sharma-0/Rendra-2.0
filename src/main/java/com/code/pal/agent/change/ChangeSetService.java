@@ -232,6 +232,7 @@ public class ChangeSetService {
         requireRepairAvailable(set);
         String path = context.resolvePath(relative);
         UnitWriteScope.destination(context, path);
+        requireAgentWritable(path);
         if (files.exists(set.projectId, set.stage, path))
             throw failure("FILE_ALREADY_EXISTS", "File already exists", path);
         ensureTextSize(content);
@@ -263,6 +264,7 @@ public class ChangeSetService {
                     String path = Path.of(context.resolvePath(entry.path())).normalize().toString().replace('\\', '/');
                     path = context.resolvePath(path);
                     UnitWriteScope.destination(context, path);
+                    requireAgentWritable(path);
                     if (!portablePaths.add(path))
                         throw failure("DUPLICATE_BATCH_PATH", "Batch paths must be distinct", path);
                     prepared.put(path, new NewFile(path, entry.content()));
@@ -498,6 +500,7 @@ public class ChangeSetService {
         requireRepairAvailable(set);
         String path = context.resolvePath(relative);
         UnitWriteScope.destination(context, path);
+        requireAgentWritable(path);
         requireRegular(set, path);
         String actual = files.version(set.projectId, set.stage, path);
         requireVersion(path, expectedVersion, actual);
@@ -530,6 +533,7 @@ public class ChangeSetService {
         requireRepairAvailable(set);
         String path = context.resolvePath(relative);
         UnitWriteScope.destination(context, path);
+        requireAgentWritable(path);
         requireRegular(set, path);
         String actual = files.version(set.projectId, set.stage, path);
         requireVersion(path, expectedVersion, actual);
@@ -550,7 +554,9 @@ public class ChangeSetService {
         String source = context.resolvePath(sourceRelative);
         String target = context.resolvePath(targetRelative);
         UnitWriteScope.destination(context, source);
+        requireAgentWritable(source);
         UnitWriteScope.destination(context, target);
+        requireAgentWritable(target);
         requireRegular(set, source);
         if (files.exists(set.projectId, set.stage, target))
             throw failure("RENAME_TARGET_EXISTS", "Rename target already exists", target);
@@ -579,6 +585,7 @@ public class ChangeSetService {
         String target = context.resolvePath(targetRelative);
         UnitWriteScope.source(context, source);
         UnitWriteScope.destination(context, target);
+        requireAgentWritable(target);
         requireRegular(set, source);
         if (files.exists(set.projectId, set.stage, target))
             throw failure("FILE_ALREADY_EXISTS", "Copy target already exists", target);
@@ -1236,6 +1243,18 @@ public class ChangeSetService {
             throw new AgentToolException("STALE_FILE_VERSION", "File version no longer matches",
                     Map.of("path", path, "expectedVersion", expected, "actualVersion", actual, "action",
                             "Re-read the file before retrying"));
+    }
+
+    /**
+     * A full-stack app's platform scaffold (accounts, record ownership, API wiring) is written only by its contract
+     * build; an edit reads it but cannot weaken it.
+     */
+    private static void requireAgentWritable(String path) {
+        String lower = path.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("server/src/rendra/") || lower.startsWith("client/src/rendra/"))
+            throw failure("PLATFORM_FILE_READ_ONLY",
+                    "Platform account, ownership and API files are read-only; change the app's own pages, components and routers",
+                    path);
     }
 
     private static AgentToolException failure(String code, String message, String path) {

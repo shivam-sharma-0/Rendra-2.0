@@ -83,7 +83,11 @@ public final class RunBehaviorCriteria {
         var criteria = mapper.readValue(source.json(), BehaviorCriteria.class);
         var browser = criteria.browser().stream()
                 .filter(action -> !retired.contains(action.id())).toList();
-        return browser.isEmpty() ? null : new BehaviorCriteria(1, browser, List.of(), false, false, criteria.provenance());
+        if (criteria.modelSpec())
+            return browser.isEmpty() ? null : new BehaviorCriteria(1, browser, List.of(), false, false, criteria.provenance());
+        // A saved full-stack app keeps its API, account and CRUD checks, and its browser checks run signed in.
+        return browser.isEmpty() && criteria.api().isEmpty() ? null : new BehaviorCriteria(1, browser, criteria.api(),
+                criteria.authRequired(), criteria.crudRequired(), criteria.provenance());
     }
 
     /** Retires inherited checks the user's request intentionally changes or removes; returns what remains. */

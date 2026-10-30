@@ -52,6 +52,9 @@ public class ProjectContextService {
     private static final int DIGEST_LINE_CHARS = 160;
     private static final Pattern EXPLICIT_PATH = Pattern.compile(
             "(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.@-]+[/\\\\])+[A-Za-z0-9_.@-]+\\.[A-Za-z0-9]+|[A-Za-z0-9_.@-]+\\.(?:tsx?|jsx?|json|css|scss|md|java|kt|py|go|rs|ya?ml))(?![A-Za-z0-9_.-])");
+    /** "the home page", "login screen": a page the user names without its file. */
+    private static final Pattern PAGE_MENTION = Pattern.compile(
+            "(?i)\\b(home|landing|main|start|front|log[ -]?in|sign[ -]?in|sign[ -]?up|register|[a-z]+)[ -]?(?:page|screen)\\b");
     private static final Pattern JS_IMPORT = Pattern.compile(
             "(?:import|export)\\s+(?:[^;]*?\\s+from\\s+)?[\"']([^\"']+)[\"']|require\\(\\s*[\"']([^\"']+)[\"']\\s*\\)");
     private static final Pattern JAVA_IMPORT = Pattern.compile("(?m)^\\s*import\\s+([A-Za-z0-9_.*]+)\\s*;");
@@ -531,6 +534,17 @@ public class ProjectContextService {
         Set<String> paths = new LinkedHashSet<>();
         Matcher matcher = EXPLICIT_PATH.matcher(request);
         while (matcher.find()) paths.add(matcher.group(1).replace('\\', '/'));
+        Matcher page = PAGE_MENTION.matcher(request);
+        while (page.find()) {
+            String name = switch (page.group(1).toLowerCase(Locale.ROOT).replaceAll("[ -]", "")) {
+                case "home", "landing", "main", "start", "front" -> "Home";
+                case "login", "signin" -> "Login";
+                case "signup", "register" -> "Signup";
+                default -> Character.toUpperCase(page.group(1).charAt(0)) + page.group(1).substring(1).toLowerCase(Locale.ROOT);
+            };
+            for (String suffix : List.of(".tsx", "Page.tsx", ".jsx", "Page.jsx"))
+                paths.add(name + suffix);
+        }
         return Set.copyOf(paths);
     }
 

@@ -31,6 +31,9 @@ public final class MernBehaviorCheck {
 
     public List<ValidationCheck> check(AgentContext ctx) {
         var recipe = criteria.current(ctx);
+        // An edit of a saved app has no acceptance of its own: it must still pass the saved app's API checks.
+        if (recipe == null)
+            recipe = criteria.regression(ctx);
         if (recipe == null || recipe.api().isEmpty())
             return List.of(new ValidationCheck("API_BEHAVIOR", ValidationCheck.Outcome.SKIPPED, true,
                     "Version-bound API acceptance criteria are unavailable"));

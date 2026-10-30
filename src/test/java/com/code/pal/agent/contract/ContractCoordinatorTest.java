@@ -60,6 +60,17 @@ class ContractCoordinatorTest {
         var run=run(ProjectType.BUILD);assertTrue(coordinator.eligible(run,RunSize.of(SizeTier.S,List.of(),props),"Build a todo app"));
         props.setFullStackContracts(false);assertFalse(coordinator.eligible(run,RunSize.of(SizeTier.S,List.of(),props),"Build a todo app"));
     }
+    @Test void aSavedMernAppIsEditedInTheToolLoopUnlessTheRunIsAlreadyBoundToAContract() {
+        // 2026-10-29 owner run 32e00d1a: "fix the landing page" re-planned the whole app and mounted a second scaffold.
+        props.setStructuredContracts(false);
+        when(decisions.state(project.projectId)).thenReturn(new BuildDecisions.State(new BuildDecisions.Choice(1,BuildDecisions.Storage.MERN,BuildDecisions.Auth.ACCOUNTS,null),new BuildDecisions.Available(true,null),null));
+        var run=run(ProjectType.BUILD);var size=RunSize.of(SizeTier.S,List.of(),props);
+        assertTrue(coordinator.eligible(run,size,"Build a todo app"),"the first build plans a contract");
+        project.write("server/src/rendra/445f75fe-a626-4e21-a18a-f45654c24f8c/register.ts","export function registerContract() {}");
+        assertFalse(coordinator.eligible(run,size,"Make the landing page show a sign-up link"),"a saved app is patched, not re-planned");
+        when(store.forRun(project.projectId,run.getId())).thenReturn(saved(run,"APPROVED"));
+        assertTrue(coordinator.eligible(run,size,"Make the landing page show a sign-up link"),"a run resumed on its contract keeps it");
+    }
     AgentContext context(AgentRun run){return new AgentContext(project.projectId,7L,run.getMode(),run.getMode()==ProjectType.BUILD?changes.start(run.getId(),project.projectId):".",null,new com.code.pal.agent.context.ProjectContextTrace(),run.getId(),new com.code.pal.agent.plan.AgentPlanState(),project.files);}
     ContractStore.Stored saved(AgentRun run,String state){return new ContractStore.Stored(run.getId(),project.projectId,c,"hash",binding,state,"EXPLICIT_PLAN");}
     LlmClient.LlmResult generate(LlmClient.LlmRequest req){

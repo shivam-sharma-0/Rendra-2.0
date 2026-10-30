@@ -16,7 +16,8 @@ param(
     [switch]$GenerationImprovements,
     # Developer-only: units use the operator's logged-in Codex CLI (low effort) to compare model quality; -CodexModel picks the model.
     [switch]$CodexRoute,
-    [ValidateSet('gpt-5.6-luna','gpt-5.6-sol')][string]$CodexModel='gpt-5.6-sol'
+    [ValidateSet('gpt-5.6-luna','gpt-5.6-sol')][string]$CodexModel='gpt-5.6-sol',
+    [string]$FollowUp
 )
 $ErrorActionPreference='Stop'
 $selectedGates = @(@($PhaseOneGate, $PhaseTwoGate, $AgentBenchmark, $ViteGeneration, $PlanningIntake) | Where-Object { $_ })
@@ -255,6 +256,8 @@ END $codex$;
     if ($PhaseOneGate) {
         $nodeArguments += 'phase-one'
     }
+    # mern only: after the saved build, the driver sends this change and checks it patched the app.
+    $env:CODEPAL_E2E_FOLLOW_UP=$FollowUp
     $priorNativePreference=$ErrorActionPreference
     try {
         # Native stderr must not skip durable usage export; the explicit exit code still fails the gate below.

@@ -86,6 +86,25 @@ class ProjectContextServiceTest {
     }
 
     @Test
+    void aPageNamedInWordsIsTheMentionedFile() throws Exception {
+        // 2026-10-29 E2E 46: "on the home page" preloaded only entry points, so the edit landed in index.html.
+        project.write("client/index.html", "<title>App</title>")
+                .write("client/src/main.tsx", "import App from './App'")
+                .write("client/src/App.tsx", "export default function App() { return null }")
+                .write("client/src/pages/Home.tsx", "export default function Home() { return null }")
+                .write("client/src/pages/Login.tsx", "export default function Login() { return null }")
+                .write("client/src/pages/EditTask.tsx", "export default function EditTask() { return null }");
+        var service = new ProjectContextService(new AgentProperties(), new ObjectMapper());
+        String request = "Add a welcome line to the home page and a hint on the sign-in screen";
+        var mentioned = service.build(project.files, project.projectId, ".", request, List.of(), List.of())
+                .diagnostics().selectedFiles().stream()
+                .filter(item -> item.reason() == ContextSelectionReason.USER_MENTIONED)
+                .map(item -> item.path()).toList();
+        assertTrue(mentioned.containsAll(List.of("client/src/pages/Home.tsx", "client/src/pages/Login.tsx")), mentioned.toString());
+        assertFalse(mentioned.contains("client/src/pages/EditTask.tsx"), mentioned.toString());
+    }
+
+    @Test
     void buildsCompactReactMapAndPrioritizesTheCurrentFeature() throws Exception {
         Files.createDirectories(workspace.resolve("src/features/auth"));
         Files.createDirectories(workspace.resolve("src/features/catalog"));

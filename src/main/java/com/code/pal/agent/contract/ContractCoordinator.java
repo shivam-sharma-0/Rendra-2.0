@@ -99,19 +99,27 @@ public final class ContractCoordinator {
         }
         var approved = memory.current(run.getProjectId());
         var choice = approved == null ? null : decisions.state(run.getProjectId()).choice();
-        boolean fullStack = props.isFullStackContracts() && choice != null
-                && choice.storage() == BuildDecisions.Storage.MERN;
         var attached = store.forRun(run.getProjectId(), run.getId());
+        boolean offered = store.acceptedPlanRun(run) != null;
+        // A saved full-stack app changes by patching it in the tool loop under its inherited checks; only its first build
+        // (or a run already bound to a contract) plans one, which would otherwise rewrite the app and mount a second scaffold.
+        boolean fullStack = props.isFullStackContracts() && choice != null
+                && choice.storage() == BuildDecisions.Storage.MERN
+                && (attached != null || offered || !savedContractBuild(run.getProjectId()));
         if (!props.isStructuredContracts() && !fullStack && unitCheckpoints != null && attached != null) {
             throw new WorkflowStageException(
                     "This run needs structured execution; restore its reviewed configuration before resuming");
         }
-        boolean acceptedPlan = attached != null && "APPROVED".equals(attached.state())
-                || store.acceptedPlanRun(run) != null;
+        boolean acceptedPlan = attached != null && "APPROVED".equals(attached.state()) || offered;
         return (props.isStructuredContracts() || fullStack) && approved != null
                 && (run.getMode() == ProjectType.PLAN || run.getMode() == ProjectType.BUILD
                         && (fullStack || size.tier() != SizeTier.S || RequestRouter.buildApprovedPlan(request)
                                 || acceptedPlan));
+    }
+
+    /** A full-stack contract build was saved: its server scaffold folder is in the live project. */
+    private boolean savedContractBuild(UUID project) {
+        return files.exists(project, ".", "server/src/rendra");
     }
 
     public record Outcome(BuildContract contract, String summary) {
@@ -487,7 +495,7 @@ public final class ContractCoordinator {
 
     boolean fixRelativeImports(AgentContext ctx, BuildContract contract, List<BuildContract.Unit> units, ValidationReport report) {
         if (report.introducedDiagnostics().stream().noneMatch(diagnostic -> RelativeImports.missingModule(diagnostic)
-                || MissingImports.missingName(diagnostic) != null)) return false;
+                || MissingImports.missingName(diagnostic) != null || EmptyStateTypes.diagnosed(diagnostic))) return false;
         var output = importFixes(ctx, contract, units, report.introducedDiagnostics());
         if (output.isEmpty()) return false;
         if (report.changeSetRevision() != changes.view(ctx).revision())
@@ -535,7 +543,7 @@ public final class ContractCoordinator {
                 String typesModule = (path.startsWith("server/") ? contract.serverRoot() : contract.clientRoot()) + "types.ts";
                 if (diagnostics != null && existing.contains(typesModule))
                     fixed = MissingImports.types(path, fixed, diagnostics, typeNames, typesModule);
-                fixes.put(path, fixed);
+                fixes.put(path, EmptyStateTypes.fix(path, fixed, typeNames));
             }
             var assigned = contract.acceptance().browser().stream().filter(action -> unit.acceptanceIds().contains(action.id())).toList();
             AcceptanceAttributes.actionButtons(assigned, AcceptanceAttributes.nameFields(assigned, fixes)).forEach((path, fixed) -> {

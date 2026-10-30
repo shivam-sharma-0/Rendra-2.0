@@ -31,6 +31,23 @@ class ChangeSetServiceTest {
         when(runs.recordSnapshot(any(),any())).thenReturn(1);
     }
     @Test
+    void editsCanReadButNeverChangeThePlatformScaffold() {
+        String auth = "server/src/rendra/445f75fe-a626-4e21-a18a-f45654c24f8c/auth.ts";
+        project.write(auth, "export const requireAccount = () => {}\n").write("client/src/pages/Home.tsx", "export default 1\n");
+        UUID runId = UUID.randomUUID();
+        AgentContext context = context(runId, service.start(runId, project.projectId), "Patch", "Validate");
+        String version = project.files.version(project.projectId, context.root(), auth);
+        var patched = assertThrows(AgentToolException.class, () -> service.patch(context, auth, version, "{}", "{ next() }"));
+        assertEquals("PLATFORM_FILE_READ_ONLY", patched.code());
+        assertThrows(AgentToolException.class, () -> service.delete(context, auth, version));
+        assertThrows(AgentToolException.class, () -> service.create(context, "client/src/rendra/x/api.ts", "export {}\n"));
+        assertThrows(AgentToolException.class, () -> service.copy(context, "client/src/pages/Home.tsx", "server/src/rendra/x/Home.tsx"));
+        service.patch(context, "client/src/pages/Home.tsx",
+                project.files.version(project.projectId, context.root(), "client/src/pages/Home.tsx"), "1", "2");
+        assertEquals("export const requireAccount = () => {}\n", project.files.readText(project.projectId, context.root(), auth));
+    }
+
+    @Test
     void revokedEditorCannotPromoteValidatedFiles() {
         project.write("src/settings.ts", "export const theme = 'light';\n");
         UUID runId = UUID.randomUUID();
