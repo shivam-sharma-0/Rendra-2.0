@@ -70,6 +70,9 @@ public final class RequestRouter {
     private static final Pattern FEATURE_NEED = Pattern.compile(
             "\\b(?:it|this|that) needs? (?:a |an |the )?(?:footer|header|button|navbar|login|dark mode)\\b|"
                     + "\\b(?:header|footer|button|page|navbar) should\\b");
+    /** "the home page should show …": a wished-for change, even after a leading "when …". */
+    private static final Pattern WISHED_CHANGE = Pattern.compile(
+            "\\b(?:should|must|needs? to|has to)\\s+(?:also\\s+)?(?:show|display|have|include|contain|say|list|open|use|support|be)\\b");
     private static final Pattern OBJECT_IMPERATIVE = Pattern.compile(
             "\\b(?:karo|kar do|banao|bana do|bnao|bna do|daal do|hata do|badal do|badlo|lagao|jodo|sudharo)"
                     + "(?: please| now)*[.!? ]*$|^(?:dark mode|login page|footer|header) chahiye[.!? ]*$");
@@ -120,15 +123,18 @@ public final class RequestRouter {
         if (productQuestion(text) || QUESTION_PREFIX.matcher(text).find() || INFORMATION_REQUEST.matcher(text).find()) {
             return Route.QUESTION;
         }
+        // A statement of how the app should behave is a change request, not a question, unless it asks one.
+        boolean wished = !text.endsWith("?")
+                && (WISHED_CHANGE.matcher(positive).find() || FEATURE_NEED.matcher(positive).find());
         if ((EXPLANATION.matcher(text).find() || QUESTION_START.matcher(text).find())
-                && !DIRECT_CHANGE.matcher(positive).find()
+                && !wished && !DIRECT_CHANGE.matcher(positive).find()
                 && !CONTRAST_ACTION.matcher(positive).find()) {
             return Route.QUESTION;
         }
         if (NEGATED.matcher(text).find() && !change) {
             return Route.QUESTION;
         }
-        if (change || appNeed(positive) || FEATURE_NEED.matcher(positive).find() || appRequest(text)) {
+        if (change || wished || appNeed(positive) || FEATURE_NEED.matcher(positive).find() || appRequest(text)) {
             return Route.CHANGE;
         }
         if (BUG.matcher(positive).find()) {

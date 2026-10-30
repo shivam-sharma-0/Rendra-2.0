@@ -71,6 +71,20 @@ class RequestRouterTest {
     }
 
     @Test
+    void howTheAppShouldBehaveIsAChangeUnlessItAsksAQuestion() {
+        // 2026-10-29 E2E 43: a BUILD follow-up starting with "When" ran as CHAT and changed nothing.
+        for (String wish : List.of(
+                "When nobody is signed in, the home page should show the title 'My Todos' and a welcome line.",
+                "The task list must show the due date next to each title",
+                "when a task is done it should be greyed out")) {
+            assertEquals(RequestRouter.Route.CHANGE, RequestRouter.route(wish), wish);
+            assertEquals(ProjectType.BUILD, RequestRouter.mode(ProjectType.BUILD, wish, List.of()), wish);
+        }
+        assertEquals(RequestRouter.Route.QUESTION, RequestRouter.route("When should the home page show the title?"));
+        assertEquals(RequestRouter.Route.QUESTION, RequestRouter.route("Why should I use MongoDB here?"));
+    }
+
+    @Test
     void imageRoutingUsesTheActualInstruction() {
         var images = List.of("uploads/mockup.png");
         assertEquals(RequestRouter.Route.QUESTION, RequestRouter.route("Explain this image", images, false));

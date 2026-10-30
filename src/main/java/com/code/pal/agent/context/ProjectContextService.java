@@ -175,6 +175,17 @@ public class ProjectContextService {
             decisions += memory.prompt(projectId);
         }
         compactSection(summary, "Approved decisions", decisions, 1_000);
+        // A complaint about "the home page" is answered from that page's code, not from its file name.
+        Set<String> named = explicitPaths(userRequest);
+        StringBuilder sourcesNamed = new StringBuilder();
+        for (ProjectFileSummary file : map.importantFiles()) {
+            if (!matchesPath(file.path(), named) || sourcesNamed.length() >= 4_000) {
+                continue;
+            }
+            int available = Math.max(0, 4_000 - sourcesNamed.length() - file.path().length() - 3);
+            sourcesNamed.append(file.path()).append(":\n").append(readAtMost(sources.content(file.path()), available)).append('\n');
+        }
+        compactSection(summary, "Files the request names", sourcesNamed.toString(), 4_000);
         summary.append("Scan: files=").append(map.scannedFileCount()).append(", truncated=")
                 .append(map.scanTruncated()).append("\n</project_context>");
         return summary.toString();

@@ -102,6 +102,10 @@ class ProjectContextServiceTest {
                 .map(item -> item.path()).toList();
         assertTrue(mentioned.containsAll(List.of("client/src/pages/Home.tsx", "client/src/pages/Login.tsx")), mentioned.toString());
         assertFalse(mentioned.contains("client/src/pages/EditTask.tsx"), mentioned.toString());
+        // The no-tools reply to "landing page showing …" sees that page's code (owner run c6912acc answered blind).
+        String summary = service.compactSummary(project.files, project.projectId, "landing page showing 'Please sign in' this dialogue");
+        assertTrue(summary.contains("client/src/pages/Home.tsx:\nexport default function Home()"), summary);
+        assertFalse(summary.contains("export default function EditTask()"), summary);
     }
 
     @Test
