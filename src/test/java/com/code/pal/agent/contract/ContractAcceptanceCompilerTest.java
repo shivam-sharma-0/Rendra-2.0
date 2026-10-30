@@ -856,6 +856,34 @@ class ContractAcceptanceCompilerTest {
         Map<String,Object> data=addFlow("ui_add");browser(data).get(3).put("id",openId);browser(data).get(5).put("id",submitId);return data;
     }
 
+    @Test void approvedSearchAndFilterFeaturesGetRequiredStepsOnTheList(){
+        // 2026-10-29 review: search and filter were approved, never checked, and silently left out of a passing build.
+        Map<String,Object> data=addFlow("ui_add");
+        int delete=browser(data).size()-2;
+        browser(data).add(delete,action("ui_complete","CLICK","[data-post] input[type='checkbox']",null));
+        browser(data).add(delete+1,action("ui_completed","ASSERT_COUNT","[data-post] input[type='checkbox']:checked","1"));
+        String approved="{\"requestedScope\":{\"features\":[{\"id\":\"post_list\",\"kind\":\"LOCAL_CRUD\"},{\"id\":\"post_search\",\"kind\":\"SEARCH\"},{\"id\":\"status_filter\",\"kind\":\"FILTER\"}]}}";
+        Map<String,Object> compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper,"Build posts",approved),Map.class);
+        var ids=browser(compiled).stream().map(step->(String)step.get("id")).toList();
+        int created=ids.indexOf("ui_created"),completed=ids.indexOf("ui_completed");
+        assertEquals(List.of("ui_search_none","ui_search_empty","ui_search_match","ui_search_found","ui_search_clear"),ids.subList(created+1,created+6));
+        assertEquals(List.of("ui_filter_active","ui_filter_hidden","ui_filter_all","ui_filter_shown"),ids.subList(completed+1,completed+5));
+        var match=browser(compiled).get(created+3);
+        assertEquals("input[name='search']",match.get("selector"));assertEquals("Fixture post",match.get("value"));
+        assertEquals("[data-post]",browser(compiled).get(created+4).get("selector"));
+        assertEquals("",browser(compiled).get(created+5).get("value"),"the query is cleared before the edit flow");
+        var owner=units(compiled).stream().filter(unit->((List<?>)unit.get("acceptanceIds")).contains("ui_created")).findFirst().orElseThrow();
+        assertTrue(((List<?>)owner.get("acceptanceIds")).containsAll(List.of("ui_search_found","ui_filter_shown")),"the list's owner renders them");
+        mapper.readValue(mapper.writeValueAsString(compiled),BuildContract.class);
+
+        String none="{\"requestedScope\":{\"features\":[{\"id\":\"post_list\",\"kind\":\"LOCAL_CRUD\"}]}}";
+        Map<String,Object> plain=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper,"Build posts",none),Map.class);
+        assertTrue(browser(plain).stream().noneMatch(step->String.valueOf(step.get("id")).matches("ui_(search|filter)_.*")));
+        while(browser(data).size()<20)browser(data).add(0,action("ui_extra_"+browser(data).size(),"ASSERT_EXISTS","main",null));
+        var logs=capture(()->ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper,"Build posts",approved));
+        assertTrue(logs.stream().anyMatch(line->line.contains("planner_feature_checks_skipped feature=search")),logs.toString());
+    }
+
     Map<String,Object> addFlow(String addId){
         Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(ContractFixtures.mern()),Map.class);
         ((Map<String,Object>)data.get("acceptance")).put("browser",new ArrayList<>(List.of(

@@ -83,6 +83,7 @@ final class ContractAcceptanceCompiler {
         changed |= alignOwnersToFiles(data, false);
         changed |= trimOptionalBrowserChecks(data, requiredScope);
         changed |= openCreatePage(data, mapper);
+        changed |= requireApprovedFinders(data, approved, mapper);
         changed |= bindAccountApiGuards(data);
         changed |= AccountAcceptance.normalize(data, mapper);
         var criteria = mapper.convertValue(data.get("acceptance"), BehaviorCriteria.class);
@@ -989,6 +990,77 @@ final class ContractAcceptanceCompiler {
         editor.put("acceptanceIds", assigned);
         log.info("planner_edit_checks_shared owner={} ids={}", editors.getFirst(), shared);
         return true;
+    }
+
+    /**
+     * Approved search and filter features get fixed, required browser steps on the list: the planner only prioritized
+     * them, so a build could pass without either (2026-10-29 review). Added after optional checks are trimmed; the
+     * search steps follow the created record and end with an empty query, the filter steps follow its completion.
+     */
+    @SuppressWarnings("unchecked")
+    private static boolean requireApprovedFinders(Map<String, Object> data, String approved, ObjectMapper mapper) {
+        if (approved == null || !(data.get("acceptance") instanceof Map<?, ?> acceptance)
+                || !(acceptance.get("browser") instanceof List<?> raw))
+            return false;
+        Set<String> features = new HashSet<>();
+        try {
+            mapper.readTree(approved).path("requestedScope").path("features").forEach(feature -> features.add(
+                    (feature.path("id").asString("") + " " + feature.path("kind").asString("")).toLowerCase(Locale.ROOT)));
+        } catch (RuntimeException unreadable) {
+            return false;
+        }
+        boolean search = features.stream().anyMatch(feature -> feature.contains("search"));
+        boolean filter = features.stream().anyMatch(feature -> feature.contains("filter"));
+        var browser = new ArrayList<Map<String, Object>>((List<Map<String, Object>>) raw);
+        boolean changed = false;
+        int created = index(browser, "ui_created");
+        if (search && created >= 0 && browser.stream().noneMatch(action -> String.valueOf(action.get("id")).startsWith("ui_search"))) {
+            String rows = (String) browser.get(created).get("selector"), title = (String) browser.get(created).get("value");
+            changed |= insert(browser, created + 1, "search", List.of(
+                    action("ui_search_none", "FILL", "input[name='search']", "zz-no-match"),
+                    action("ui_search_empty", "ASSERT_COUNT", rows, "0"),
+                    action("ui_search_match", "FILL", "input[name='search']", title),
+                    action("ui_search_found", "ASSERT_COUNT", rows, "1"),
+                    action("ui_search_clear", "FILL", "input[name='search']", "")));
+        }
+        int completed = index(browser, "ui_completed");
+        if (filter && completed >= 0 && created >= 0 && browser.stream().noneMatch(action -> String.valueOf(action.get("id")).startsWith("ui_filter"))) {
+            String rows = (String) browser.get(index(browser, "ui_created")).get("selector");
+            changed |= insert(browser, completed + 1, "filter", List.of(
+                    action("ui_filter_active", "CLICK", "[data-filter='active']", null),
+                    action("ui_filter_hidden", "ASSERT_COUNT", rows, "0"),
+                    action("ui_filter_all", "CLICK", "[data-filter='all']", null),
+                    action("ui_filter_shown", "ASSERT_COUNT", rows, "1")));
+        }
+        if (changed)
+            ((Map<String, Object>) acceptance).put("browser", browser);
+        return changed;
+    }
+
+    private static boolean insert(List<Map<String, Object>> browser, int at, String feature, List<Map<String, Object>> steps) {
+        if (browser.size() + steps.size() > 24) {
+            log.warn("planner_feature_checks_skipped feature={} reason=browser_budget actions={}", feature, browser.size());
+            return false;
+        }
+        browser.addAll(at, steps);
+        log.info("planner_feature_checks_required feature={} ids={}", feature, steps.stream().map(step -> step.get("id")).toList());
+        return true;
+    }
+
+    private static Map<String, Object> action(String id, String kind, String selector, String value) {
+        var action = new LinkedHashMap<String, Object>();
+        action.put("id", id);
+        action.put("kind", kind);
+        action.put("selector", selector);
+        action.put("value", value);
+        return action;
+    }
+
+    private static int index(List<Map<String, Object>> browser, String id) {
+        for (int i = 0; i < browser.size(); i++)
+            if (id.equals(browser.get(i).get("id")))
+                return i;
+        return -1;
     }
 
     /** The one static create route (last segment create, new or add) owned by a unit other than the "/" owner. */

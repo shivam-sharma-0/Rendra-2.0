@@ -100,9 +100,11 @@ ui_delete CLICK then ui_deleted ASSERT_COUNT on task rows (value 0). Add prepara
 Use selectors matching the actual UI. Task text assertions select task rows, never just headings.
 The browser flow starts on /: keep the add form on / (owned by the / route's unit); a separate create page needs a CLICK that opens it before its FILLs.
 Preserve every required check; MERN unit responsibility is assigned by the coordinator.
-Fit CRUD/completion/reload, search, filter and required route checks into one browser flow of at most
-24 actions, including setup. Reuse the created task and edit form. Test one meaningful filter, not every chip;
-combine search evidence with task assertions. Keep settings navigation while skipping optional preference controls.
+Fit CRUD/completion/reload and required route checks into one browser flow of at most 15 actions, including
+setup; reuse the created task and edit form and keep settings navigation while skipping optional preference controls.
+Do not write search or filter steps: for an approved search feature the platform adds fixed steps on the list page
+(input[name='search'] narrows the [data-task] rows by title), and for an approved filter feature buttons
+[data-filter='active'] (hides completed rows) and [data-filter='all']; specify that UI in the / route unit's objective.
 Example complete browser sequence for a task form (adapt selectors to the UI you specify):
 [{"id":"ui_fill","kind":"FILL","selector":"input[name='title']","value":"Fixture task"},
 {"id":"ui_add","kind":"CLICK","selector":"button[data-action='add']","value":null},
