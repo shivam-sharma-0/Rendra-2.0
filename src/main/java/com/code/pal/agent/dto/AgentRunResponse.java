@@ -13,6 +13,11 @@ public record AgentRunResponse(UUID id, UUID projectId, String messageId, Projec
                                int promptTokens, int completionTokens, boolean rollbackAvailable, boolean conversational,
                                Instant createdAt, Instant updatedAt, Instant respondingAt,
                                Instant codeSavedAt,String previewStatus,boolean saveRecoveryRequired,boolean planAvailable,AgentFailureReason failureReason) {
+    /** Offers Restore only where code restore can apply (2026-10-29 review: MERN showed a button that always failed). */
+    public AgentRunResponse withRollbackAvailable(boolean restorable) {
+        return new AgentRunResponse(id,projectId,messageId,mode,status,promptTokens,completionTokens,rollbackAvailable && restorable,conversational,
+                createdAt,updatedAt,respondingAt,codeSavedAt,previewStatus,saveRecoveryRequired,planAvailable,failureReason);
+    }
     public AgentRunResponse withPlanAvailable(boolean available) {
         return new AgentRunResponse(id,projectId,messageId,mode,status,promptTokens,completionTokens,rollbackAvailable,conversational,
                 createdAt,updatedAt,respondingAt,codeSavedAt,previewStatus,saveRecoveryRequired,available,failureReason);

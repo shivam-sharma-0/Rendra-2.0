@@ -63,7 +63,9 @@ public class AgentRunController {
     public List<AgentRunResponse> list(@AuthenticationPrincipal AuthPrincipal principal, @PathVariable UUID projectId) {
         projects.requireAccessible(principal.userId(), projectId);
         var plans=properties!=null && properties.isStructuredContracts()?contracts.reviewableRuns(projectId):Set.<UUID>of();
-        return runs.findTop100ByProjectIdOrderByCreatedAtDesc(projectId).stream().map(r->AgentRunResponse.from(r).withPlanAvailable(plans.contains(r.getId()))).toList();
+        boolean restorable=restores==null || restores.available(projectId);
+        return runs.findTop100ByProjectIdOrderByCreatedAtDesc(projectId).stream()
+                .map(r->AgentRunResponse.from(r).withPlanAvailable(plans.contains(r.getId())).withRollbackAvailable(restorable)).toList();
     }
 
     /** The run's user-facing steps after {@code afterSeq} (internal ones — model calls, counters — are left out). */

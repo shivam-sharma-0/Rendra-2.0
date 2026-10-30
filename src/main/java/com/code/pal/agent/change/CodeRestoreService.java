@@ -23,6 +23,15 @@ public class CodeRestoreService {
         this.leases=leases;this.promotions=promotions;this.journal=journal;this.files=files;this.decisions=decisions;this.projects=projects;
         this.runs=runs;
     }
+    /** Whether code restore can ever apply to this project; server-backed apps never offer it (live data stays). */
+    public boolean available(UUID project) {
+        var state=decisions.state(project);
+        return !state.blocked() && !serverBacked(project, state.choice());
+    }
+    private boolean serverBacked(UUID project, BuildDecisions.Choice choice) {
+        return choice!=null && (choice.storage()==BuildDecisions.Storage.MERN || choice.storage()==BuildDecisions.Storage.SUPABASE)
+                || files.exists(project,".","server/package.json");
+    }
     public void restore(Long actor, AgentRun run) {
         leases.manualRestore(run.getProjectId(), () -> restoreOwned(actor, run));
     }
@@ -38,8 +47,7 @@ public class CodeRestoreService {
         var proof=promotions.read(run.getId());
         if (proof==null || !proof.projectId().equals(project) || !"SAVED".equals(proof.state()))
             throw conflict("This archive has no verified code restore proof");
-        if ((choice!=null && (choice.storage()==BuildDecisions.Storage.MERN || choice.storage()==BuildDecisions.Storage.SUPABASE))
-                || files.exists(project,".","server/package.json") || files.exists(project,proof.archive(),"server/package.json"))
+        if (serverBacked(project, choice) || files.exists(project,proof.archive(),"server/package.json"))
             throw conflict("Code restore for server-backed apps requires an explicit database schema compatibility review; live data is never rolled back");
         verify(project,".",proof.files(),false); verify(project,proof.archive(),proof.files(),true);
         UUID id=UUID.randomUUID(); String backup=".codepal/restore/"+id;

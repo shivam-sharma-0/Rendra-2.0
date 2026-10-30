@@ -39,6 +39,15 @@ class CodeRestoreServiceTest {
         assertEquals("before",p.read("index.html")); assertEquals("before brief",p.read("RENDRA.md")); assertEquals("unrelated",p.read("user.txt"));
         verify(journal).state(any(),eq("RESTORED"));
     }
+    @Test void onlyProjectsWithoutAServerOfferRestore() {
+        // 2026-10-29 review: MERN runs showed Restore, which always ended in a 409.
+        assertTrue(service.available(p.projectId));
+        when(decisions.state(p.projectId)).thenReturn(new BuildDecisions.State(new BuildDecisions.Choice(1,BuildDecisions.Storage.MERN,BuildDecisions.Auth.ACCOUNTS,null),new BuildDecisions.Available(true,null),null));
+        assertFalse(service.available(p.projectId));
+        when(decisions.state(p.projectId)).thenReturn(new BuildDecisions.State(new BuildDecisions.Choice(1,BuildDecisions.Storage.BROWSER,BuildDecisions.Auth.NONE,null),new BuildDecisions.Available(true,null),null));
+        p.write("server/package.json","{}");
+        assertFalse(service.available(p.projectId),"a server folder is server-backed whatever the decision says");
+    }
     @Test void refusesNewerCodeAndServerSchemaBeforeAnyMutation() {
         p.write("index.html","user changed"); assertThrows(RuntimeException.class,()->service.restore(1L,run));
         verifyNoInteractions(journal);
