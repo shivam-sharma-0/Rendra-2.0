@@ -64,8 +64,11 @@ final class FailureExplanation {
         }
         return switch (reason) {
             case USER_REVIEW_REQUIRED -> reviewMessage;
-            case RUN_LIMIT_REACHED -> "I ran out of steps before finishing this build. " + NOTHING_SAVED
-                    + " Retry to continue, or split the request into smaller parts.";
+            case RUN_LIMIT_REACHED -> reviewMessage != null && reviewMessage.startsWith("Context")
+                    ? "This change needed more of the project in view than one run can hold. " + NOTHING_SAVED
+                            + " Retry, or ask for the change one page at a time."
+                    : "I ran out of steps before finishing this build. " + NOTHING_SAVED
+                            + " Retry to continue, or split the request into smaller parts.";
             case PROVIDER_REQUEST_REJECTED -> "The AI model rejected this request. " + NOTHING_SAVED
                     + " Try again; a shorter request or fewer attachments usually helps.";
             default -> reviewMessage != null && reviewMessage.startsWith("Planner")

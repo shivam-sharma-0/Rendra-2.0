@@ -169,7 +169,9 @@ app:
       codex-all: ${AGENT_CODEX_ALL:true}
       codex-model: ${AGENT_CODEX_MODEL:gpt-5.6-sol}
       codex-enabled: ${AGENT_CODEX_ENABLED:false}
-      codex-reasoning-effort: ${AGENT_CODEX_REASONING_EFFORT:low}
+      codex-reasoning-effort: ${AGENT_CODEX_REASONING_EFFORT:high}
+      codex-timeout-seconds: ${AGENT_CODEX_TIMEOUT_SECONDS:420}
+      codex-context-chars: ${AGENT_CODEX_CONTEXT_CHARS:300000}
     requirements:
       models: "${AGENT_REQUIREMENTS_MODELS:mistral:codestral-latest,openrouter:nvidia/nemotron-3-ultra-550b-a55b:free}"
       timeout-ms: ${AGENT_REQUIREMENTS_TIMEOUT_MS:90000}

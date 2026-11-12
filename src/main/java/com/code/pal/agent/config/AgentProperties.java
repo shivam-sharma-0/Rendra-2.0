@@ -359,7 +359,9 @@ public class AgentProperties implements EnvironmentAware {
         models.setChat(codexFirst(codex, models.getChat()));
         models.setPlan(codexFirst(codex, models.getPlan()));
         requirements.setModels(codexFirst(codex, requirements.getModels()));
-        log.info("codex_everywhere model={}: every text route tries Codex first, configured models remain fallbacks", codex);
+        contextBudgetChars = Math.max(contextBudgetChars, dev.getCodexContextChars());
+        log.info("codex_everywhere model={} effort={} contextChars={}: every text route tries Codex first, configured models remain fallbacks",
+                codex, dev.getCodexReasoningEffort(), contextBudgetChars);
     }
 
     private static List<String> codexFirst(String codex, List<String> configured) {
@@ -522,6 +524,7 @@ public class AgentProperties implements EnvironmentAware {
         private int codexTimeoutSeconds = 180;
         private boolean codexAll = false;
         private String codexModel = "gpt-5.6-sol";
+        private int codexContextChars = 300_000;
     }
 
     @Getter
