@@ -7,7 +7,6 @@ function Page({ component: Component }: { component: ComponentType<{params: Reco
   return <Component params={params} />
 }
 
-// Pages without parameters, except sign-in and sign-up, which their pages link to themselves.
 const navigation = routes.filter(route => !route.path.includes(':')
   && !/(^|\/)(auth|log-?in|sign-?in|sign-?up|register)(\/|$)/i.test(route.path))
 
@@ -17,7 +16,6 @@ function label(path: string): string {
 }
 
 export default function App() {
-  // Canonical home keeps acceptance URLs consistent under the preview's hosting prefix.
   if (!window.location.hash) window.history.replaceState(window.history.state, '', '#/')
   return <HashRouter>
     <header className="app-header">
@@ -26,9 +24,9 @@ export default function App() {
         {navigation.length > 1 && <nav className="app-nav" aria-label="Main">
           {navigation.map(route => <Link key={route.path} to={route.path}>{label(route.path)}</Link>)}
         </nav>}
+        <AccountMenu />
       </div>
     </header>
-    {/* Pages render their own main landmark. */}
     <div className="app-container app-main">
       <Routes>
         {routes.map(route => <Route key={route.path} path={route.path} element={<Page component={route.component} />} />)}

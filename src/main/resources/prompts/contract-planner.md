@@ -90,7 +90,8 @@ New VITE/MERN client needs an owned root component or declared owned route compo
 a separate page, the coordinator wires App.tsx to declared routes and theme without another model call.
 Coordinator-wired pages use hash links such as #/settings and #/tasks/123; acceptance selectors must use
 those actual href values. Logical route checks remain /settings and /tasks/123. Route pages receive
-params: Record<string,string> for named segments such as /tasks/:id. Own App.tsx if custom provider wrappers are needed.
+params: Record<string,string> for named segments such as /tasks/:id. For MERN, client/src/App.tsx is the platform app shell
+(header, navigation, sign-in/out); never own it, and do not plan a separate shell or navigation unit.
 When the fresh request asks add/edit/delete, browser acceptance MUST exercise every flow:
 Use these exact IDs even if the request says create: ui_add, never ui_create or ui_add_<entity>.
 ui_add CLICK then ui_created ASSERT_TEXT; enter edit mode, FILL edited title, ui_edit CLICK to save,
@@ -98,6 +99,8 @@ then ui_edited ASSERT_TEXT; ui_reload RELOAD then ui_persisted ASSERT_TEXT;
 if completed is requested, ui_complete CLICK on the task checkbox then ui_completed ASSERT_COUNT on checked task checkboxes (value 1);
 ui_delete CLICK then ui_deleted ASSERT_COUNT on task rows (value 0). Add preparatory FILL/CLICK actions as needed.
 Use selectors matching the actual UI. Task text assertions select task rows, never just headings.
+Browser steps run in a real browser with no API variables: never put ${...} in a browser selector or value, and
+assert routes only with static paths such as /settings.
 The browser flow starts on /: keep the add form on / (owned by the / route's unit); a separate create page needs a CLICK that opens it before its FILLs.
 Preserve every required check; MERN unit responsibility is assigned by the coordinator.
 Fit CRUD/completion/reload and required route checks into one browser flow of at most 15 actions, including

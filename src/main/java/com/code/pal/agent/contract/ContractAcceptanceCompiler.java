@@ -24,6 +24,7 @@ final class ContractAcceptanceCompiler {
     private static final Pattern HREF = Pattern.compile("\\[href\\s*=\\s*['\"]([^'\"]*)['\"]\\]");
     private static final Pattern ADD_CLICK = Pattern.compile("ui_(?:create|add)(?:_[a-z0-9]+)*");
     private static final Pattern EDIT_CLICK = Pattern.compile("ui_edit(?:_[a-z0-9]+)*");
+    private static final String APP_SHELL = "client/src/App.tsx";
     private ContractAcceptanceCompiler() {
     }
 
@@ -74,7 +75,7 @@ final class ContractAcceptanceCompiler {
         changed |= resolveUnambiguousUnitIds(data);
         changed |= alignAddClickId(data);
         changed |= alignEditClickId(data);
-        changed |= removeCoordinatorOwnedPaths((List<Map<String, Object>>) data.get("units"));
+        changed |= removeCoordinatorOwnedPaths((List<Map<String, Object>>) data.get("units"), (List<?>) data.get("routes"));
         changed |= mergeUnitsSharingFiles(data);
         // Before the collection insertion and responsibility loop below: both read api.owner.
         changed |= synthesizeRouterUnits(data);
@@ -82,6 +83,7 @@ final class ContractAcceptanceCompiler {
         changed |= alignOwnersToFiles(data, true);
         changed |= alignOwnersToFiles(data, false);
         changed |= trimOptionalBrowserChecks(data, requiredScope);
+        changed |= dropUnresolvableBrowserSteps(data);
         changed |= openCreatePage(data, mapper);
         changed |= requireApprovedFinders(data, approved, mapper);
         changed |= bindAccountApiGuards(data);
@@ -913,16 +915,31 @@ final class ContractAcceptanceCompiler {
     }
 
     @SuppressWarnings("unchecked")
-    private static boolean removeCoordinatorOwnedPaths(List<Map<String, Object>> units) {
+    private static boolean removeCoordinatorOwnedPaths(List<Map<String, Object>> units, List<?> routes) {
+        boolean shellIsPlatform = routes != null && routes.stream().anyMatch(route -> route instanceof Map<?, ?> map
+                && "/".equals(map.get("path")) && map.get("componentPath") != null && !APP_SHELL.equals(map.get("componentPath")))
+                && routes.stream().noneMatch(route -> route instanceof Map<?, ?> map && APP_SHELL.equals(map.get("componentPath")));
         boolean changed = false;
+        var emptied = new HashSet<Object>();
         for (Map<String, Object> unit : units) {
             List<String> paths = new ArrayList<>((List<String>) unit.get("ownedPaths"));
-            if (paths.removeIf(path -> BuildContract.reserved(path, BuildContract.Stack.MERN))) {
+            if (paths.removeIf(path -> BuildContract.reserved(path, BuildContract.Stack.MERN) || shellIsPlatform && path.equals(APP_SHELL))) {
                 unit.put("ownedPaths", paths);
                 changed = true;
+                if (paths.isEmpty())
+                    emptied.add(unit.get("id"));
             }
         }
-        return changed;
+        if (emptied.isEmpty())
+            return changed;
+        units.removeIf(unit -> emptied.contains(unit.get("id")));
+        for (Map<String, Object> unit : units) {
+            var dependencies = new ArrayList<>((List<String>) unit.get("dependsOn"));
+            if (dependencies.removeAll(emptied))
+                unit.put("dependsOn", dependencies);
+        }
+        log.info("planner_shell_units_removed ids={}", emptied);
+        return true;
     }
 
     @SuppressWarnings("unchecked")
@@ -998,6 +1015,31 @@ final class ContractAcceptanceCompiler {
      * them, so a build could pass without either (2026-10-29 review). Added after optional checks are trimmed; the
      * search steps follow the created record and end with an empty query, the filter steps follow its completion.
      */
+    @SuppressWarnings("unchecked")
+    private static boolean dropUnresolvableBrowserSteps(Map<String, Object> data) {
+        if (!(data.get("acceptance") instanceof Map<?, ?> acceptance) || !(acceptance.get("browser") instanceof List<?> raw))
+            return false;
+        var browser = new ArrayList<Map<String, Object>>((List<Map<String, Object>>) raw);
+        var dropped = new ArrayList<Object>();
+        browser.removeIf(action -> {
+            boolean unresolvable = !REQUIRED_UI_IDS.contains(action.get("id"))
+                    && (String.valueOf(action.get("value")).contains("${") || String.valueOf(action.get("selector")).contains("${"));
+            if (unresolvable)
+                dropped.add(action.get("id"));
+            return unresolvable;
+        });
+        if (dropped.isEmpty())
+            return false;
+        ((Map<String, Object>) acceptance).put("browser", browser);
+        for (var unit : (List<Map<String, Object>>) data.get("units")) {
+            var assigned = new ArrayList<>((List<Object>) unit.get("acceptanceIds"));
+            if (assigned.removeAll(dropped))
+                unit.put("acceptanceIds", assigned);
+        }
+        log.warn("planner_unresolvable_browser_steps_dropped ids={}", dropped);
+        return true;
+    }
+
     @SuppressWarnings("unchecked")
     private static boolean requireApprovedFinders(Map<String, Object> data, String approved, ObjectMapper mapper) {
         if (approved == null || !(data.get("acceptance") instanceof Map<?, ?> acceptance)

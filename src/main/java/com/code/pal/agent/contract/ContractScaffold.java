@@ -114,11 +114,16 @@ public final class ContractScaffold {
         String app = c.stack() == BuildContract.Stack.MERN ? "client/src/App.tsx" : "src/App.tsx";
         if (existing.apply(app) == null && !c.ownership().containsKey(app) && !c.routes().isEmpty()) {
             String directory = app.substring(0, app.lastIndexOf('/') + 1);
+            String signIn = c.routes().stream().map(BuildContract.Route::path).filter(ApprovedProductScope::signInRoute)
+                    .filter(path -> !path.contains(":")).findFirst().orElse("/login");
+            String accountMenu = accounts
+                    ? "import { auth, useSession } from " + json(relative(directory, root + "auth-client", true)) + "\n"
+                            + resource("contract/account-menu.tsx").replace("{{signIn}}", "#" + signIn)
+                    : "function AccountMenu() { return null }\n";
             out.put(app, "import " + json(relative(directory, root + "theme.css", true)) + "\nimport { routes } from "
                     + json(relative(directory, root + "routes.ts", true))
                     + "\nconst APP_NAME = " + json(title == null || title.isBlank() ? "App" : title.strip())
-                    // Every planner and unit prompt asks for #/path links; a pathname router ignores them.
-                    + "\n" + resource("contract/hash-app.tsx"));
+                    + "\n" + resource("contract/hash-app.tsx") + accountMenu);
         }
         if (existing.apply(app) == null && !out.containsKey(app))
             out.put(app, "export default function PendingApp() { return null }\n");
@@ -170,7 +175,7 @@ public final class ContractScaffold {
     }
 
     public static String revision() {
-        return ContractStore.hash("contract-scaffold-2026-10-30.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
+        return ContractStore.hash("contract-scaffold-2026-11-12.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
                 + "/" + resource("contract/hash-app.tsx"));
     }
 

@@ -143,6 +143,7 @@
   .app-nav a { color: var(--app-muted); font-weight: 500; text-decoration: none; }
   .app-nav a:hover { color: var(--app-text); }
   .app-main { padding-block: var(--app-space); }
+  .app-account { display: flex; align-items: center; gap: 0.75rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
