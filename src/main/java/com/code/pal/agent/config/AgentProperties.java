@@ -1,5 +1,6 @@
 package com.code.pal.agent.config;
 
+import com.code.pal.agent.llm.CallPurpose;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.shared.config.KeyVault;
 import jakarta.annotation.PostConstruct;
@@ -341,8 +342,31 @@ public class AgentProperties implements EnvironmentAware {
         }
         if (count > 0)
             log.info("Decrypted {} API key(s)", count);
+        applyCodexEverywhere();
         sanitizeModelLists();
         reportRouting();
+    }
+
+    void applyCodexEverywhere() {
+        if (!dev.isCodexAll())
+            return;
+        dev.setCodexEnabled(true);
+        String codex = "codex:" + dev.getCodexModel();
+        models.setFreeBuild(codexFirst(codex, models.getFreeBuild()));
+        models.setFreeChat(codexFirst(codex, models.getFreeChat()));
+        models.setFreePlan(codexFirst(codex, models.getFreePlan()));
+        models.setBuild(codexFirst(codex, models.getBuild()));
+        models.setChat(codexFirst(codex, models.getChat()));
+        models.setPlan(codexFirst(codex, models.getPlan()));
+        requirements.setModels(codexFirst(codex, requirements.getModels()));
+        log.info("codex_everywhere model={}: every text route tries Codex first, configured models remain fallbacks", codex);
+    }
+
+    private static List<String> codexFirst(String codex, List<String> configured) {
+        var routes = new ArrayList<String>(List.of(codex));
+        if (configured != null)
+            configured.stream().filter(route -> route != null && !route.isBlank() && !route.equals(codex)).forEach(routes::add);
+        return routes;
     }
 
     private void sanitizeModelLists() {
@@ -495,7 +519,9 @@ public class AgentProperties implements EnvironmentAware {
         /** Kept low: the experiment measures the pipeline with a stronger model, not the most expensive setting. */
         private String codexReasoningEffort = "low";
         /** A hung CLI call fails within this bound instead of holding the run until its lease is recovered. */
-        private int codexTimeoutSeconds = 300;
+        private int codexTimeoutSeconds = 180;
+        private boolean codexAll = false;
+        private String codexModel = "gpt-5.6-sol";
     }
 
     @Getter
@@ -714,6 +740,26 @@ public class AgentProperties implements EnvironmentAware {
         if (configured == null || configured.isEmpty()) return planningRoutes();
         return configured.stream().filter(entry -> entry != null && !entry.isBlank())
                 .map(this::selection).distinct().toList();
+    }
+
+    public ModelSelection codexFallback(CallPurpose purpose) {
+        List<ModelSelection> routes = switch (purpose == null ? CallPurpose.OTHER : purpose) {
+            case REQUIREMENTS -> requirementsRoutes();
+            case PLANNER, SCHEMA_CORRECTION -> planningRoutes();
+            case SMALL_TALK -> modelRoutes(ProjectType.CHAT);
+            default -> modelRoutes(ProjectType.BUILD);
+        };
+        return routes.stream().filter(route -> !route.provider().equals("codex")).filter(this::available).findFirst().orElse(null);
+    }
+
+    private List<ModelSelection> modelRoutes(ProjectType mode) {
+        List<String> configured = switch (mode) {
+        case CHAT -> billingMode == BillingMode.FREE ? models.getFreeChat() : models.getChat();
+        case PLAN -> billingMode == BillingMode.FREE ? models.getFreePlan() : models.getPlan();
+        case BUILD -> billingMode == BillingMode.FREE ? models.getFreeBuild() : models.getBuild();
+        };
+        return configured == null ? List.of()
+                : configured.stream().filter(value -> value != null && !value.isBlank()).map(this::selection).distinct().toList();
     }
 
     public ModelSelection preferredRequirementsModel() {

@@ -258,7 +258,11 @@ public final class ContractCoordinator {
         var executionWaves = c.schemaVersion() == 2 ? orderedBatches.stream().map(batch -> batch.unitIds().stream()
                 .map(id -> c.units().stream().filter(unit -> unit.id().equals(id)).findFirst().orElseThrow()).toList()).toList() : c.waves();
         for (int waveIndex = 0; waveIndex < executionWaves.size(); waveIndex++) {
-            var wave = executionWaves.get(waveIndex);
+            var wave = c.schemaVersion() == 1 ? executionWaves.get(waveIndex).stream()
+                    .filter(unit -> !unit.ownedPaths().stream().allMatch(path -> ContractScaffold.platformPage(c, path))).toList()
+                    : executionWaves.get(waveIndex);
+            if (wave.isEmpty())
+                continue;
             if (c.schemaVersion() == 2) {
                 beforeIo.run();
             }
@@ -436,6 +440,11 @@ public final class ContractCoordinator {
             String req, Set<String> shared, ValidationReport report,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checked, Runnable beforeIo, Consumer<String> activity, SpecPlanning planning) {
         problem(activity, report);
+        units = units.stream().filter(unit -> !unit.ownedPaths().stream().allMatch(path -> ContractScaffold.platformPage(c, path))).toList();
+        if (units.isEmpty()) {
+            log.warn("repair_skipped runId={} reason=platform_pages_only", run.getId());
+            return;
+        }
         beforeIo.run();
         // An unreachable package registry is not a code defect: no model can repair it, so stop without spending calls.
         if (!report.introducedDiagnostics().isEmpty() && report.introducedDiagnostics().stream().allMatch(diagnostic ->
@@ -495,7 +504,8 @@ public final class ContractCoordinator {
 
     boolean fixRelativeImports(AgentContext ctx, BuildContract contract, List<BuildContract.Unit> units, ValidationReport report) {
         if (report.introducedDiagnostics().stream().noneMatch(diagnostic -> RelativeImports.missingModule(diagnostic)
-                || MissingImports.missingName(diagnostic) != null || EmptyStateTypes.diagnosed(diagnostic))) return false;
+                || MissingImports.missingName(diagnostic) != null || EmptyStateTypes.diagnosed(diagnostic)
+                || ExpressParams.diagnosed(diagnostic))) return false;
         var output = importFixes(ctx, contract, units, report.introducedDiagnostics());
         if (output.isEmpty()) return false;
         if (report.changeSetRevision() != changes.view(ctx).revision())
@@ -543,7 +553,7 @@ public final class ContractCoordinator {
                 String typesModule = (path.startsWith("server/") ? contract.serverRoot() : contract.clientRoot()) + "types.ts";
                 if (diagnostics != null && existing.contains(typesModule))
                     fixed = MissingImports.types(path, fixed, diagnostics, typeNames, typesModule);
-                fixes.put(path, EmptyStateTypes.fix(path, fixed, typeNames));
+                fixes.put(path, ExpressParams.fix(path, EmptyStateTypes.fix(path, fixed, typeNames), diagnostics));
             }
             var assigned = contract.acceptance().browser().stream().filter(action -> unit.acceptanceIds().contains(action.id())).toList();
             AcceptanceAttributes.actionButtons(assigned, AcceptanceAttributes.nameFields(assigned, fixes)).forEach((path, fixed) -> {

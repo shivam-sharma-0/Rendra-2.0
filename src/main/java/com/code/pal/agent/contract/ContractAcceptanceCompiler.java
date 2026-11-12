@@ -982,7 +982,8 @@ final class ContractAcceptanceCompiler {
         var shared = new ArrayList<String>();
         for (int i = created + 1; i <= edit; i++)
             if ((i == edit || Set.of(BehaviorCriteria.BrowserKind.FILL, BehaviorCriteria.BrowserKind.SELECT)
-                    .contains(browser.get(i).kind())) && !assigned.contains(ids.get(i)) && ids.get(i).matches("[A-Za-z0-9_-]{1,64}"))
+                    .contains(browser.get(i).kind())) && !assigned.contains(ids.get(i)) && ids.get(i).matches("[A-Za-z0-9_-]{1,64}")
+                    && !ids.get(i).matches("ui_(search|filter)_.*"))
                 shared.add(ids.get(i));
         if (shared.isEmpty() || assigned.size() + shared.size() > 48)
             return false;

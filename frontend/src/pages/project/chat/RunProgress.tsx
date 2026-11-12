@@ -58,7 +58,7 @@ function ProgressRow({ activity, startedAt, endedAt, active }: { activity: Agent
           <span className="run-step__label">{activity.title}</span>
           {end !== null && <span className="run-activity__time">{formatSeconds(secondsBetween(startedAt, end))}</span>}
         </span>
-        {activity.detail && <small className="run-activity__detail">{activity.detail}</small>}
+        {(running || problem) && activity.detail && <small className="run-activity__detail">{activity.detail}</small>}
         {activity.items.length > 0 && <ul className="run-activity__items">{activity.items.map((item, i) => <li key={i}>{item}</li>)}</ul>}
       </span>
     </div>

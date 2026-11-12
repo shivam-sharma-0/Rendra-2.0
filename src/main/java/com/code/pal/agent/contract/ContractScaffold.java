@@ -32,6 +32,12 @@ public final class ContractScaffold {
     }
 
     @SuppressWarnings("unchecked")
+    static boolean platformPage(BuildContract c, String componentPath) {
+        return c.stack() == BuildContract.Stack.MERN && c.auth() == BuildDecisions.Auth.ACCOUNTS
+                && c.routes().stream().anyMatch(route -> route.componentPath().equals(componentPath)
+                        && ApprovedProductScope.signInRoute(route.path()));
+    }
+
     public Map<String, String> render(BuildContract c, String title, Function<String, String> existing, UUID projectId) {
         var out = new LinkedHashMap<String, String>();
         if (c.schemaVersion() == 2 && c.stack() == BuildContract.Stack.STATIC) {
@@ -86,12 +92,18 @@ public final class ContractScaffold {
             out.put(root + "auth-client.ts", resource("contract/auth-client.ts")
                     .replace("{{storageKey}}", json(AccountAcceptance.storageKey(projectId))));
         out.put(root + "api.ts", api(c));
+        boolean accounts = c.stack() == BuildContract.Stack.MERN && c.auth() == BuildDecisions.Auth.ACCOUNTS;
+        if (accounts)
+            out.put(root + "AccountPage.tsx", resource("contract/AccountPage.tsx"));
         StringBuilder routes = new StringBuilder("import type { ComponentType } from 'react'\n");
         for (int i = 0; i < c.routes().size(); i++) {
             var route = c.routes().get(i);
             routes.append("import Route").append(i).append(" from ")
                     .append(json(relative(root, route.componentPath(), true))).append("\n");
-            if (existing.apply(route.componentPath()) == null)
+            if (accounts && platformPage(c, route.componentPath()))
+                out.put(route.componentPath(), "export { default } from " + json(relative(
+                        route.componentPath().substring(0, route.componentPath().lastIndexOf('/') + 1), root + "AccountPage", true)) + "\n");
+            else if (existing.apply(route.componentPath()) == null)
                 out.put(route.componentPath(), "export default function PendingRoute() { return null }\n");
         }
         routes.append("export const routes: {path: string; component: ComponentType<{params: Record<string,string>}>}[] = [\n");

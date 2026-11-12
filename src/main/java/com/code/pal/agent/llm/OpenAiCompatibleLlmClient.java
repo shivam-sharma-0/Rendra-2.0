@@ -66,6 +66,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     private final Duration rejectedKeyCooldown;
     private final long streamIdleTimeoutNanos;
     private final AgentProperties.Dev dev;
+    private final AgentProperties props;
     private boolean accountingRequired;
 
     @PostConstruct
@@ -74,6 +75,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     public OpenAiCompatibleLlmClient(AgentProperties props, ObjectMapper objectMapper) {
         AgentProperties.Llm llm = props.getLlm();
         this.dev = props.getDev();
+        this.props = props;
         this.objectMapper = objectMapper;
         this.defaultTemperature = llm.getTemperature();
         this.maxAttempts = Math.max(1, llm.getMaxAttempts());
@@ -113,11 +115,27 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                 .build();
     }
 
+    private LlmResult codex(LlmRequest request, Consumer<String> onTextDelta) {
+        try {
+            return CodexCliClient.run(request, dev);
+        } catch (LlmCancelledException cancelled) {
+            throw cancelled;
+        } catch (LlmException unavailable) {
+            var purpose = LlmCallContext.current().purpose();
+            var fallback = props.codexFallback(purpose);
+            if (fallback == null)
+                throw unavailable;
+            log.warn("codex_fallback purpose={} to={}:{} reason={}", purpose, fallback.provider(), fallback.model(), unavailable.getMessage());
+            return chatStreaming(new LlmRequest(fallback.provider(), fallback.model(), request.messages(), request.tools(),
+                    request.temperature(), request.budget(), request.toolChoice(), request.maxTokens(), request.jsonSchema()), onTextDelta);
+        }
+    }
+
     @Override
     public LlmResult chatStreaming(LlmRequest request, Consumer<String> onTextDelta) {
         String provider = normalizeProvider(request.provider());
         if (provider.equals("codex"))
-            return CodexCliClient.run(request, dev);
+            return codex(request, onTextDelta);
         EndpointPool pool = endpointPools.get(provider);
         if (pool == null || !pool.isConfigured()) {
             throw new LlmException("LLM provider is not configured: " + provider);

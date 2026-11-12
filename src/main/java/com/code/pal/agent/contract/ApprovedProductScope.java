@@ -16,6 +16,10 @@ final class ApprovedProductScope {
 
     private ApprovedProductScope() {}
 
+    static boolean signInRoute(String path) {
+        return SIGN_IN.matcher(path).find();
+    }
+
     static String planningRequirements(ApprovedProjectMemory.Approved approved, ObjectMapper mapper) {
         if (approved.specJson() == null) return approved.requirementsJson();
         var draft = mapper.readTree(approved.specJson());

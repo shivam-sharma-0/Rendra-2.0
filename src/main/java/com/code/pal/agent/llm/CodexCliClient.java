@@ -2,6 +2,8 @@ package com.code.pal.agent.llm;
 
 import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.runtime.RunCancellation;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -11,23 +13,24 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
-/**
- * Developer-only model route through the operator's own logged-in Codex CLI, to measure how a larger model behaves in
- * the pipeline. Disabled unless {@code app.agent.dev.codex-enabled} is set; never a production or multi-user route.
- * Each call runs {@code codex exec} read-only in an empty temporary directory with the prompt on stdin, keeps only the
- * final message, and reports no token usage (the CLI exposes only a combined total).
- */
 @lombok.extern.slf4j.Slf4j
 final class CodexCliClient {
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String TOOL_PROTOCOL = """
+            You may call the tools listed under ### tools. Reply with exactly one JSON object and nothing else:
+            to call tools: {"tool_calls":[{"name":"<tool name>","arguments":{<arguments per its parameters schema>}}]}
+            to answer without calling a tool: {"final":"<your reply text>"}
+            Each ### tool section is the result of an earlier call, in order.
+            """;
+
     private CodexCliClient() {}
 
     static LlmClient.LlmResult run(LlmClient.LlmRequest request, AgentProperties.Dev dev) {
         if (!dev.isCodexEnabled()) throw new LlmException("The developer Codex route is disabled");
-        if (request.tools() != null && !request.tools().isEmpty())
-            throw new LlmException("The developer Codex route serves tool-free JSON calls only");
         Path directory = null;
         Process process = null;
         try {
@@ -41,15 +44,14 @@ final class CodexCliClient {
             command.add("-");
             process = new ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true)
                     .redirectOutput(directory.resolve("codex.log").toFile()).start();
+            String prompt = prompt(request);
             try (var stdin = process.getOutputStream()) {
-                stdin.write(prompt(request).getBytes(StandardCharsets.UTF_8));
+                stdin.write(prompt.getBytes(StandardCharsets.UTF_8));
             }
             long started = System.nanoTime();
-            Duration limit = Duration.ofSeconds(Math.max(30, dev.getCodexTimeoutSeconds()));
-            if (request.budget() != null && request.budget().compareTo(limit) < 0) limit = request.budget();
-            long deadline = started + limit.toNanos();
-            log.info("codex_call_started model={} effort={} promptChars={}", request.model(), dev.getCodexReasoningEffort(),
-                    prompt(request).length());
+            long deadline = started + Duration.ofSeconds(Math.max(30, dev.getCodexTimeoutSeconds())).toNanos();
+            log.info("codex_call_started model={} effort={} promptChars={} tools={}", request.model(), dev.getCodexReasoningEffort(),
+                    prompt.length(), request.tools() == null ? 0 : request.tools().size());
             while (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
                 if (RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted())
                     throw new LlmCancelledException();
@@ -62,7 +64,7 @@ final class CodexCliClient {
                     (System.nanoTime() - started) / 1_000_000);
             if (process.exitValue() != 0 || !Files.isRegularFile(last))
                 throw new LlmException("The developer Codex route failed with exit " + process.exitValue());
-            return new LlmClient.LlmResult(Files.readString(last, StandardCharsets.UTF_8).strip(), null, List.of(), null, "stop");
+            return parse(Files.readString(last, StandardCharsets.UTF_8).strip(), request.tools() != null && !request.tools().isEmpty());
         } catch (IOException unavailable) {
             throw new LlmException("The developer Codex route could not start", unavailable);
         } catch (InterruptedException interrupted) {
@@ -77,10 +79,66 @@ final class CodexCliClient {
 
     /** The CLI takes one prompt, so roles become labelled sections in their original order. */
     static String prompt(LlmClient.LlmRequest request) {
-        var out = new StringBuilder("Answer as a JSON API: return only the final JSON response, run no commands and edit no files.\n");
-        for (var message : request.messages())
-            out.append("\n### ").append(message.role()).append("\n").append(message.content() == null ? "" : message.content()).append("\n");
+        boolean tools = request.tools() != null && !request.tools().isEmpty();
+        var out = new StringBuilder(tools
+                ? "Act as the tool-calling model of a coding agent: run no commands and edit no files yourself.\n" + TOOL_PROTOCOL
+                : "Answer as a JSON API: return only the final JSON response, run no commands and edit no files.\n");
+        if (tools) {
+            out.append("\n### tools\n");
+            for (var tool : request.tools())
+                out.append(JSON.writeValueAsString(Map.of("name", tool.name(), "description", tool.description() == null ? "" : tool.description(),
+                        "parameters", tool.parameters() == null ? Map.of() : tool.parameters()))).append("\n");
+        }
+        for (var message : request.messages()) {
+            if (message.toolCalls() != null && !message.toolCalls().isEmpty()) {
+                var calls = new ArrayList<Map<String, Object>>();
+                for (var call : message.toolCalls())
+                    calls.add(Map.of("id", call.id(), "name", call.name(), "arguments", arguments(call.arguments())));
+                out.append("\n### assistant\n").append(JSON.writeValueAsString(Map.of("tool_calls", calls))).append("\n");
+                continue;
+            }
+            out.append("\n### ").append(message.role());
+            if (message.toolCallId() != null) out.append(" ").append(message.toolCallId());
+            out.append("\n").append(message.content() == null ? "" : message.content()).append("\n");
+        }
         return out.toString();
+    }
+
+    static LlmClient.LlmResult parse(String text, boolean tools) {
+        if (!tools) return new LlmClient.LlmResult(text, null, List.of(), null, "stop");
+        JsonNode reply;
+        try {
+            reply = JSON.readTree(unfenced(text));
+        } catch (RuntimeException notJson) {
+            return new LlmClient.LlmResult(text, null, List.of(), null, "stop");
+        }
+        if (reply.path("tool_calls").isArray() && !reply.path("tool_calls").isEmpty()) {
+            var calls = new ArrayList<LlmClient.ToolCall>();
+            for (var call : reply.path("tool_calls")) {
+                String name = call.path("name").asString("");
+                if (name.isBlank()) throw new LlmException("The Codex route returned a tool call without a name");
+                JsonNode arguments = call.path("arguments");
+                calls.add(new LlmClient.ToolCall("codex-" + (calls.size() + 1), name,
+                        arguments.isObject() ? JSON.writeValueAsString(arguments) : arguments.isString() ? arguments.asString() : "{}"));
+            }
+            return new LlmClient.LlmResult(null, null, calls, null, "tool_calls");
+        }
+        String content = reply.path("final").isString() ? reply.path("final").asString() : text;
+        return new LlmClient.LlmResult(content, null, List.of(), null, "stop");
+    }
+
+    private static Object arguments(String json) {
+        try { return JSON.readTree(json == null ? "{}" : json); }
+        catch (RuntimeException notJson) { return json; }
+    }
+
+    private static String unfenced(String text) {
+        String value = text.strip();
+        if (value.startsWith("```")) {
+            int newline = value.indexOf('\n');
+            if (newline > 0 && value.endsWith("```")) value = value.substring(newline + 1, value.length() - 3).strip();
+        }
+        return value;
     }
 
     private static void delete(Path directory) {

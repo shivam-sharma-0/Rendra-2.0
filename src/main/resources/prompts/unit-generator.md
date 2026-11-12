@@ -7,6 +7,8 @@ For repairs, project.fileTree and project.packageDependencies in repairFeedback 
 Resolve relative imports from the importing file to those paths; do not invent shortened coordinator paths.
 Route components export default. MERN router exports exactly the declared Express Router; bootstrap registration is coordinator-owned.
 It is mounted at its basePath, so each route is path minus basePath: basePath /api/todos serves /api/todos/:id as '/:id'.
+Outside the route callback (a helper taking the request), req.params and req.query values are string | string[];
+read them as String(req.params.id ?? '').
 Coordinator-wired route pages use #/path links and receive {params: Record<string,string>} with decoded named route segments.
 Read params.id for /tasks/:id; use encodeURIComponent when building API paths. Preserve an existing custom router on edits.
 Do not introduce a provider wrapper requiring App.tsx changes unless App.tsx is owned by this unit.
@@ -15,9 +17,9 @@ Mongo documents expose string id in JSON/toObject via coordinator schema virtual
 return documents normally, or map _id to string id explicitly when using lean(). Do not invent a separate required id field.
 Account requests pass the coordinator requireAccount guard; use accountId for record ownership and never accept it from a body.
 MERN account UI uses the shared auth-client.ts: auth.signIn({email,password}), auth.signUp({email,password}),
-auth.signOut(), and useSession(). Without a session, a page that loads account data shows an app-card with one
-sentence about the app and a #/login link; the login page also lets a new visitor create an account (a link to the
-sign-up route, or a "Create account" toggle that calls auth.signUp when there is none).
+auth.signOut(), and useSession(). The sign-in/sign-up page is ready-made by the platform (its route file is a
+re-export; never rewrite it). Without a session, a page that loads account data shows an app-card with one sentence
+about the app and a #/login link.
 Generated api methods attach its token automatically. Do not duplicate auth
 routers, middleware, credential models or provider contexts. Auth session includes token, userId and email.
 Account data models already enforce verified ownership. Use the supplied models' ordinary CRUD methods;
