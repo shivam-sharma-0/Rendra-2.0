@@ -38,7 +38,7 @@ final class CodexCliClient {
             Path last = directory.resolve("last-message.txt");
             var command = new ArrayList<>(List.of(dev.getCodexCommand(), "exec", "--skip-git-repo-check", "--sandbox",
                     "read-only", "--ephemeral", "--ignore-rules", "--color", "never", "-C", directory.toString(), "-o",
-                    last.toString(), "-c", "model_reasoning_effort=\"" + dev.getCodexReasoningEffort() + "\""));
+                    last.toString(), "-c", "model_reasoning_effort=\"" + effort(dev) + "\""));
             if (request.model() != null && !request.model().isBlank() && !request.model().equals("default"))
                 command.addAll(List.of("-m", request.model()));
             command.add("-");
@@ -50,7 +50,7 @@ final class CodexCliClient {
             }
             long started = System.nanoTime();
             long deadline = started + Duration.ofSeconds(Math.max(30, dev.getCodexTimeoutSeconds())).toNanos();
-            log.info("codex_call_started model={} effort={} promptChars={} tools={}", request.model(), dev.getCodexReasoningEffort(),
+            log.info("codex_call_started model={} effort={} promptChars={} tools={}", request.model(), effort(dev),
                     prompt.length(), request.tools() == null ? 0 : request.tools().size());
             while (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
                 if (RunCancellation.current().isCancelled() || Thread.currentThread().isInterrupted())
@@ -125,6 +125,12 @@ final class CodexCliClient {
         }
         String content = reply.path("final").isString() ? reply.path("final").asString() : text;
         return new LlmClient.LlmResult(content, null, List.of(), null, "stop");
+    }
+
+    static String effort(AgentProperties.Dev dev) {
+        var purpose = LlmCallContext.current().purpose();
+        return purpose == CallPurpose.REQUIREMENTS || purpose == CallPurpose.SMALL_TALK
+                ? dev.getCodexLightReasoningEffort() : dev.getCodexReasoningEffort();
     }
 
     private static Object arguments(String json) {

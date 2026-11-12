@@ -26,6 +26,9 @@ final class ContractAcceptanceCompiler {
     private static final Pattern ADD_CLICK = Pattern.compile("ui_(?:create|add)(?:_[a-z0-9]+)*");
     private static final Pattern EDIT_CLICK = Pattern.compile("ui_edit(?:_[a-z0-9]+)*");
     private static final String APP_SHELL = "client/src/App.tsx";
+    private static final int ACCEPTANCE_CAP = 24;
+    private static final Set<String> REQUIRED_API_KINDS = Set.of("HEALTH", "CREATE", "READ", "UPDATE", "DELETE", "NOT_FOUND",
+            "PERSISTENCE", "AUTH_SIGNUP", "AUTH_LOGIN", "AUTH_REJECT", "AUTH_INVALID");
     private static final Map<String, String> DEFAULT_THEME = Map.of("background", "#f7f8fa", "foreground", "#182230", "accent", "#3056d3");
     private static final Map<String, String> NAMED_COLORS = Map.ofEntries(Map.entry("white", "#ffffff"), Map.entry("black", "#000000"),
             Map.entry("gray", "#808080"), Map.entry("grey", "#808080"), Map.entry("red", "#dc2626"), Map.entry("blue", "#2563eb"),
@@ -97,6 +100,7 @@ final class ContractAcceptanceCompiler {
         changed |= requireApprovedFinders(data, approved, mapper);
         changed |= bindAccountApiGuards(data);
         changed |= AccountAcceptance.normalize(data, mapper);
+        changed |= fitAcceptance(data);
         var criteria = mapper.convertValue(data.get("acceptance"), BehaviorCriteria.class);
         if (!criteria.crudRequired())
             return changed ? mapper.writeValueAsString(data) : content;
@@ -1019,11 +1023,60 @@ final class ContractAcceptanceCompiler {
         return true;
     }
 
-    /**
-     * Approved search and filter features get fixed, required browser steps on the list: the planner only prioritized
-     * them, so a build could pass without either (2026-10-29 review). Added after optional checks are trimmed; the
-     * search steps follow the created record and end with an empty query, the filter steps follow its completion.
-     */
+    @SuppressWarnings("unchecked")
+    private static boolean fitAcceptance(Map<String, Object> data) {
+        if (!(data.get("acceptance") instanceof Map<?, ?> raw))
+            return false;
+        var acceptance = (Map<String, Object>) raw;
+        var dropped = new ArrayList<Object>();
+        if (acceptance.get("api") instanceof List<?> apiRaw && apiRaw.size() > ACCEPTANCE_CAP) {
+            var api = (List<Map<String, Object>>) apiRaw;
+            var keep = new LinkedHashSet<Map<String, Object>>();
+            var firstKinds = new HashSet<Object>();
+            for (var step : api)
+                if (String.valueOf(step.get("id")).startsWith("platform_")
+                        || REQUIRED_API_KINDS.contains(step.get("kind")) && firstKinds.add(step.get("kind")))
+                    keep.add(step);
+            for (boolean grew = true; grew; ) {
+                grew = false;
+                for (var step : List.copyOf(keep))
+                    for (var source : api)
+                        if (source.get("captureVariable") instanceof String variable && !keep.contains(source) && references(step, variable))
+                            grew |= keep.add(source);
+            }
+            var captured = new HashSet<Object>();
+            keep.forEach(step -> captured.add(step.get("captureVariable")));
+            for (var step : api) {
+                if (keep.size() >= ACCEPTANCE_CAP)
+                    break;
+                if (!keep.contains(step) && api.stream().map(source -> source.get("captureVariable")).filter(Objects::nonNull)
+                        .allMatch(variable -> captured.contains(variable) || !references(step, (String) variable))) {
+                    keep.add(step);
+                    captured.add(step.get("captureVariable"));
+                }
+            }
+            if (keep.size() <= ACCEPTANCE_CAP) {
+                api.stream().filter(step -> !keep.contains(step)).forEach(step -> dropped.add(step.get("id")));
+                acceptance.put("api", api.stream().filter(keep::contains).toList());
+            }
+        }
+        if (dropped.isEmpty())
+            return false;
+        for (var unit : (List<Map<String, Object>>) data.get("units")) {
+            var assigned = new ArrayList<>((List<Object>) unit.get("acceptanceIds"));
+            if (assigned.removeAll(dropped))
+                unit.put("acceptanceIds", assigned);
+        }
+        log.info("planner_acceptance_fitted cap={} dropped={}", ACCEPTANCE_CAP, dropped);
+        return true;
+    }
+
+    private static boolean references(Map<String, Object> step, String variable) {
+        String marker = "${" + variable + "}";
+        return variable.equals(step.get("tokenVariable")) || String.valueOf(step.get("path")).contains(marker)
+                || String.valueOf(step.get("body")).contains(marker);
+    }
+
     private static boolean normalizeTheme(Map<String, Object> data) {
         var theme = new LinkedHashMap<String, Object>();
         if (data.get("theme") instanceof Map<?, ?> proposed)
@@ -1094,6 +1147,11 @@ final class ContractAcceptanceCompiler {
         return true;
     }
 
+    /**
+     * Approved search and filter features get fixed, required browser steps on the list: the planner only prioritized
+     * them, so a build could pass without either (2026-10-29 review). Added after optional checks are trimmed; the
+     * search steps follow the created record and end with an empty query, the filter steps follow its completion.
+     */
     @SuppressWarnings("unchecked")
     private static boolean requireApprovedFinders(Map<String, Object> data, String approved, ObjectMapper mapper) {
         if (approved == null || !(data.get("acceptance") instanceof Map<?, ?> acceptance)

@@ -525,6 +525,7 @@ public class AgentProperties implements EnvironmentAware {
         private boolean codexAll = false;
         private String codexModel = "gpt-5.6-sol";
         private int codexContextChars = 300_000;
+        private String codexLightReasoningEffort = "low";
     }
 
     @Getter

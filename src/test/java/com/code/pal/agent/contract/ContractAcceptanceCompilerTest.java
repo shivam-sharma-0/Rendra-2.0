@@ -891,6 +891,20 @@ class ContractAcceptanceCompilerTest {
         assertEquals(Map.of("background","#ffffff","foreground","#111827","accent","#3b82f6","radius","8px","spacing","16px","font","system"),compiled.theme());
     }
 
+    @Test void tooManyApiChecksAreFittedKeepingAuthAndTheRecordChain(){
+        Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(ContractFixtures.accounts()),Map.class);
+        var api=(List<Map<String,Object>>)((Map<String,Object>)data.get("acceptance")).get("api");
+        var read=api.stream().filter(step->"READ".equals(step.get("kind"))).findFirst().orElseThrow();
+        var owner=((List<Map<String,Object>>)data.get("units")).stream().filter(unit->((List<?>)unit.get("acceptanceIds")).contains(read.get("id"))).findFirst().orElseThrow();
+        var ids=new ArrayList<Object>((List<?>)owner.get("acceptanceIds"));
+        for(int i=0;i<20;i++){var extra=new LinkedHashMap<>(read);extra.put("id","extra_read_"+i);api.add(extra);ids.add("extra_read_"+i);}
+        owner.put("acceptanceIds",ids);
+        var compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),BuildContract.class);
+        var kinds=compiled.acceptance().api().stream().map(step->step.kind().name()).collect(java.util.stream.Collectors.toSet());
+        assertTrue(compiled.acceptance().api().size()<=24);
+        assertTrue(kinds.containsAll(Set.of("AUTH_SIGNUP","AUTH_LOGIN","CREATE","READ","UPDATE","DELETE","NOT_FOUND","PERSISTENCE")),kinds.toString());
+    }
+
     Map<String,Object> addFlow(String addId){
         Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(ContractFixtures.mern()),Map.class);
         ((Map<String,Object>)data.get("acceptance")).put("browser",new ArrayList<>(List.of(
