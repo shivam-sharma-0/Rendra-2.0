@@ -76,6 +76,7 @@ final class ContractAcceptanceCompiler {
     private static String compileCollections(String content, ObjectMapper mapper, String requiredScope, String approved) {
         Map<String, Object> data = mapper.readValue(content, Map.class);
         boolean changed = normalizeTheme(data);
+        changed |= normalizeFieldKinds(data);
         changed |= fillRouteValues(data);
         changed |= ContractDependencies.normalize(data, approved, mapper);
         changed |= dropBuiltInTypes(data);
@@ -98,6 +99,7 @@ final class ContractAcceptanceCompiler {
         changed |= dropUnresolvableBrowserSteps(data);
         changed |= openCreatePage(data, mapper);
         changed |= requireApprovedFinders(data, approved, mapper);
+        changed |= alignApiKinds(data);
         changed |= bindAccountApiGuards(data);
         changed |= AccountAcceptance.normalize(data, mapper);
         changed |= fitAcceptance(data);
@@ -1075,6 +1077,76 @@ final class ContractAcceptanceCompiler {
         String marker = "${" + variable + "}";
         return variable.equals(step.get("tokenVariable")) || String.valueOf(step.get("path")).contains(marker)
                 || String.valueOf(step.get("body")).contains(marker);
+    }
+
+    private static final Set<String> FIELD_KINDS = Set.of("STRING", "NUMBER", "BOOLEAN", "JSON", "STRING_ARRAY", "NUMBER_ARRAY", "JSON_ARRAY");
+
+    @SuppressWarnings("unchecked")
+    private static boolean normalizeFieldKinds(Map<String, Object> data) {
+        var changed = new ArrayList<String>();
+        for (String section : List.of("types", "models"))
+            if (data.get(section) instanceof List<?> types)
+                for (Object type : types)
+                    if (type instanceof Map<?, ?> map && map.get("fields") instanceof List<?> fields)
+                        for (Object field : fields)
+                            if (field instanceof Map<?, ?> raw && raw.get("kind") instanceof String kind && !FIELD_KINDS.contains(kind)) {
+                                String fitted = fieldKind(kind);
+                                ((Map<String, Object>) raw).put("kind", fitted);
+                                changed.add(kind + "->" + fitted);
+                            }
+        if (changed.isEmpty())
+            return false;
+        log.info("planner_field_kinds_normalized changes={}", changed);
+        return true;
+    }
+
+    private static String fieldKind(String proposed) {
+        String kind = proposed.strip().toUpperCase(Locale.ROOT).replaceAll("[\\s-]+", "_");
+        if (FIELD_KINDS.contains(kind))
+            return kind;
+        boolean list = kind.endsWith("[]") || kind.matches("(ARRAY|LIST)_?(OF_?)?.+|.+_(ARRAY|LIST)");
+        String element = kind.replaceAll("\\[]$|^(ARRAY|LIST)_?(OF_?)?|_(ARRAY|LIST)$", "");
+        if (kind.matches("ARRAY|LIST"))
+            return "JSON_ARRAY";
+        String scalar = element.matches("INT|INTEGER|LONG|FLOAT|DOUBLE|DECIMAL|NUMERIC|NUMBER|SCORE|COUNT") ? "NUMBER"
+                : element.matches("BOOL|BOOLEAN") ? "BOOLEAN"
+                : element.matches("OBJECT|MAP|RECORD|DICT|ANY|MIXED|JSON") ? "JSON" : "STRING";
+        if (!list)
+            return scalar;
+        return scalar.equals("BOOLEAN") ? "JSON_ARRAY" : scalar + "_ARRAY";
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean alignApiKinds(Map<String, Object> data) {
+        if (!(data.get("acceptance") instanceof Map<?, ?> acceptance) || !(acceptance.get("api") instanceof List<?> api))
+            return false;
+        var changed = new ArrayList<String>();
+        for (Object item : api) {
+            if (!(item instanceof Map<?, ?> raw) || !(raw.get("kind") instanceof String kind)
+                    || Set.of("HEALTH", "AUTH_SIGNUP", "AUTH_LOGIN").contains(kind))
+                continue;
+            String method = String.valueOf(raw.get("method"));
+            int status = raw.get("status") instanceof Number number ? number.intValue() : 0;
+            Object token = raw.get("tokenVariable");
+            boolean success = status >= 200 && status < 300;
+            String fitted = success ? switch (method) {
+                case "GET" -> kind.equals("PERSISTENCE") ? kind : "READ";
+                case "POST" -> "CREATE";
+                case "PUT", "PATCH" -> "UPDATE";
+                case "DELETE" -> "DELETE";
+                default -> kind;
+            } : status == 404 && method.equals("GET") ? "NOT_FOUND"
+                    : status == 401 || status == 403 ? ("invalidToken".equals(token) ? "AUTH_INVALID" : token == null ? "AUTH_REJECT" : kind)
+                    : kind;
+            if (!fitted.equals(kind)) {
+                ((Map<String, Object>) raw).put("kind", fitted);
+                changed.add(raw.get("id") + ":" + kind + "->" + fitted);
+            }
+        }
+        if (changed.isEmpty())
+            return false;
+        log.info("planner_api_kinds_aligned changes={}", changed);
+        return true;
     }
 
     private static boolean normalizeTheme(Map<String, Object> data) {

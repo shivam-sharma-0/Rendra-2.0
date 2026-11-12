@@ -891,6 +891,19 @@ class ContractAcceptanceCompilerTest {
         assertEquals(Map.of("background","#ffffff","foreground","#111827","accent","#3b82f6","radius","8px","spacing","16px","font","system"),compiled.theme());
     }
 
+    @Test void fieldTypesAndCheckKindsThatContradictTheRequestAreAligned(){
+        Map<String,Object> data=addFlow("ui_add");
+        var expected=ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper);
+        var type=((List<Map<String,Object>>)data.get("types")).getFirst();
+        ((List<Map<String,Object>>)type.get("fields")).getFirst().put("kind","ObjectId");
+        ((List<Map<String,Object>>)((List<Map<String,Object>>)data.get("models")).getFirst().get("fields")).getFirst().put("kind","text");
+        var api=(List<Map<String,Object>>)((Map<String,Object>)data.get("acceptance")).get("api");
+        api.stream().filter(step->"READ".equals(step.get("kind"))).findFirst().orElseThrow().put("kind","UPDATE");
+        api.stream().filter(step->"NOT_FOUND".equals(step.get("kind"))).findFirst().orElseThrow().put("kind","READ");
+        assertEquals(mapper.readValue(expected,BuildContract.class),
+                mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),BuildContract.class));
+    }
+
     @Test void tooManyApiChecksAreFittedKeepingAuthAndTheRecordChain(){
         Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(ContractFixtures.accounts()),Map.class);
         var api=(List<Map<String,Object>>)((Map<String,Object>)data.get("acceptance")).get("api");
