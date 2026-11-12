@@ -47,7 +47,7 @@ public class DependencyService {
     private static final int ERROR_TAIL_CHARS = 1_500;
     /** Registry connectivity, not a dependency defect: the bounded install budget retries it instead of a code repair. */
     private static final Pattern TRANSIENT_NETWORK = Pattern.compile("(?i)\\bcode (?:ETIMEDOUT|ECONNRESET|ECONNREFUSED"
-            + "|EAI_AGAIN|ENOTFOUND|ESOCKETTIMEDOUT|EPIPE|E429|E50[0234])\\b|problem related to network connectivity");
+            + "|EAI_AGAIN|ENOTFOUND|ESOCKETTIMEDOUT|EPIPE|E429|E50[0234])\\b|problem related to network connectivity|the install timed out");
 
     /** True for an install failure caused by registry connectivity rather than by the declared dependencies. */
     public static boolean registryUnreachable(String message) {

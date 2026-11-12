@@ -884,6 +884,13 @@ class ContractAcceptanceCompilerTest {
         assertTrue(logs.stream().anyMatch(line->line.contains("planner_feature_checks_skipped feature=search")),logs.toString());
     }
 
+    @Test void aSloppyThemeIsNormalizedInsteadOfRejectingThePlan(){
+        Map<String,Object> data=addFlow("ui_add");
+        data.put("theme",new LinkedHashMap<>(Map.of("background","white","foreground","rgb(17, 24, 39)","accent","#3B82F6","radius",8,"spacing","1rem","font","Inter, sans-serif","shadow","soft")));
+        var compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),BuildContract.class);
+        assertEquals(Map.of("background","#ffffff","foreground","#111827","accent","#3b82f6","radius","8px","spacing","16px","font","system"),compiled.theme());
+    }
+
     Map<String,Object> addFlow(String addId){
         Map<String,Object> data=mapper.readValue(mapper.writeValueAsString(ContractFixtures.mern()),Map.class);
         ((Map<String,Object>)data.get("acceptance")).put("browser",new ArrayList<>(List.of(

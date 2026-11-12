@@ -68,7 +68,9 @@ final class FailureExplanation {
                     + " Retry to continue, or split the request into smaller parts.";
             case PROVIDER_REQUEST_REJECTED -> "The AI model rejected this request. " + NOTHING_SAVED
                     + " Try again; a shorter request or fewer attachments usually helps.";
-            default -> "Something went wrong on our side before this build finished. " + NOTHING_SAVED + " Please try again.";
+            default -> reviewMessage != null && reviewMessage.startsWith("Planner")
+                    ? "I couldn't produce a valid plan for this app, so nothing was built. " + NOTHING_SAVED + " Please try again."
+                    : "Something went wrong on our side before this build finished. " + NOTHING_SAVED + " Please try again.";
         };
     }
 

@@ -5,6 +5,7 @@ import com.code.pal.agent.validation.AccountAcceptance;
 import com.code.pal.agent.validation.BehaviorCriteria;
 import tools.jackson.databind.ObjectMapper;
 import java.util.*;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Completes bounded MERN acceptance ownership and removes unit claims on coordinator-owned files.
@@ -25,6 +26,13 @@ final class ContractAcceptanceCompiler {
     private static final Pattern ADD_CLICK = Pattern.compile("ui_(?:create|add)(?:_[a-z0-9]+)*");
     private static final Pattern EDIT_CLICK = Pattern.compile("ui_edit(?:_[a-z0-9]+)*");
     private static final String APP_SHELL = "client/src/App.tsx";
+    private static final Map<String, String> DEFAULT_THEME = Map.of("background", "#f7f8fa", "foreground", "#182230", "accent", "#3056d3");
+    private static final Map<String, String> NAMED_COLORS = Map.ofEntries(Map.entry("white", "#ffffff"), Map.entry("black", "#000000"),
+            Map.entry("gray", "#808080"), Map.entry("grey", "#808080"), Map.entry("red", "#dc2626"), Map.entry("blue", "#2563eb"),
+            Map.entry("green", "#16a34a"), Map.entry("navy", "#1e3a8a"), Map.entry("teal", "#0d9488"), Map.entry("orange", "#ea580c"),
+            Map.entry("purple", "#7c3aed"), Map.entry("transparent", "#ffffff"));
+    private static final Pattern THEME_SIZE = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*(px|rem|em)?");
+    private static final Pattern THEME_RGB = Pattern.compile("^rgba?\\(\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})");
     private ContractAcceptanceCompiler() {
     }
 
@@ -64,7 +72,8 @@ final class ContractAcceptanceCompiler {
     @SuppressWarnings("unchecked")
     private static String compileCollections(String content, ObjectMapper mapper, String requiredScope, String approved) {
         Map<String, Object> data = mapper.readValue(content, Map.class);
-        boolean changed = fillRouteValues(data);
+        boolean changed = normalizeTheme(data);
+        changed |= fillRouteValues(data);
         changed |= ContractDependencies.normalize(data, approved, mapper);
         changed |= dropBuiltInTypes(data);
         if (!"MERN".equals(data.get("stack")))
@@ -1015,6 +1024,51 @@ final class ContractAcceptanceCompiler {
      * them, so a build could pass without either (2026-10-29 review). Added after optional checks are trimmed; the
      * search steps follow the created record and end with an empty query, the filter steps follow its completion.
      */
+    private static boolean normalizeTheme(Map<String, Object> data) {
+        var theme = new LinkedHashMap<String, Object>();
+        if (data.get("theme") instanceof Map<?, ?> proposed)
+            proposed.forEach((key, value) -> {
+                String token = themeValue(String.valueOf(key), value);
+                if (token != null)
+                    theme.put(String.valueOf(key), token);
+            });
+        if (theme.isEmpty())
+            theme.putAll(DEFAULT_THEME);
+        if (theme.equals(data.get("theme")))
+            return false;
+        log.info("planner_theme_normalized from={} to={}", data.get("theme") instanceof Map<?, ?> map ? map.keySet() : "none", theme);
+        data.put("theme", theme);
+        return true;
+    }
+
+    private static String themeValue(String key, Object value) {
+        if (value == null)
+            return null;
+        String text = String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+        return switch (key) {
+            case "radius", "spacing" -> {
+                Matcher size = THEME_SIZE.matcher(text);
+                if (!size.matches())
+                    yield null;
+                double pixels = Double.parseDouble(size.group(1)) * (size.group(2) == null || size.group(2).equals("px") ? 1 : 16);
+                yield Math.min(32, Math.round(pixels)) + "px";
+            }
+            case "font" -> text.contains("mono") ? "mono" : text.contains("serif") && !text.contains("sans") ? "serif" : "system";
+            case "background", "foreground", "accent", "muted" -> themeColor(text);
+            default -> null;
+        };
+    }
+
+    private static String themeColor(String text) {
+        if (text.matches("#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})"))
+            return text;
+        Matcher rgb = THEME_RGB.matcher(text);
+        if (rgb.find())
+            return String.format("#%02x%02x%02x", Math.min(255, Integer.parseInt(rgb.group(1))),
+                    Math.min(255, Integer.parseInt(rgb.group(2))), Math.min(255, Integer.parseInt(rgb.group(3))));
+        return NAMED_COLORS.get(text);
+    }
+
     @SuppressWarnings("unchecked")
     private static boolean dropUnresolvableBrowserSteps(Map<String, Object> data) {
         if (!(data.get("acceptance") instanceof Map<?, ?> acceptance) || !(acceptance.get("browser") instanceof List<?> raw))
