@@ -64,7 +64,7 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
     public record DataType(String name, List<Field> fields) {
         public DataType {
             identifier(name);
-            fields = bounded(fields, 24);
+            fields = bounded(fields, 48);
             if (fields.isEmpty())
                 bad("Empty type");
             unique("fields: duplicate field name", "type " + name + " fields", fields.stream().map(Field::name).toList());
