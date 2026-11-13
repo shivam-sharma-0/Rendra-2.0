@@ -308,7 +308,76 @@ const measureMobile = async (where) => {
   await send("Emulation.clearDeviceMetricsOverride", {}, sessionId);
   await new Promise((r) => setTimeout(r, 150));
 };
+const contrastDom = () => {
+  const parse = (value) => {
+    const match = String(value).match(/rgba?\(([^)]+)\)/);
+    if (!match) return null;
+    const parts = match[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+    return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+  };
+  const over = (top, bottom) => ({ r: top.r * top.a + bottom.r * (1 - top.a), g: top.g * top.a + bottom.g * (1 - top.a),
+    b: top.b * top.a + bottom.b * (1 - top.a), a: 1 });
+  const luminance = (c) => [c.r, c.g, c.b].map((v) => v / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+    .reduce((total, v, i) => total + v * [0.2126, 0.7152, 0.0722][i], 0);
+  const ratio = (a, b) => { const x = luminance(a), y = luminance(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  const css = (c) => `rgb(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)})`;
+  const backdrop = (el) => {
+    const layers = [];
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      const root = node === document.body || node === document.documentElement;
+      if (!root && style.backgroundImage && style.backgroundImage !== "none") return null;
+      const color = parse(style.backgroundColor);
+      if (color && color.a > 0) {
+        layers.push(color);
+        if (color.a >= 0.999) break;
+      }
+    }
+    const dark = getComputedStyle(document.documentElement).colorScheme.includes("dark");
+    let result = dark ? { r: 18, g: 18, b: 18, a: 1 } : { r: 255, g: 255, b: 255, a: 1 };
+    for (const layer of layers.reverse()) result = over(layer, result);
+    return result;
+  };
+  const seen = new Set();
+  const found = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let text = walker.nextNode(); text && seen.size < 400; text = walker.nextNode()) {
+    const el = text.parentElement;
+    if (!el || seen.has(el) || !text.textContent.trim()) continue;
+    seen.add(el);
+    if (el.closest("script,style,noscript,option,[aria-hidden=true],[disabled],[aria-disabled=true]")) continue;
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    if (rect.width === 0 || rect.height === 0 || style.visibility === "hidden") continue;
+    if (style.backgroundClip === "text" || style.webkitBackgroundClip === "text" || style.webkitTextFillColor === "rgba(0, 0, 0, 0)") continue;
+    let opacity = 1;
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity);
+    if (opacity < 0.05) continue;
+    const color = parse(style.color);
+    const background = backdrop(el);
+    if (!color || !background) continue;
+    const shown = over({ ...color, a: color.a * opacity }, background);
+    const contrast = ratio(shown, background);
+    if (contrast < 3) found.push({ text: text.textContent.trim().replace(/\s+/g, " ").slice(0, 40), tag: el.tagName.toLowerCase(),
+      contrast: Math.round(contrast * 100) / 100, color: css(shown), background: css(background) });
+  }
+  return found.sort((a, b) => a.contrast - b.contrast).slice(0, 6);
+};
+const auditContrast = async (where) => {
+  const audited = await send("Runtime.evaluate", { returnByValue: true, expression: `(${contrastDom.toString()})()` }, sessionId);
+  const found = audited.result?.result?.value;
+  if (audited.result?.exceptionDetails || !Array.isArray(found)) return;
+  for (const item of found.filter((entry) => entry.contrast < 1.6).slice(0, 3))
+    add("contrast", `Text "${item.text}" in <${item.tag}> is nearly invisible ${where}: ${item.color} on ${item.background} `
+      + `(contrast ${item.contrast}:1); use a theme colour such as var(--app-text) or var(--app-muted) on var(--app-surface)`, null);
+  for (const item of found.filter((entry) => entry.contrast >= 1.6).slice(0, 3)) {
+    const message = `Low-contrast text "${item.text}" in <${item.tag}> ${where} (${item.contrast}:1)`;
+    if (visual.warnings.length < 10 && !visual.warnings.includes(message)) visual.warnings.push(message);
+  }
+};
 if (loaded && !blank) await measureMobile("on load");
+if (loaded && !blank) await auditContrast("on load");
 
 // Exercise each visible control once. Links are not followed (that would leave the page); a control
 // is found again by its position each time, since the page may re-render after every action.
@@ -431,7 +500,10 @@ for (const expected of acceptanceActions) {
 }
 // A failed model assertion is advisory, but a page that disappeared during any recipe is a runtime failure.
 if (loaded && !await visibleNow()) add("blank", "The page went blank after browser interactions", null);
-if (loaded && !blank && acceptance.length > 0 && acceptance.every((a) => a.passed)) await measureMobile("after the required steps");
+if (loaded && !blank && acceptance.length > 0 && acceptance.every((a) => a.passed)) {
+  await measureMobile("after the required steps");
+  await auditContrast("after the required steps");
+}
 clearTimeout(timer);
 chrome.kill("SIGKILL");
 server.close();

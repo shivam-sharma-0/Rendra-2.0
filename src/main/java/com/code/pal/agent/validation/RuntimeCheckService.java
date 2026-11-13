@@ -468,6 +468,7 @@ public class RuntimeCheckService {
         case "load" -> "PAGE_NOT_LOADED";
         case "acceptance" -> "BROWSER_ACCEPTANCE_FAILED";
         case "layout" -> "MOBILE_OVERFLOW";
+        case "contrast" -> "TEXT_CONTRAST";
         case "visual" -> "UI_ACCESSIBILITY";
         default -> "CONSOLE_ERROR";
         };
