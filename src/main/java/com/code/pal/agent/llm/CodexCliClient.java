@@ -63,7 +63,8 @@ final class CodexCliClient {
             log.info("codex_call_finished model={} exit={} elapsedMs={}", request.model(), process.exitValue(),
                     (System.nanoTime() - started) / 1_000_000);
             if (process.exitValue() != 0 || !Files.isRegularFile(last))
-                throw new LlmException("The developer Codex route failed with exit " + process.exitValue());
+                throw new LlmException("The developer Codex route failed with exit " + process.exitValue()
+                        + failure(directory.resolve("codex.log")));
             return parse(Files.readString(last, StandardCharsets.UTF_8).strip(), request.tools() != null && !request.tools().isEmpty());
         } catch (IOException unavailable) {
             throw new LlmException("The developer Codex route could not start", unavailable);
@@ -131,6 +132,15 @@ final class CodexCliClient {
         var purpose = LlmCallContext.current().purpose();
         return purpose == CallPurpose.REQUIREMENTS || purpose == CallPurpose.SMALL_TALK
                 ? dev.getCodexLightReasoningEffort() : dev.getCodexReasoningEffort();
+    }
+
+    static String failure(Path log) {
+        try (Stream<String> lines = Files.lines(log, StandardCharsets.UTF_8)) {
+            return lines.map(String::strip).filter(line -> line.startsWith("ERROR:")).reduce((first, second) -> second)
+                    .map(line -> ": " + line.substring(0, Math.min(200, line.length()))).orElse("");
+        } catch (IOException | RuntimeException unreadable) {
+            return "";
+        }
     }
 
     private static Object arguments(String json) {

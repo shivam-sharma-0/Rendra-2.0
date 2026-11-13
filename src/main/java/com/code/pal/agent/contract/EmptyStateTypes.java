@@ -16,6 +16,12 @@ final class EmptyStateTypes {
     private static final Pattern UNTYPED = Pattern.compile(
             "const\\s*\\[\\s*([A-Za-z_$][\\w$]*)\\s*,\\s*[A-Za-z_$][\\w$]*\\s*]\\s*=\\s*(?:React\\.)?useState\\(\\s*(\\[\\s*]|null)\\s*\\)");
 
+    private static final Pattern UNTYPED_LIST = Pattern.compile(
+            "\\b(const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*\\[\\s*](?!\\s*(?:as|satisfies)\\b)");
+    private static final Pattern EMPTY_PROPERTY = Pattern.compile(
+            "^(?!\\s*(?:export\\s+)?(?:declare\\s+)?(?:type|interface)\\b)(.*?[{,(]\\s*|\\s+)([A-Za-z_$][\\w$]*)\\s*:\\s*\\[\\s*](?=\\s*(?:[,}]|$))",
+            Pattern.MULTILINE);
+
     private EmptyStateTypes() {
     }
 
@@ -27,8 +33,9 @@ final class EmptyStateTypes {
     }
 
     static String fix(String path, String source, Set<String> typeNames) {
-        if (!path.matches(".+\\.tsx?") || !source.contains("useState"))
+        if (!path.matches(".+\\.tsx?"))
             return source;
+        source = emptyLists(source, typeNames);
         Matcher untyped = UNTYPED.matcher(source);
         var out = new StringBuilder();
         while (untyped.find()) {
@@ -39,6 +46,19 @@ final class EmptyStateTypes {
             untyped.appendReplacement(out, Matcher.quoteReplacement(typed));
         }
         return untyped.appendTail(out).toString();
+    }
+
+    private static String emptyLists(String source, Set<String> typeNames) {
+        Matcher list = UNTYPED_LIST.matcher(source);
+        var out = new StringBuilder();
+        while (list.find())
+            list.appendReplacement(out, Matcher.quoteReplacement(list.group(1) + " " + list.group(2) + ": "
+                    + listType(list.group(2), typeNames, source) + "[] = []"));
+        Matcher property = EMPTY_PROPERTY.matcher(list.appendTail(out).toString());
+        var typed = new StringBuilder();
+        while (property.find())
+            property.appendReplacement(typed, Matcher.quoteReplacement(property.group(1) + property.group(2) + ": [] as any[]"));
+        return property.appendTail(typed).toString();
     }
 
     /** {@code todos} → {@code Todo}, {@code categories} → {@code Category}, when that name is imported here. */

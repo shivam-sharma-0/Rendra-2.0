@@ -12,6 +12,40 @@ class EmptyStateTypesTest {
     private static final Set<String> TYPES = Set.of("Todo", "TodoInput", "Category");
 
     @Test
+    void untypedEmptyListsOutsideReactStateAreTypedButAnnotatedOnesAreKept() {
+        String source = """
+                import type { Todo } from './types'
+                type Shape = { items: [] }
+                export function board(rows: Todo[]) {
+                  const todos = []
+                  let ranking = [ ]
+                  const kept: string[] = []
+                  const cast = [] as Todo[]
+                  const result = { items: [], total: 0 }
+                  const nested = call({ entries: [] })
+                  const pick = rows.length ? rows : []
+                  return { todos, ranking, kept, cast, result, nested, pick }
+                }
+                """;
+        String fixed = EmptyStateTypes.fix("server/src/routers/game.ts", source, TYPES);
+        assertEquals("""
+                import type { Todo } from './types'
+                type Shape = { items: [] }
+                export function board(rows: Todo[]) {
+                  const todos: Todo[] = []
+                  let ranking: any[] = []
+                  const kept: string[] = []
+                  const cast = [] as Todo[]
+                  const result = { items: [] as any[], total: 0 }
+                  const nested = call({ entries: [] as any[] })
+                  const pick = rows.length ? rows : []
+                  return { todos, ranking, kept, cast, result, nested, pick }
+                }
+                """, fixed);
+        assertEquals(fixed, EmptyStateTypes.fix("server/src/routers/game.ts", fixed, TYPES));
+    }
+
+    @Test
     void emptyListStateGetsTheImportedRecordTypeItsNameImplies() {
         // 2026-10-29 E2E 38-40, 44: useState([]) became never[] and both free repair routes made no progress.
         String source = """
