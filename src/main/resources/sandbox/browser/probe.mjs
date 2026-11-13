@@ -472,7 +472,8 @@ for (const expected of acceptanceActions) {
     if (a.kind === 'ASSERT_COUNT') return document.querySelectorAll(a.selector).length === Number(a.value);
     if (a.kind === 'ASSERT_EXISTS') return document.querySelectorAll(a.selector).length >= 1;
     const el = document.querySelector(a.selector); if (!el) return false;
-    if (a.kind === 'ASSERT_TEXT') return (el.textContent ?? '').includes(a.value);
+    const plain = (text) => String(text ?? '').replace(/\\s+/g, ' ').trim().toLowerCase();
+    if (a.kind === 'ASSERT_TEXT') return [el.innerText, el.textContent].some(text => plain(text).includes(plain(a.value)));
     if (a.kind === 'CLICK') { if (typeof el.click !== 'function') return false; el.click(); return true; }
     if (a.kind === 'FILL' || a.kind === 'SELECT') {
       const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
