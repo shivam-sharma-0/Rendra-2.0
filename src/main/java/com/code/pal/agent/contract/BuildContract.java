@@ -155,12 +155,13 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         if (units.isEmpty() || theme.isEmpty() || theme.size() > 8 || envNames.size() > 8)
             bad("Contract size invalid");
         for (var token : theme.entrySet()) {
-            if (!Set.of("background", "foreground", "accent", "muted", "radius", "spacing", "font")
+            if (!Set.of("background", "foreground", "accent", "muted", "radius", "spacing", "font", "preset")
                     .contains(token.getKey()))
                 bad("Unsupported theme token");
             boolean valid = switch (token.getKey()) {
             case "radius", "spacing" -> token.getValue().matches("(?:[0-9]|[12][0-9]|3[0-2])px");
             case "font" -> Set.of("system", "serif", "mono").contains(token.getValue());
+            case "preset" -> DesignPresets.NAMES.contains(token.getValue());
             default -> token.getValue().matches("#(?:[a-fA-F0-9]{3}|[a-fA-F0-9]{4}|[a-fA-F0-9]{6}|[a-fA-F0-9]{8})");
             };
             if (!valid)

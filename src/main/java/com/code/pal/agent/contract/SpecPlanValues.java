@@ -53,7 +53,8 @@ final class SpecPlanValues {
     static Map<String, String> theme(ApprovedSpec approved) {
         var theme = approved.spec().theme();
         return Map.of("background", theme.background(), "foreground", theme.foreground(), "accent", theme.accent(),
-                "muted", theme.muted(), "radius", theme.radius(), "spacing", theme.spacing(), "font", theme.font());
+                "muted", theme.muted(), "radius", theme.radius(), "spacing", theme.spacing(), "font", theme.font(),
+                "preset", DesignPresets.guess(theme.background()));
     }
 
     static List<BuildContract.DataType> types(ApprovedSpec approved) {

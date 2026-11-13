@@ -52,10 +52,10 @@ class ContractScaffoldTest {
     @Test void deterministicNewStacksHaveOneThemeMatchingSharedInterfacesAndPendingRouters() throws Exception {
         for(var c:List.of(ContractFixtures.staticSite(),ContractFixtures.vite(),ContractFixtures.mern())){
             var first=scaffold.render(c,"Fixture",p->null);assertEquals(first,scaffold.render(c,"Fixture",p->null));
-            assertTrue(first.get(c.clientRoot()+"theme.css").contains("--rendra-accent: #123456"));
+            assertTrue(first.get(c.clientRoot()+"theme.css").contains("--app-accent: #123456;"));
             // The design system reads --app-*: the approved palette must reach it (2026-10-29 review).
-            assertTrue(first.get(c.clientRoot()+"theme.css").contains("--app-accent: var(--rendra-accent);"));
-            assertEquals(c.theme().containsKey("foreground"),first.get(c.clientRoot()+"theme.css").contains("--app-text: var(--rendra-foreground);"));
+            assertTrue(first.get(c.clientRoot()+"theme.css").contains("--rendra-accent: var(--app-accent);"));
+            assertTrue(first.get(c.clientRoot()+"theme.css").contains("--app-surface: #ffffff;"));
             if(c.stack()==BuildContract.Stack.MERN){
                 assertEquals(first.get(c.clientRoot()+"types.ts"),first.get(c.serverRoot()+"types.ts"));
                 assertTrue(first.get(c.serverRoot()+"register.ts").contains("app.use(\"/api/items\", itemsRouter)"));
@@ -98,5 +98,17 @@ class ContractScaffoldTest {
         ContractScaffold.derivedTokens(Map.of("background","#ffffff","foreground","#f4f7ff"),unreadable);
         assertTrue(unreadable.toString().contains("--app-text: #111827;"),unreadable.toString());
         assertTrue(unreadable.toString().contains("--app-surface: #ffffff;"),unreadable.toString());
+    }
+    @Test void presetsResolveAliasesAndKeepOnlyAReadableAccent(){
+        assertEquals("midnight",DesignPresets.name("Gaming"));
+        assertEquals("midnight",DesignPresets.guess("#080b14"));
+        assertEquals("clean",DesignPresets.guess("#fafafa"));
+        var faint=new StringBuilder();
+        DesignPresets.css("clean","#f3f4f6",faint);
+        assertTrue(faint.toString().contains("--app-accent: #4f46e5;"),faint.toString());
+        var brand=new StringBuilder();
+        DesignPresets.css("midnight","#22d3ee",brand);
+        assertTrue(brand.toString().contains("--app-accent: #22d3ee;"),brand.toString());
+        assertTrue(brand.toString().contains("--app-on-accent: #111827;"),brand.toString());
     }
 }

@@ -14,7 +14,7 @@ class BuildContractTest {
     }
     static final UUID ID=UUID.fromString("00000000-0000-0000-0000-000000000071");
     static BuildContract valid(List<BuildContract.Unit> units){return new BuildContract(1,ID,BuildContract.Stack.STATIC,BuildDecisions.Storage.NONE,BuildDecisions.Auth.NONE,
-            new BuildContract.Limits(10,20,8192,60000),Map.of("accent","#123456"),List.of(),List.of(),List.of(),List.of(),List.of(),Set.of(),units,
+            new BuildContract.Limits(10,20,8192,60000),Map.of("accent","#123456","preset","clean"),List.of(),List.of(),List.of(),List.of(),List.of(),Set.of(),units,
             new BehaviorCriteria(1,List.of(new BehaviorCriteria.BrowserAction("result",BehaviorCriteria.BrowserKind.ASSERT_TEXT,"#result","5")),List.of(),false,false));}
     static BuildContract.Unit unit(String id,String file,List<String> depends){return new BuildContract.Unit(id,"Implement "+id,List.of(file),List.of(),depends,List.of("result"));}
     @Test void deterministicDagProducesOnlyReadyWaves() {

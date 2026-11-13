@@ -40,6 +40,7 @@ final class ContractResponseSchema {
         for (String key : List.of("radius", "spacing"))
             tokens.put(key, Map.of("type", "string", "pattern", "^(?:[0-9]|[12][0-9]|3[0-2])px$"));
         tokens.put("font", Map.of("type", "string", "enum", List.of("system", "serif", "mono")));
+        tokens.put("preset", Map.of("type", "string", "enum", DesignPresets.NAMES));
         theme.put("type", "object");
         theme.put("properties", tokens);
         theme.put("required", List.copyOf(tokens.keySet()));

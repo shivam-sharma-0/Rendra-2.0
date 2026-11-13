@@ -1357,6 +1357,7 @@ final class ContractAcceptanceCompiler {
             });
         if (theme.isEmpty())
             theme.putAll(DEFAULT_THEME);
+        theme.putIfAbsent("preset", DesignPresets.guess((String) theme.get("background")));
         if (theme.equals(data.get("theme")))
             return false;
         log.info("planner_theme_normalized from={} to={}", data.get("theme") instanceof Map<?, ?> map ? map.keySet() : "none", theme);
@@ -1378,6 +1379,7 @@ final class ContractAcceptanceCompiler {
             }
             case "font" -> text.contains("mono") ? "mono" : text.contains("serif") && !text.contains("sans") ? "serif" : "system";
             case "background", "foreground", "accent", "muted" -> themeColor(text);
+            case "preset" -> DesignPresets.name(text);
             default -> null;
         };
     }

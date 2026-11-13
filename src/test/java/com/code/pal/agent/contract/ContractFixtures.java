@@ -42,7 +42,7 @@ public final class ContractFixtures {
                 List.of(unit("data","server/src/items.ts",List.of(),checks.stream().map(BehaviorCriteria.ApiStep::id).toList()),page),new BehaviorCriteria(1,c.acceptance().browser(),checks,true,true));
     }
     public static BuildContract.Limits limits(){return new BuildContract.Limits(10,40,8192,60000);}
-    public static Map<String,String> theme(){return Map.of("accent","#123456","background","#ffffff","foreground","#111111");}
+    public static Map<String,String> theme(){return Map.of("accent","#123456","background","#ffffff","foreground","#111111","preset","clean");}
     private static List<BehaviorCriteria.BrowserAction> browser(){return List.of(new BehaviorCriteria.BrowserAction("ui",BehaviorCriteria.BrowserKind.ASSERT_TEXT,"#root","Items"));}
     private static BehaviorCriteria.ApiStep step(String id,BehaviorCriteria.ApiKind kind,String method,String path,String body,int status,String capture,String pointer,String assertPointer,String expected){return new BehaviorCriteria.ApiStep(id,kind,method,path,body,status,null,capture,pointer,assertPointer,expected);}
 }
