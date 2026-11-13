@@ -169,7 +169,7 @@ app:
       codex-all: ${AGENT_CODEX_ALL:true}
       codex-model: ${AGENT_CODEX_MODEL:gpt-5.6-sol}
       codex-enabled: ${AGENT_CODEX_ENABLED:false}
-      codex-reasoning-effort: ${AGENT_CODEX_REASONING_EFFORT:high}
+      codex-reasoning-effort: ${AGENT_CODEX_REASONING_EFFORT:medium}
       codex-light-reasoning-effort: ${AGENT_CODEX_LIGHT_REASONING_EFFORT:low}
       planner-rejection-directory: ${AGENT_PLANNER_REJECTION_DIRECTORY:target/planner-rejections}
       codex-timeout-seconds: ${AGENT_CODEX_TIMEOUT_SECONDS:420}
