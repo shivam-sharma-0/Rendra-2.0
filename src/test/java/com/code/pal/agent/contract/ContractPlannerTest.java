@@ -156,14 +156,18 @@ class ContractPlannerTest {
     @Test void aFreshAccountsAppWithoutASignInRouteIsRejectedForCorrection(){
         // Live E2E 2026-10-27: an ACCOUNTS Todo saved only / and /todos/:id/edit, so a real person could never sign in.
         var c=ContractFixtures.accounts();var fresh=new ContractPlanner.Input(c.id(),"Items","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits(),"client/src/App.tsx");
-        String body=mapper.writeValueAsString(c);
-        var rejected=assertThrows(ContractPlanner.Rejected.class,()->planner.validate(fresh,reply(body),true));
+        Map<String,Object> proposal=mapper.readValue(mapper.writeValueAsString(c),Map.class);
+        ((List<?>)proposal.get("routes")).removeIf(route->"/sign-in".equals(((Map<?,?>)route).get("path")));
+        ((List<Map<String,Object>>)proposal.get("units")).forEach(unit->((List<?>)unit.get("ownedPaths")).remove("client/src/SignInPage.tsx"));
+        String body=mapper.writeValueAsString(proposal);
+        assertEquals(c,planner.validate(fresh,reply(body),true).contract());
+        var rejected=assertThrows(ContractPlanner.Rejected.class,()->planner.validate(fresh,reply(body),false));
         assertEquals("routes: accounts app needs a sign-in page",rejected.signature());
         assertTrue(rejected.getMessage().contains("add a /login route"),rejected.getMessage());
-        Map<String,Object> proposal=mapper.readValue(body,Map.class);
-        ((List<Object>)proposal.get("units")).add(Map.of("id","login","objective","Sign in and sign up","ownedPaths",List.of("client/src/pages/Login.tsx"),"imports",List.of(),"dependsOn",List.of(),"acceptanceIds",List.of()));
-        ((List<Object>)proposal.get("routes")).add(Map.of("path","/login","componentPath","client/src/pages/Login.tsx","owner","login"));
-        assertDoesNotThrow(()->planner.validate(fresh,reply(mapper.writeValueAsString(proposal)),true));
+        Map<String,Object> withLogin=mapper.readValue(body,Map.class);
+        ((List<Object>)withLogin.get("units")).add(Map.of("id","login","objective","Sign in and sign up","ownedPaths",List.of("client/src/pages/Login.tsx"),"imports",List.of(),"dependsOn",List.of(),"acceptanceIds",List.of()));
+        ((List<Object>)withLogin.get("routes")).add(Map.of("path","/login","componentPath","client/src/pages/Login.tsx","owner","login"));
+        assertDoesNotThrow(()->planner.validate(fresh,reply(mapper.writeValueAsString(withLogin)),true));
         var edit=new ContractPlanner.Input(c.id(),"Items","Approved","Map",new BuildDecisions.Choice(1,c.storage(),c.auth(),null),c.limits());
         assertDoesNotThrow(()->planner.validate(edit,reply(body),true),"an existing app's edit keeps its own pages");
     }

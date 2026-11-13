@@ -1,0 +1,29 @@
+{
+  "cases": [
+    {
+      "name": "shadow-maze",
+      "repeats": 1,
+      "prompt": "Game Idea: Shadow Maze – The Ultimate Puzzle Challenge\n\nEk modern, interactive puzzle-adventure web application banao jisme player ko har level par unique mazes, hidden traps, logical puzzles aur limited time ke andar exit find karna ho. Har next level progressively harder ho, with intelligent obstacles, power-ups, achievements, stars, hints aur boss challenges.\n\nApplication mein user authentication, player dashboard, 30+ levels, XP & ranking system, global leaderboard, progress auto-save, sound effects, animations, dark/light mode, responsive UI, game statistics aur admin panel ho. Design premium gaming experience jaisa ho, with smooth transitions, polished UI, proper error handling aur fully functional end-to-end features."
+    },
+    {
+      "name": "ecommerce",
+      "repeats": 1,
+      "prompt": "Build a complete online store with customer accounts. Customers browse a product catalog with categories, search and price filters, view product details with images and reviews, add items to a cart, check out with a shipping address, and see their order history and order status. Include a wishlist, product ratings and reviews, and an admin panel where store staff manage products, categories, stock levels, orders and order status, and see sales statistics. Responsive premium UI with loading, empty and error states."
+    },
+    {
+      "name": "crm",
+      "repeats": 1,
+      "prompt": "Build a sales CRM for a small team with user accounts. Track companies, contacts, deals with pipeline stages (lead, qualified, proposal, won, lost), tasks with due dates, and notes on every record. Include a kanban pipeline board, a dashboard with deal value per stage and upcoming tasks, search and filters on every list, activity history per contact, and CSV-style export of deals. Data must persist and each user sees their own team's records."
+    },
+    {
+      "name": "school",
+      "repeats": 1,
+      "prompt": "School management system banao: students, teachers, classes, subjects, attendance, exams aur marks, timetable, fee records aur notice board. Admin sab manage kare, teacher apni class ki attendance aur marks daale, aur student/parent apna report card, attendance aur fees dekh sake. Dashboard, search, filters, login, responsive UI aur proper validation ho."
+    },
+    {
+      "name": "social",
+      "repeats": 1,
+      "prompt": "Build a small social network for photographers with accounts and profiles. Users post photos with captions and tags, follow other users, see a feed of people they follow, like and comment on posts, save posts to collections, search users and tags, and get notifications for likes, comments and new followers. Include profile editing, an explore page with trending tags, and moderation tools for admins to remove posts and ban users."
+    }
+  ]
+}

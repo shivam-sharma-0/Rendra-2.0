@@ -86,7 +86,7 @@ class AccountAcceptanceTest {
         assertThrows(IllegalArgumentException.class, () -> AccountAcceptance.normalize(collision, mapper));
         data = proposal(); raw = (Map<String, Object>) data.get("acceptance");
         api = (List<Map<String, Object>>) raw.get("api");
-        while (api.size() < 24) { var step = new LinkedHashMap<>(api.getLast()); step.put("id", "extra_" + api.size()); api.add(step); }
+        while (api.size() < BehaviorCriteria.API_CAP) { var step = new LinkedHashMap<>(api.getLast()); step.put("id", "extra_" + api.size()); api.add(step); }
         assertTrue(AccountAcceptance.normalize(data, mapper));
         var acceptance = raw;
         assertThrows(RuntimeException.class, () -> mapper.convertValue(acceptance, BehaviorCriteria.class));

@@ -23,6 +23,18 @@ remain separate from contract rejections and do not count as returned proposals.
 The rejection summary counts first blockers, not every latent defect. Valid contracts prove planning
 only; generated code/READY/browser/CRUD/CHAT still require the separate E2E gate.
 
+When `agent.dev.codex-all` is on (the default), the batch runs every requirements and planner call on the
+configured Codex model at the backend's efforts (requirements light, planning high), loads no provider key
+and has no free fallback, so a Codex failure shows as `PROVIDER_FAILURE`. Large apps that exceed the
+small-app limits (many endpoints, admin areas, dashboards) live in `scripts/fixtures/planner-large.json`:
+
+```powershell
+.\scripts\Run-PlannerBatch.ps1 -Fixture scripts/fixtures/planner-large.json
+```
+
+A running backend also keeps each rejected planner proposal with its input under
+`agent.dev.planner-rejection-directory` (default `target/planner-rejections`).
+
 To measure a validator/normalizer change without new model calls, replay an earlier batch:
 
 ```powershell

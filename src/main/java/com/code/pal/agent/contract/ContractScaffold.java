@@ -146,8 +146,8 @@ public final class ContractScaffold {
                         .append(json(relative(c.serverRoot(), endpoint.routerPath(), false))).append("\n");
                 if (existing.apply(endpoint.routerPath()) == null)
                     out.put(endpoint.routerPath(), "import { Router } from 'express'\nexport const "
-                            + endpoint.routerExport() + " = Router()\n" + endpoint.routerExport()
-                            + ".use((_req,res) => { res.status(501).json({error:'Implementation pending'}) })\n");
+                            + endpoint.routerExport() + " = Router()\n" + (endpoint.basePath().equals("/api") ? ""
+                                    : endpoint.routerExport() + ".use((_req,res) => { res.status(501).json({error:'Implementation pending'}) })\n"));
             }
             registration.append("export function registerContract(app: Express) {\n");
             if (c.auth() == BuildDecisions.Auth.ACCOUNTS)
@@ -175,7 +175,7 @@ public final class ContractScaffold {
     }
 
     public static String revision() {
-        return ContractStore.hash("contract-scaffold-2026-11-12.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
+        return ContractStore.hash("contract-scaffold-2026-11-13.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
                 + "/" + resource("contract/hash-app.tsx"));
     }
 

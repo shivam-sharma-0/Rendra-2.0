@@ -46,7 +46,7 @@ public final class ApiBehaviorProbe {
                 if (step.kind() == BehaviorCriteria.ApiKind.PERSISTENCE)
                     restart.run();
                 String path = expand(step.path(), values);
-                if (!path.matches("/api/[A-Za-z0-9_./-]{1,240}") || path.contains("..") || path.contains("//"))
+                if (!path.matches("/api/[A-Za-z0-9_./-]{1,240}(\\?[A-Za-z0-9_.~%=&-]{1,200})?") || path.contains("..") || path.contains("//"))
                     throw new IllegalArgumentException("Unsafe expanded request path");
                 var target = endpoint.get();
                 var request = HttpRequest.newBuilder(URI.create(target.baseUrl() + path)).timeout(Duration.ofSeconds(8))

@@ -26,7 +26,7 @@ final class ContractAcceptanceCompiler {
     private static final Pattern ADD_CLICK = Pattern.compile("ui_(?:create|add)(?:_[a-z0-9]+)*");
     private static final Pattern EDIT_CLICK = Pattern.compile("ui_edit(?:_[a-z0-9]+)*");
     private static final String APP_SHELL = "client/src/App.tsx";
-    private static final int ACCEPTANCE_CAP = 24;
+    private static final int ACCEPTANCE_CAP = BehaviorCriteria.API_CAP;
     private static final Set<String> REQUIRED_API_KINDS = Set.of("HEALTH", "CREATE", "READ", "UPDATE", "DELETE", "NOT_FOUND",
             "PERSISTENCE", "AUTH_SIGNUP", "AUTH_LOGIN", "AUTH_REJECT", "AUTH_INVALID");
     private static final Map<String, String> DEFAULT_THEME = Map.of("background", "#f7f8fa", "foreground", "#182230", "accent", "#3056d3");
@@ -77,6 +77,9 @@ final class ContractAcceptanceCompiler {
         Map<String, Object> data = mapper.readValue(content, Map.class);
         boolean changed = normalizeTheme(data);
         changed |= normalizeFieldKinds(data);
+        changed |= normalizeStatuses(data);
+        changed |= alignTypeReferences(data);
+        changed |= addSignInRoute(data);
         changed |= fillRouteValues(data);
         changed |= ContractDependencies.normalize(data, approved, mapper);
         changed |= dropBuiltInTypes(data);
@@ -84,6 +87,7 @@ final class ContractAcceptanceCompiler {
             return changed ? mapper.writeValueAsString(data) : content;
         changed |= removeExactDuplicates(data);
         changed |= renameDuplicateApiIds(data);
+        changed |= renameDuplicateBrowserIds(data);
         changed |= narrowRouterBases(data);
         changed |= resolveUnambiguousUnitIds(data);
         changed |= alignAddClickId(data);
@@ -100,6 +104,7 @@ final class ContractAcceptanceCompiler {
         changed |= openCreatePage(data, mapper);
         changed |= requireApprovedFinders(data, approved, mapper);
         changed |= alignApiKinds(data);
+        changed |= coverRecordReads(data);
         changed |= bindAccountApiGuards(data);
         changed |= AccountAcceptance.normalize(data, mapper);
         changed |= fitAcceptance(data);
@@ -1039,6 +1044,11 @@ final class ContractAcceptanceCompiler {
                 if (String.valueOf(step.get("id")).startsWith("platform_")
                         || REQUIRED_API_KINDS.contains(step.get("kind")) && firstKinds.add(step.get("kind")))
                     keep.add(step);
+            if (data.get("api") instanceof List<?> declared)
+                for (Object entry : declared)
+                    if (entry instanceof Map<?, ?> endpoint && endpoint.get("method") instanceof String method
+                            && endpoint.get("path") instanceof String shape && keep.stream().noneMatch(step -> succeeds(step, method, shape)))
+                        api.stream().filter(step -> succeeds(step, method, shape)).findFirst().ifPresent(keep::add);
             for (boolean grew = true; grew; ) {
                 grew = false;
                 for (var step : List.copyOf(keep))
@@ -1071,6 +1081,12 @@ final class ContractAcceptanceCompiler {
         }
         log.info("planner_acceptance_fitted cap={} dropped={}", ACCEPTANCE_CAP, dropped);
         return true;
+    }
+
+    private static boolean succeeds(Map<String, Object> step, String method, String shape) {
+        int status = step.get("status") instanceof Number number ? number.intValue() : 0;
+        return method.equals(step.get("method")) && status >= 200 && status < 300 && step.get("path") instanceof String path
+                && BuildContract.matchesApiPath(shape, path);
     }
 
     private static boolean references(Map<String, Object> step, String variable) {
@@ -1114,6 +1130,188 @@ final class ContractAcceptanceCompiler {
         if (!list)
             return scalar;
         return scalar.equals("BOOLEAN") ? "JSON_ARRAY" : scalar + "_ARRAY";
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean renameDuplicateBrowserIds(Map<String, Object> data) {
+        if (!(data.get("acceptance") instanceof Map<?, ?> acceptance) || !(acceptance.get("browser") instanceof List<?> browser))
+            return false;
+        var used = new HashSet<Object>();
+        browser.forEach(item -> { if (item instanceof Map<?, ?> step) used.add(step.get("id")); });
+        var seen = new HashSet<Object>();
+        var renamed = new LinkedHashMap<String, List<String>>();
+        for (Object item : browser)
+            if (item instanceof Map<?, ?> raw && raw.get("id") instanceof String id && !seen.add(id)) {
+                if (id.length() > 60)
+                    continue;
+                String next = id + "_2";
+                for (int suffix = 3; used.contains(next); suffix++)
+                    next = id + "_" + suffix;
+                used.add(next);
+                ((Map<String, Object>) raw).put("id", next);
+                renamed.computeIfAbsent(id, key -> new ArrayList<>()).add(next);
+            }
+        if (renamed.isEmpty())
+            return false;
+        if (data.get("units") instanceof List<?> units)
+            for (Object value : units)
+                if (value instanceof Map<?, ?> unit && unit.get("acceptanceIds") instanceof List<?> ids) {
+                    var assigned = new ArrayList<Object>(ids);
+                    renamed.forEach((id, copies) -> { if (assigned.contains(id)) assigned.addAll(copies); });
+                    ((Map<String, Object>) unit).put("acceptanceIds", assigned);
+                }
+        log.info("planner_duplicate_browser_ids_renamed renamed={}", renamed);
+        return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean coverRecordReads(Map<String, Object> data) {
+        if (!(data.get("api") instanceof List<?> declared) || !(data.get("acceptance") instanceof Map<?, ?> acceptance)
+                || !(acceptance.get("api") instanceof List<?> raw))
+            return false;
+        var api = new ArrayList<Map<String, Object>>((List<Map<String, Object>>) raw);
+        var ids = new HashSet<Object>();
+        api.forEach(step -> ids.add(step.get("id")));
+        var added = new LinkedHashMap<Object, String>();
+        for (Object entry : declared) {
+            if (!(entry instanceof Map<?, ?> endpoint) || !"GET".equals(endpoint.get("method"))
+                    || !(endpoint.get("path") instanceof String shape) || !shape.matches(".*/:[A-Za-z][A-Za-z0-9_]*")
+                    || api.stream().anyMatch(step -> succeeds(step, "GET", shape)))
+                continue;
+            var update = api.stream().filter(step -> "UPDATE".equals(step.get("kind")) && step.get("assertPointer") != null
+                    && step.get("assertValue") != null && step.get("path") instanceof String path && path.matches(".*\\$\\{[A-Za-z0-9_]+}")
+                    && BuildContract.matchesApiPath(shape, path) && succeeds(step, String.valueOf(step.get("method")), shape)).findFirst();
+            String id = update.map(step -> step.get("id") + "_read").orElse(null);
+            if (update.isEmpty() || ids.contains(id) || id.length() > 64)
+                continue;
+            var read = new LinkedHashMap<String, Object>();
+            read.put("id", id);
+            read.put("kind", "READ");
+            read.put("method", "GET");
+            read.put("path", update.get().get("path"));
+            read.put("body", null);
+            read.put("status", 200);
+            read.put("tokenVariable", update.get().get("tokenVariable"));
+            read.put("captureVariable", null);
+            read.put("capturePointer", null);
+            read.put("assertPointer", update.get().get("assertPointer"));
+            read.put("assertValue", update.get().get("assertValue"));
+            api.add(api.indexOf(update.get()) + 1, read);
+            ids.add(id);
+            added.put(update.get().get("id"), id);
+        }
+        if (added.isEmpty())
+            return false;
+        ((Map<String, Object>) acceptance).put("api", api);
+        if (data.get("units") instanceof List<?> units)
+            for (Object value : units)
+                if (value instanceof Map<?, ?> unit && unit.get("acceptanceIds") instanceof List<?> assigned) {
+                    var next = new ArrayList<Object>();
+                    for (Object id : assigned) {
+                        next.add(id);
+                        if (added.containsKey(id))
+                            next.add(added.get(id));
+                    }
+                    ((Map<String, Object>) unit).put("acceptanceIds", next);
+                }
+        log.info("planner_record_reads_covered added={}", added);
+        return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean normalizeStatuses(Map<String, Object> data) {
+        if (!(data.get("acceptance") instanceof Map<?, ?> acceptance) || !(acceptance.get("api") instanceof List<?> api))
+            return false;
+        var changed = new ArrayList<String>();
+        for (Object item : api)
+            if (item instanceof Map<?, ?> raw && raw.get("status") instanceof String text) {
+                String status = text.strip().toLowerCase(Locale.ROOT);
+                Integer fitted = status.matches("[1-5][0-9]{2}") ? Integer.valueOf(status)
+                        : status.equals("2xx") ? Integer.valueOf("POST".equals(raw.get("method")) ? 201 : 200)
+                        : status.equals("4xx") && "NOT_FOUND".equals(raw.get("kind")) ? Integer.valueOf(404)
+                        : status.equals("4xx") && String.valueOf(raw.get("kind")).startsWith("AUTH_") ? Integer.valueOf(401) : null;
+                if (fitted == null)
+                    continue;
+                ((Map<String, Object>) raw).put("status", fitted);
+                changed.add(raw.get("id") + ":" + text + "->" + fitted);
+            }
+        if (changed.isEmpty())
+            return false;
+        log.info("planner_statuses_normalized changes={}", changed);
+        return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean addSignInRoute(Map<String, Object> data) {
+        if (!"ACCOUNTS".equals(data.get("auth")) || !"MERN".equals(data.get("stack"))
+                || !(data.get("routes") instanceof List<?> routes) || routes.isEmpty() || !(data.get("units") instanceof List<?> units))
+            return false;
+        Map<String, Object> home = null;
+        for (Object value : routes)
+            if (value instanceof Map<?, ?> route && route.get("path") instanceof String path) {
+                if (ApprovedProductScope.signInRoute(path))
+                    return false;
+                if (path.equals("/"))
+                    home = (Map<String, Object>) route;
+            }
+        if (home == null || !(home.get("componentPath") instanceof String component) || !component.startsWith("client/src/")
+                || !(home.get("owner") instanceof String owner))
+            return false;
+        String page = component.substring(0, component.lastIndexOf('/') + 1) + "SignInPage.tsx";
+        var unit = units.stream().filter(value -> value instanceof Map<?, ?> map && owner.equals(map.get("id"))).findFirst();
+        if (unit.isEmpty() || units.stream().anyMatch(value -> value instanceof Map<?, ?> map
+                && map.get("ownedPaths") instanceof List<?> paths && paths.contains(page)))
+            return false;
+        var owned = (Map<String, Object>) unit.get();
+        var paths = new ArrayList<Object>((List<?>) owned.get("ownedPaths"));
+        paths.add(page);
+        owned.put("ownedPaths", paths);
+        var all = new ArrayList<Object>(routes);
+        all.add(new LinkedHashMap<>(Map.of("path", "/sign-in", "componentPath", page, "owner", owner)));
+        data.put("routes", all);
+        log.info("planner_sign_in_route_added owner={} componentPath={}", owner, page);
+        return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean alignTypeReferences(Map<String, Object> data) {
+        if (!(data.get("api") instanceof List<?> api) || !(data.get("types") instanceof List<?> types))
+            return false;
+        var declared = types.stream().map(type -> type instanceof Map<?, ?> map ? map.get("name") : null)
+                .filter(String.class::isInstance).map(String.class::cast).toList();
+        var known = new HashSet<>(declared);
+        known.addAll(BuildContract.BUILT_IN_TYPES);
+        known.add("unknown");
+        var changed = new ArrayList<String>();
+        for (Object entry : api)
+            if (entry instanceof Map<?, ?> raw)
+                for (String field : List.of("requestType", "responseType"))
+                    if (raw.get(field) instanceof String reference) {
+                        boolean list = reference.endsWith("[]");
+                        String base = list ? reference.substring(0, reference.length() - 2) : reference;
+                        if (known.contains(base))
+                            continue;
+                        var matches = declared.stream().filter(name -> sameType(name, base)).toList();
+                        if (matches.size() != 1)
+                            continue;
+                        String fitted = matches.getFirst() + (list ? "[]" : "");
+                        ((Map<String, Object>) raw).put(field, fitted);
+                        changed.add(reference + "->" + fitted);
+                    }
+        if (changed.isEmpty())
+            return false;
+        log.info("planner_type_references_aligned changes={}", changed);
+        return true;
+    }
+
+    private static boolean sameType(String declared, String reference) {
+        String a = singular(declared.toLowerCase(Locale.ROOT)), b = singular(reference.toLowerCase(Locale.ROOT));
+        return a.equals(b) || a.length() >= 4 && b.length() >= 4 && (a.endsWith(b) || b.endsWith(a));
+    }
+
+    private static String singular(String name) {
+        return name.endsWith("ies") ? name.substring(0, name.length() - 3) + "y"
+                : name.endsWith("s") && !name.endsWith("ss") ? name.substring(0, name.length() - 1) : name;
     }
 
     @SuppressWarnings("unchecked")

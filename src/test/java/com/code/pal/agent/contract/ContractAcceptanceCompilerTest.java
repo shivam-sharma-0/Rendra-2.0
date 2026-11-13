@@ -600,7 +600,9 @@ class ContractAcceptanceCompilerTest {
         var get=new LinkedHashMap<String,Object>(api(declared).getFirst());get.putAll(Map.of("id","getItem","path","/api/items/:id","responseType","Item"));api(declared).add(get);
         Map<String,Object> kept=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(declared),mapper),Map.class);
         assertEquals(api(declared).size(),api(kept).size());
-        assertEquals(steps(declared).stream().map(step->step.get("id")).toList(),steps(kept).stream().map(step->step.get("id")).toList());
+        var expected=new ArrayList<Object>(steps(declared).stream().map(step->step.get("id")).toList());
+        expected.add(expected.indexOf("update")+1,"update_read");
+        assertEquals(expected,steps(kept).stream().map(step->step.get("id")).toList());
         Map<String,Object> detailed=groundedNotFound(original);
         var detail=new LinkedHashMap<>(step(detailed,"read"));detail.putAll(Map.of("id","detail","path","/api/items/${itemId}","assertPointer","/value"));
         steps(detailed).add(steps(detailed).indexOf(step(detailed,"read"))+1,detail);
@@ -910,11 +912,11 @@ class ContractAcceptanceCompilerTest {
         var read=api.stream().filter(step->"READ".equals(step.get("kind"))).findFirst().orElseThrow();
         var owner=((List<Map<String,Object>>)data.get("units")).stream().filter(unit->((List<?>)unit.get("acceptanceIds")).contains(read.get("id"))).findFirst().orElseThrow();
         var ids=new ArrayList<Object>((List<?>)owner.get("acceptanceIds"));
-        for(int i=0;i<20;i++){var extra=new LinkedHashMap<>(read);extra.put("id","extra_read_"+i);api.add(extra);ids.add("extra_read_"+i);}
+        for(int i=0;i<50;i++){var extra=new LinkedHashMap<>(read);extra.put("id","extra_read_"+i);api.add(extra);ids.add("extra_read_"+i);}
         owner.put("acceptanceIds",ids);
         var compiled=mapper.readValue(ContractAcceptanceCompiler.completeCollections(mapper.writeValueAsString(data),mapper),BuildContract.class);
         var kinds=compiled.acceptance().api().stream().map(step->step.kind().name()).collect(java.util.stream.Collectors.toSet());
-        assertTrue(compiled.acceptance().api().size()<=24);
+        assertTrue(compiled.acceptance().api().size()<=com.code.pal.agent.validation.BehaviorCriteria.API_CAP);
         assertTrue(kinds.containsAll(Set.of("AUTH_SIGNUP","AUTH_LOGIN","CREATE","READ","UPDATE","DELETE","NOT_FOUND","PERSISTENCE")),kinds.toString());
     }
 

@@ -13,9 +13,9 @@ unique; approved page and feature ids may be equal, so never add one unit per fe
 Use 3-6 cohesive units for a typical app, at most 12.
 Keep every requested page and backend workflow; share helpers within their existing owner instead of adding units.
 Limits: routes at most 20; types at most 16; models at most 12; api at most 24; assets at most 16.
-acceptance.browser and acceptance.api each contain at most 24 actions total. Combine preparatory navigation and
+acceptance.browser contains at most 24 actions and acceptance.api at most 48 requests, each total. Combine preparatory navigation and
 use cohesive flows covering all required behavior within those bounds; the limit counts setup actions such as FILL,
-SELECT and navigation clicks as well as assertions. Never emit more than 24 in either list. Prioritize the requested
+SELECT and navigation clicks as well as assertions. Never emit more than 24 browser actions or 48 API requests. Prioritize the requested
 account, CRUD, search/filter and reload-persistence flows. Do not add full tests for optional settings controls,
 secondary preferences or every route when they duplicate required evidence. Keep one concise route assertion where it
 proves navigation; do not restate the same state with multiple selectors.
@@ -83,7 +83,7 @@ A new ACCOUNTS app also declares a /login route whose page unit signs in and sig
 Set protected CRUD tokenVariable to null; the platform binds it to its captured session. Preserve every CRUD/restart assertion.
 Browser checks start with a fresh authenticated platform session unless explicitly testing the auth forms. Use the declared
 product selectors for CRUD/search/filter/reload and do not spend browser actions or static credentials on auth setup.
-PERSISTENCE performs a real restart and must assert a value. assertValue is scalar text (one, 42, true), not JSON-encoded text.
+PERSISTENCE performs a real restart and must assert a value. READ and UPDATE of one captured record (path ending in ${id}) assert a value too; list, summary and bulk checks may omit assertions once another READ/UPDATE asserts one. assertValue is scalar text (one, 42, true), not JSON-encoded text.
 Only local /api paths. No external acceptance URLs, JavaScript, shell, new privileges or raised limits.
 Assets must reference exact source path/fingerprint from project context; use no invented image or SDK.
 New VITE/MERN client needs an owned root component or declared owned route components. If a unit implements

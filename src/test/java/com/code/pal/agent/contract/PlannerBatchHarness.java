@@ -76,8 +76,16 @@ public final class PlannerBatchHarness {
         environment.getPropertySources().addLast(new PropertiesPropertySource("local-secrets", secrets));
         var properties = Binder.get(environment).bind("app.agent", AgentProperties.class).get();
         properties.setBillingMode(AgentProperties.BillingMode.FREE);
-        requireFreeRoute(properties.preferredRequirementsModel());
-        requireFreeRoute(properties.planningRoutes().getFirst());
+        if (properties.getDev().isCodexAll()) {
+            properties.applyCodexEverywhere();
+            properties.getProviders().clear();
+            requireApprovedRoute(properties, properties.preferredRequirementsModel());
+            requireApprovedRoute(properties, properties.planningRoutes().getFirst());
+            properties.getLlm().setMaxAttempts(1); properties.getPlanning().setMaxTransportAttempts(1);
+            return properties;
+        }
+        requireApprovedRoute(properties, properties.preferredRequirementsModel());
+        requireApprovedRoute(properties, properties.planningRoutes().getFirst());
         var provider = properties.getProviders().get("mistral");
         String master = environment.getProperty("GATEWAY_MASTER_KEY");
         // Only the explicitly approved free Codestral route is loaded into this unmanaged transport.
@@ -89,9 +97,11 @@ public final class PlannerBatchHarness {
         return properties;
     }
 
-    private static void requireFreeRoute(AgentProperties.ModelSelection route) {
-        if (!route.provider().equals("mistral") || !route.model().equals("codestral-latest"))
-            throw new IllegalArgumentException("Batch permits only the owner's approved free mistral:codestral-latest route");
+    private static void requireApprovedRoute(AgentProperties properties, AgentProperties.ModelSelection route) {
+        boolean codex = properties.getDev().isCodexAll() && route.provider().equals("codex")
+                && route.model().equals(properties.getDev().getCodexModel());
+        if (!codex && (!route.provider().equals("mistral") || !route.model().equals("codestral-latest")))
+            throw new IllegalArgumentException("Batch permits only the configured Codex route or the free mistral:codestral-latest route");
     }
 
     private void run(Path fixture) throws IOException {
@@ -218,7 +228,7 @@ public final class PlannerBatchHarness {
     }
 
     LlmClient.LlmResult invoke(LlmClient.LlmRequest request, CallPurpose purpose, Map<String, Object> call, String filename) throws IOException {
-        requireFreeRoute(new AgentProperties.ModelSelection(request.provider(), request.model()));
+        requireApprovedRoute(properties, new AgentProperties.ModelSelection(request.provider(), request.model()));
         // No route fallback or correction: measure independent first proposals and expose 429 separately.
         Duration limit = Duration.ofMillis(properties.getPlanning().getRouteTimeoutMs());
         var bounded = new LlmClient.LlmRequest(request.provider(), request.model(), request.messages(), request.tools(), request.temperature(),

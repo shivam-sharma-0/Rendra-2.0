@@ -347,7 +347,7 @@ public class AgentProperties implements EnvironmentAware {
         reportRouting();
     }
 
-    void applyCodexEverywhere() {
+    public void applyCodexEverywhere() {
         if (!dev.isCodexAll())
             return;
         dev.setCodexEnabled(true);
@@ -526,6 +526,7 @@ public class AgentProperties implements EnvironmentAware {
         private String codexModel = "gpt-5.6-sol";
         private int codexContextChars = 300_000;
         private String codexLightReasoningEffort = "low";
+        private String plannerRejectionDirectory = "";
     }
 
     @Getter

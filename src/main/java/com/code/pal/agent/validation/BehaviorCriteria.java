@@ -50,13 +50,16 @@ public record BehaviorCriteria(int schema, List<BrowserAction> browser, List<Api
             String assertValue) {
     }
 
+    public static final int BROWSER_CAP = 24;
+    public static final int API_CAP = 48;
+
     public BehaviorCriteria {
         browser = browser == null ? List.of() : List.copyOf(browser);
         api = api == null ? List.of() : List.copyOf(api);
         if (provenance == Provenance.MODEL_SPEC && (!api.isEmpty() || authRequired || crudRequired)) {
             throw new IllegalArgumentException("Model-spec advisory scope is browser-only; API, auth and CRUD checks remain blocking");
         }
-        if (schema != 1 || browser.size() > 24 || api.size() > 24 || (browser.isEmpty() && api.isEmpty()))
+        if (schema != 1 || browser.size() > BROWSER_CAP || api.size() > API_CAP || (browser.isEmpty() && api.isEmpty()))
             throw new IllegalArgumentException("Invalid acceptance schema/size");
         Set<String> ids = new HashSet<>();
         for (int index = 0; index < browser.size(); index++) {
@@ -115,7 +118,7 @@ public record BehaviorCriteria(int schema, List<BrowserAction> browser, List<Api
                 if (!Set.of("GET", "POST", "PUT", "PATCH", "DELETE").contains(a.method()))
                     throw new IllegalArgumentException("Invalid acceptance HTTP method");
                 field = "path"; value = a.path(); allowed = "must be a local /api/ request path with captured route variables";
-                if (a.path() == null || !a.path().matches("/api/[A-Za-z0-9_./${}-]{1,240}") || a.path().contains("..")
+                if (a.path() == null || !a.path().matches("/api/[A-Za-z0-9_./${}-]{1,240}(\\?[A-Za-z0-9_.~%=&${}-]{1,200})?") || a.path().contains("..")
                         || a.path().contains("//"))
                     throw new IllegalArgumentException(
                             "Invalid acceptance API path; expand route parameters with captured fixture variables");

@@ -312,7 +312,8 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         unique("api: duplicate router export", "api routerExport of distinct routerPaths", api.stream()
                 .collect(Collectors.toMap(Api::routerPath, Api::routerExport, (a, b) -> a)).values().stream().toList());
         unique("api: duplicate router basePath", "api basePath of distinct routerPaths", api.stream()
-                .collect(Collectors.toMap(Api::routerPath, Api::basePath, (a, b) -> a)).values().stream().toList());
+                .collect(Collectors.toMap(Api::routerPath, Api::basePath, (a, b) -> a)).values().stream()
+                .filter(base -> !base.equals("/api")).toList());
         if (auth == BuildDecisions.Auth.ACCOUNTS && stack == Stack.MERN) {
             boolean missing = acceptance.api().stream().anyMatch(a -> a.kind() == BehaviorCriteria.ApiKind.AUTH_REJECT
                     && a.method().equals("GET") && a.tokenVariable() == null);
@@ -327,11 +328,15 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
                         || step.kind() == BehaviorCriteria.ApiKind.AUTH_LOGIN && !step.path().equals("/api/auth/login"))
                     bad("Use the coordinator's canonical authentication API");
         }
+        var asserted = acceptance.api().stream().filter(BuildContract::asserts).map(BehaviorCriteria.ApiStep::kind).collect(Collectors.toSet());
         for (var step : acceptance.api())
             if (Set.of(BehaviorCriteria.ApiKind.READ, BehaviorCriteria.ApiKind.UPDATE,
-                    BehaviorCriteria.ApiKind.PERSISTENCE).contains(step.kind())
-                    && (step.assertPointer() == null || step.assertValue() == null))
-                bad("Data behavior requires value assertions");
+                    BehaviorCriteria.ApiKind.PERSISTENCE).contains(step.kind()) && !asserts(step)
+                    && (step.kind() == BehaviorCriteria.ApiKind.PERSISTENCE || step.path().matches(".*\\$\\{[A-Za-z0-9_]+}")
+                            || !asserted.contains(step.kind())))
+                bad("Data behavior requires value assertions: " + step.id() + " " + step.kind() + " " + step.path()
+                        + " needs assertPointer and assertValue; only list, summary or bulk checks may omit them once another "
+                        + step.kind() + " asserts a value");
         unique("assets: duplicate destination", "assets", assets.stream().map(Asset::destination).toList());
         for (var asset : assets)
             if (!asset.owner().equals(ownership.get(asset.destination())))
@@ -439,6 +444,10 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         return value != null && value.endsWith("[]") ? value.substring(0, value.length() - 2) : value;
     }
 
+    private static boolean asserts(BehaviorCriteria.ApiStep step) {
+        return step.assertPointer() != null && step.assertValue() != null;
+    }
+
     private static boolean covered(Api endpoint, BehaviorCriteria acceptance) {
         return acceptance.api().stream().anyMatch(step -> step.method().equals(endpoint.method())
                 && step.status() >= 200 && step.status() < 300 && matchesApiPath(endpoint.path(), step.path()));
@@ -449,7 +458,7 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
                 .map(part -> part.startsWith(":") ? "(?:\\$\\{[A-Za-z][A-Za-z0-9_]*\\}|[A-Za-z0-9_-]+)"
                         : Pattern.quote(part))
                 .collect(Collectors.joining("/"));
-        return actual.matches(regex);
+        return actual.split("\\?", 2)[0].matches(regex);
     }
 
     private static <T> List<T> bounded(List<T> values, int max) {

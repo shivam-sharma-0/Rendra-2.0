@@ -6,7 +6,7 @@ Preserve existing behavior outside this unit. Read dependencies/shared types/the
 For repairs, project.fileTree and project.packageDependencies in repairFeedback are the actual staged paths/packages.
 Resolve relative imports from the importing file to those paths; do not invent shortened coordinator paths.
 Route components export default. MERN router exports exactly the declared Express Router; bootstrap registration is coordinator-owned.
-It is mounted at its basePath, so each route is path minus basePath: basePath /api/todos serves /api/todos/:id as '/:id'.
+It is mounted at its basePath, so each route is path minus basePath: basePath /api/todos serves /api/todos/:id as '/:id'. A router with basePath /api shares that mount with other routers: register only its explicit routes, never a catch-all, router.use handler or 404 response.
 Outside the route callback (a helper taking the request), req.params and req.query values are string | string[];
 read them as String(req.params.id ?? '').
 Coordinator-wired route pages use #/path links and receive {params: Record<string,string>} with decoded named route segments.

@@ -13,6 +13,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.Function;
@@ -123,6 +126,7 @@ public final class ContractPlanner {
                 return validated.contract();
             } catch (Rejected invalid) {
                 log.info("planner_contract_rejected attempt={} signature={} reason={}", attempt + 1, invalid.signature(), invalid.getMessage());
+                keepRejected(input, result, attempt, invalid);
                 var selected = attempt == 0 ? model : alternate != null ? alternate
                         : new PlanningModelCalls(properties).schemaCorrectionRoute(model);
                 var next = progress.rejected(invalid.signature(), attempt, selected);
@@ -166,7 +170,7 @@ public final class ContractPlanner {
                     throw new IllegalArgumentException("Planner may only propose one application contract");
                 body = result.toolCalls().getFirst().arguments();
             }
-            if (body == null || body.length() > 48000)
+            if (body == null || body.length() > 2 * proposalBound())
                 throw new IllegalArgumentException("Planner must return one bounded JSON object");
             proposal = boundedProposal(body);
             body = ModelJson.unfenced(body);
@@ -213,6 +217,27 @@ public final class ContractPlanner {
         }
     }
 
+    private void keepRejected(Input input, LlmClient.LlmResult result, int attempt, Rejected invalid) {
+        String directory = properties.getDev().getPlannerRejectionDirectory();
+        if (directory == null || directory.isBlank() || result == null)
+            return;
+        try {
+            String raw = result.hasToolCalls() ? result.toolCalls().getFirst().arguments() : result.content();
+            var file = Path.of(directory).resolve(input.id() + "-" + (attempt + 1) + ".json");
+            Files.createDirectories(file.getParent());
+            var record = new LinkedHashMap<String, Object>();
+            record.put("attempt", attempt + 1);
+            record.put("signature", invalid.signature());
+            record.put("reason", invalid.getMessage());
+            record.put("input", input);
+            record.put("raw", raw);
+            Files.writeString(file, mapper.writeValueAsString(record));
+            log.info("planner_rejection_kept file={}", file.toAbsolutePath());
+        } catch (IOException | RuntimeException unavailable) {
+            log.warn("planner_rejection_not_kept reason={}", unavailable.getMessage());
+        }
+    }
+
     static String rejectionSignature(Throwable failure) {
         String location = "contract";
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
@@ -225,12 +250,17 @@ public final class ContractPlanner {
         return location + ": " + schemaFeedback(failure);
     }
 
+    private int proposalBound() {
+        return Math.max(24_000, properties.getContextBudgetChars() / 3);
+    }
+
     private String boundedProposal(String content) {
-        if (content.length() <= 24000) return content;
+        int bound = proposalBound();
+        if (content.length() <= bound) return content;
         for (int fragment = 6000; fragment > 0; fragment /= 2) {
             String excerpt = mapper.writeValueAsString(Map.of("truncated", true, "prefix", content.substring(0, fragment),
                     "suffix", content.substring(content.length() - fragment)));
-            if (excerpt.length() <= 24000) return excerpt;
+            if (excerpt.length() <= bound) return excerpt;
         }
         throw new IllegalArgumentException("Contract correction exceeds bounded capacity");
     }

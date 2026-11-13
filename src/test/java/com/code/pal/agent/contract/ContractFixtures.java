@@ -34,8 +34,12 @@ public final class ContractFixtures {
         checks.add(new BehaviorCriteria.ApiStep("invalid",BehaviorCriteria.ApiKind.AUTH_INVALID,"GET","/api/items",null,401,"invalidToken",null,null,null,null));
         c.acceptance().api().stream().skip(1).forEach(a->checks.add(new BehaviorCriteria.ApiStep(a.id(),a.kind(),a.method(),a.path(),a.body(),a.status(),"sessionToken",a.captureVariable(),a.capturePointer(),a.assertPointer(),a.assertValue())));
         var apis=c.api().stream().map(a->new BuildContract.Api(a.id(),a.method(),a.path(),a.requestType(),a.responseType(),a.owner(),a.routerPath(),a.routerExport(),a.basePath(),true)).toList();
-        return new BuildContract(c.schemaVersion(),c.id(),c.stack(),c.storage(),BuildDecisions.Auth.ACCOUNTS,c.limits(),c.theme(),c.routes(),c.types(),c.models(),apis,c.assets(),c.envNames(),
-                List.of(unit("data","server/src/items.ts",List.of(),checks.stream().map(BehaviorCriteria.ApiStep::id).toList()),c.units().getLast()),new BehaviorCriteria(1,c.acceptance().browser(),checks,true,true));
+        var ui=c.units().getLast();var signIn="client/src/SignInPage.tsx";
+        var routes=new ArrayList<>(c.routes());routes.add(new BuildContract.Route("/sign-in",signIn,ui.id()));
+        var paths=new ArrayList<>(ui.ownedPaths());paths.add(signIn);
+        var page=new BuildContract.Unit(ui.id(),ui.objective(),paths,ui.imports(),ui.dependsOn(),ui.acceptanceIds());
+        return new BuildContract(c.schemaVersion(),c.id(),c.stack(),c.storage(),BuildDecisions.Auth.ACCOUNTS,c.limits(),c.theme(),routes,c.types(),c.models(),apis,c.assets(),c.envNames(),
+                List.of(unit("data","server/src/items.ts",List.of(),checks.stream().map(BehaviorCriteria.ApiStep::id).toList()),page),new BehaviorCriteria(1,c.acceptance().browser(),checks,true,true));
     }
     public static BuildContract.Limits limits(){return new BuildContract.Limits(10,40,8192,60000);}
     public static Map<String,String> theme(){return Map.of("accent","#123456","background","#ffffff","foreground","#111111");}
