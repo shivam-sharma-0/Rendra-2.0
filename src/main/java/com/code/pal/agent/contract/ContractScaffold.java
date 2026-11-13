@@ -31,6 +31,61 @@ public final class ContractScaffold {
         return render(c, title, existing, c.id());
     }
 
+    static void derivedTokens(Map<String, String> theme, StringBuilder css) {
+        int[] background = rgb(theme.get("background"));
+        if (background == null)
+            return;
+        boolean dark = luminance(background) < 0.4;
+        int[] text = rgb(theme.get("foreground"));
+        if (text == null || contrast(background, text) < 4.5) {
+            text = dark ? new int[] {0xf8, 0xfa, 0xfc} : new int[] {0x11, 0x18, 0x27};
+            css.append("  --app-text: ").append(hex(text)).append(";\n");
+        }
+        int[] surface = dark ? mix(background, text, 0.07) : mix(background, new int[] {255, 255, 255}, 0.75);
+        css.append("  color-scheme: ").append(dark ? "dark" : "light").append(";\n");
+        css.append("  --app-surface: ").append(hex(surface)).append(";\n");
+        css.append("  --app-muted: ").append(hex(mix(text, surface, 0.32))).append(";\n");
+        int[] border = rgb(theme.get("muted"));
+        if (border == null || contrast(surface, border) < 1.3)
+            css.append("  --app-border: ").append(hex(mix(surface, text, dark ? 0.2 : 0.14))).append(";\n");
+        int[] accent = rgb(theme.get("accent"));
+        if (accent != null)
+            css.append("  --app-on-accent: ").append(contrast(accent, new int[] {255, 255, 255})
+                    >= contrast(accent, new int[] {17, 24, 39}) ? "#ffffff" : "#111827").append(";\n");
+    }
+
+    private static int[] rgb(String value) {
+        if (value == null || !value.matches("#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})"))
+            return null;
+        String digits = value.length() == 4 ? value.substring(1).replaceAll("(.)", "$1$1") : value.substring(1);
+        return new int[] {Integer.parseInt(digits.substring(0, 2), 16), Integer.parseInt(digits.substring(2, 4), 16),
+                Integer.parseInt(digits.substring(4, 6), 16)};
+    }
+
+    private static double luminance(int[] color) {
+        double total = 0;
+        double[] weights = {0.2126, 0.7152, 0.0722};
+        for (int index = 0; index < 3; index++) {
+            double channel = color[index] / 255.0;
+            total += weights[index] * (channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4));
+        }
+        return total;
+    }
+
+    private static double contrast(int[] first, int[] second) {
+        double a = luminance(first), b = luminance(second);
+        return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    }
+
+    private static int[] mix(int[] base, int[] other, double amount) {
+        return new int[] {(int) Math.round(base[0] + (other[0] - base[0]) * amount),
+                (int) Math.round(base[1] + (other[1] - base[1]) * amount), (int) Math.round(base[2] + (other[2] - base[2]) * amount)};
+    }
+
+    private static String hex(int[] color) {
+        return String.format("#%02x%02x%02x", color[0], color[1], color[2]);
+    }
+
     @SuppressWarnings("unchecked")
     static boolean platformPage(BuildContract c, String componentPath) {
         return c.stack() == BuildContract.Stack.MERN && c.auth() == BuildDecisions.Auth.ACCOUNTS
@@ -74,6 +129,7 @@ public final class ContractScaffold {
             if (c.theme().containsKey(key))
                 theme.append("  --app-").append(token).append(": var(--rendra-").append(key).append(");\n");
         });
+        derivedTokens(c.theme(), theme);
         out.put(root + "theme.css", theme.append("}\n").toString());
         out.put(root + "contract.json", mapper.writeValueAsString(
                 Map.of("version", c.schemaVersion(), "id", c.id(), "envNames", new TreeSet<>(c.envNames()))));
@@ -175,7 +231,7 @@ public final class ContractScaffold {
     }
 
     public static String revision() {
-        return ContractStore.hash("contract-scaffold-2026-11-13.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
+        return ContractStore.hash("contract-scaffold-2026-11-13.2/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
                 + "/" + resource("contract/hash-app.tsx"));
     }
 

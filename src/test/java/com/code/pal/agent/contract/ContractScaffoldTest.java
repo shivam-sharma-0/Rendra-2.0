@@ -88,4 +88,15 @@ class ContractScaffoldTest {
         assertFalse(output.containsKey("package.json"));
         assertFalse(output.values().stream().anyMatch(text->text.contains("service_role") || text.contains("createClient(")));
     }
+    @Test void aDarkThemeGetsDarkSurfacesAndReadableText(){
+        var css=new StringBuilder();
+        ContractScaffold.derivedTokens(Map.of("background","#080b14","foreground","#f4f7ff","accent","#8b5cf6","muted","#8e9ab8"),css);
+        assertTrue(css.toString().contains("color-scheme: dark;"),css.toString());
+        assertTrue(css.toString().contains("--app-surface: #191c24;"),css.toString());
+        assertTrue(css.toString().contains("--app-on-accent: #ffffff;"),css.toString());
+        var unreadable=new StringBuilder();
+        ContractScaffold.derivedTokens(Map.of("background","#ffffff","foreground","#f4f7ff"),unreadable);
+        assertTrue(unreadable.toString().contains("--app-text: #111827;"),unreadable.toString());
+        assertTrue(unreadable.toString().contains("--app-surface: #ffffff;"),unreadable.toString());
+    }
 }
