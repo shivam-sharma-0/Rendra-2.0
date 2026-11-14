@@ -76,6 +76,7 @@ export const auth = {
   signIn: (credentials: Credentials, signal?: AbortSignal) => authenticate('login', credentials, signal),
   signUp: (credentials: Credentials, signal?: AbortSignal) => authenticate('signup', credentials, signal),
   signOut: () => publish(null),
+  subscribe: (notify: () => void) => subscribe(notify),
 }
 
 function subscribe(notify: () => void): () => void {

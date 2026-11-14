@@ -22,7 +22,8 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         @JsonInclude(JsonInclude.Include.NON_NULL) Long planRevision,
         @JsonInclude(JsonInclude.Include.NON_NULL) UUID replacesContractId,
         @JsonInclude(JsonInclude.Include.NON_NULL) String templateVersion,
-        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<ContractBatch> batches) {
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<ContractBatch> batches,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Blueprint blueprint) {
     static final Set<String> SUPPORTED_ENVIRONMENT_NAMES = Set.of(
             "MONGODB_URI", "PORT", "NODE_ENV", "VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY");
     /** Declared by the coordinator's types.ts for every non-static stack. */
@@ -33,6 +34,14 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             Set<String> envNames, List<Unit> units, BehaviorCriteria acceptance) {
         this(schemaVersion, id, stack, storage, auth, limits, theme, routes, types, models, api, assets,
                 envNames, units, acceptance, null, null, null, null, null, null, List.of());
+    }
+    public BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisions.Storage storage,
+            BuildDecisions.Auth auth, Limits limits, Map<String, String> theme, List<Route> routes,
+            List<DataType> types, List<DataType> models, List<Api> api, List<Asset> assets,
+            Set<String> envNames, List<Unit> units, BehaviorCriteria acceptance, UUID specId, Long specRevision,
+            String specHash, Long planRevision, UUID replacesContractId, String templateVersion, List<ContractBatch> batches) {
+        this(schemaVersion, id, stack, storage, auth, limits, theme, routes, types, models, api, assets, envNames, units,
+                acceptance, specId, specRevision, specHash, planRevision, replacesContractId, templateVersion, batches, null);
     }
     public enum Stack {
         STATIC, VITE, MERN
@@ -148,7 +157,7 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         routes = bounded(routes, 20);
         types = bounded(types, 16);
         models = bounded(models, 12);
-        api = bounded(api, 24);
+        api = bounded(api, 32);
         assets = bounded(assets, 16);
         envNames = Set.copyOf(envNames);
         units = bounded(units, 12);
@@ -351,6 +360,13 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
         // The constructor cannot use record accessors until assignment; validate DAG directly.
         waves(units);
         batches = batches == null ? List.of() : List.copyOf(batches);
+        if (blueprint != null) {
+            if (schemaVersion != 1 || stack == Stack.STATIC)
+                bad("Blueprint contracts are version 1 Vite or MERN apps");
+            var entityNames = blueprint.entities().stream().map(Blueprint.Entity::name).collect(Collectors.toSet());
+            if (stack == Stack.MERN && !models.stream().map(DataType::name).collect(Collectors.toSet()).equals(entityNames))
+                bad("Blueprint entities and models differ");
+        }
         if (schemaVersion == 1) {
             if (specId != null || (specRevision != null && specRevision != 0) || specHash != null
                     || (planRevision != null && planRevision != 0)

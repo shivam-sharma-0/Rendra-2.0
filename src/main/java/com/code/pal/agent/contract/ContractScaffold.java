@@ -55,11 +55,11 @@ public final class ContractScaffold {
                     >= DesignPresets.contrast(accent, new int[] {17, 24, 39}) ? "#ffffff" : "#111827").append(";\n");
     }
 
-    @SuppressWarnings("unchecked")
     static boolean platformPage(BuildContract c, String componentPath) {
         return c.stack() == BuildContract.Stack.MERN && c.auth() == BuildDecisions.Auth.ACCOUNTS
                 && c.routes().stream().anyMatch(route -> route.componentPath().equals(componentPath)
-                        && ApprovedProductScope.signInRoute(route.path()));
+                        && ApprovedProductScope.signInRoute(route.path()))
+                || CrudScaffold.generated(c, componentPath);
     }
 
     public Map<String, String> render(BuildContract c, String title, Function<String, String> existing, UUID projectId) {
@@ -160,7 +160,7 @@ public final class ContractScaffold {
             out.put(root + "supabase.ts", SUPABASE);
         if (c.stack() == BuildContract.Stack.MERN) {
             out.put(c.serverRoot() + "types.ts", types);
-            out.put(c.serverRoot() + "models.ts", models(c));
+            out.put(c.serverRoot() + "models.ts", c.blueprint() == null ? models(c) : new CrudScaffold(mapper).models(c));
             var registration = new StringBuilder("import type { Express } from 'express'\n");
             if (c.auth() == BuildDecisions.Auth.ACCOUNTS) {
                 out.put(c.serverRoot() + "auth.ts", resource("contract/auth.ts"));
@@ -200,12 +200,14 @@ public final class ContractScaffold {
                 entry = statement + entry.replace(marker, marker + "\n" + symbol + "(app)\n");
             out.put("server/src/index.ts", entry);
         }
+        out.putAll(new CrudScaffold(mapper).render(c, projectId, existing));
         return Collections.unmodifiableMap(out);
     }
 
     public static String revision() {
-        return ContractStore.hash("contract-scaffold-2026-11-14.2/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
-                + "/" + resource("contract/hash-app.tsx"));
+        return ContractStore.hash("contract-scaffold-2026-11-14.3/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
+                + "/" + resource("contract/hash-app.tsx") + resource("contract/crud.tsx") + resource("contract/crud-server.ts")
+                + resource("contract/local-store.ts"));
     }
 
     private String type(BuildContract.DataType t) {
@@ -267,10 +269,12 @@ public final class ContractScaffold {
                     // PATCH is a partial update: a page that toggles one field must not have to resend the record.
                     .append(a.requestType() == null ? "body?: undefined" : "body: " + (a.method().equals("PATCH")
                             && !a.requestType().endsWith("[]") ? "Partial<" + ref(a.requestType()) + ">" : ref(a.requestType())))
-                    .append(", token?: string) => request<").append(ref(a.responseType())).append(">(");
+                    .append(", token?: string").append(a.method().equals("GET") ? ", query?: Record<string, string>" : "")
+                    .append(") => request<").append(ref(a.responseType())).append(">(");
             b.append(json(a.path())).append(
-                    ".replace(/:([A-Za-z][A-Za-z0-9_]*)/g, (_, key: string) => {if (!params[key]) throw new Error('Missing API parameter'); return encodeURIComponent(params[key])}), ")
-                    .append(json(a.method())).append(", body, token),\n");
+                    ".replace(/:([A-Za-z][A-Za-z0-9_]*)/g, (_, key: string) => {if (!params[key]) throw new Error('Missing API parameter'); return encodeURIComponent(params[key])})")
+                    .append(a.method().equals("GET") ? " + (query && Object.keys(query).length > 0 ? `?${new URLSearchParams(query)}` : '')" : "")
+                    .append(", ").append(json(a.method())).append(", body, token),\n");
         }
         return b.append("}\n").toString();
     }
@@ -283,13 +287,13 @@ public final class ContractScaffold {
         return mapper.writeValueAsString(text);
     }
 
-    private static String relative(String directory, String target, boolean client) {
+    static String relative(String directory, String target, boolean client) {
         String s = Path.of(directory).relativize(Path.of(target)).toString().replace('\\', '/');
         s = s.replaceFirst("\\.(?:tsx?|jsx?)$", client ? "" : ".js");
         return s.startsWith(".") ? s : "./" + s;
     }
 
-    private static String resource(String path) {
+    static String resource(String path) {
         try (var in = ContractScaffold.class.getClassLoader().getResourceAsStream(path)) {
             if (in == null)
                 throw new IllegalStateException("Missing coordinator resource");
