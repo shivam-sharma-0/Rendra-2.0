@@ -332,7 +332,8 @@ public class RuntimeCheckService {
                         checked.add(new Issue("acceptance", inherited
                                 ? "Earlier approved check " + actions.get(i).id() + " no longer passes: keep that feature "
                                         + "working, or call retireAcceptanceCheck with this id if the user asked to change it"
-                                : actions.get(i).failureMessage(), null));
+                                : actions.get(i).failureMessage() + (a.path("observed").isString()
+                                        ? " (" + a.path("observed").asString() + ")" : ""), null));
                     }
                 }
             }

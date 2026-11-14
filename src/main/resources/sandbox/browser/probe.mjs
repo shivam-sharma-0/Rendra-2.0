@@ -453,6 +453,25 @@ if (!blank && loaded && acceptanceActions.length === 0) {
   }
 }
 
+async function restartPage() {
+  loaded = false;
+  await send('Page.navigate', { url: siteUrl }, sessionId);
+  const deadline = Date.now() + 10000;
+  while (!loaded && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+  await new Promise(resolve => setTimeout(resolve, settleMs));
+  return loaded;
+}
+const observe = async (selector) => {
+  const seen = await send('Runtime.evaluate', { returnByValue: true, expression: `(() => {
+    const route = location.hash.startsWith('#/') ? location.hash.slice(1) : location.pathname;
+    const el = ${JSON.stringify(selector ?? '')} ? document.querySelector(${JSON.stringify(selector ?? '')}) : null;
+    const text = (node) => (node?.innerText ?? '').replace(/\\s+/g, ' ').trim().slice(0, 160);
+    return 'the page was at ' + route + (${JSON.stringify(selector ?? '')} ? (el ? ' and ' + ${JSON.stringify(selector ?? '')} + ' showed "' + text(el) + '"'
+      : ' and nothing matched ' + ${JSON.stringify(selector ?? '')} + '; the page showed "' + text(document.body) + '"') : '');
+  })()` }, sessionId);
+  return typeof seen.result?.result?.value === 'string' ? seen.result.result.value : null;
+};
+if (loaded && !blank && acceptanceActions.length > 0 && outcomeDefinitions.length > 0) await restartPage();
 const acceptance = [];
 for (const expected of acceptanceActions) {
   if (!loaded || blank) { acceptance.push({ id: expected.id, passed: false }); continue; }
@@ -490,7 +509,7 @@ for (const expected of acceptanceActions) {
     if (passed) break;
     await new Promise(r => setTimeout(r, 100));
   } while (Date.now() < until);
-  acceptance.push({ id: expected.id, passed });
+  acceptance.push(passed ? { id: expected.id, passed } : { id: expected.id, passed, observed: await observe(expected.selector) });
   if (!passed) {
     // Preserve required coverage and the first actionable failure instead of spending the whole
     // probe deadline on controls that cannot exist after an earlier prerequisite failed.
