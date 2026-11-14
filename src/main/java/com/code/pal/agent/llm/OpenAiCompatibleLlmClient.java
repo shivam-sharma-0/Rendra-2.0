@@ -116,13 +116,14 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     }
 
     private LlmResult codex(LlmRequest request, Consumer<String> onTextDelta) {
+        String provider = normalizeProvider(request.provider());
         try {
-            return CodexCliClient.run(request, dev);
+            return provider.equals("claude-code") ? ClaudeCodeCliClient.run(request, dev) : CodexCliClient.run(request, dev);
         } catch (LlmCancelledException cancelled) {
             throw cancelled;
         } catch (LlmException unavailable) {
             var purpose = LlmCallContext.current().purpose();
-            var fallback = props.codexFallback(purpose);
+            var fallback = props.codexFallback(purpose, provider);
             if (fallback == null)
                 throw unavailable;
             log.warn("codex_fallback purpose={} to={}:{} reason={}", purpose, fallback.provider(), fallback.model(), unavailable.getMessage());
@@ -134,7 +135,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     @Override
     public LlmResult chatStreaming(LlmRequest request, Consumer<String> onTextDelta) {
         String provider = normalizeProvider(request.provider());
-        if (provider.equals("codex"))
+        if (AgentProperties.developerCli(provider))
             return codex(request, onTextDelta);
         EndpointPool pool = endpointPools.get(provider);
         if (pool == null || !pool.isConfigured()) {

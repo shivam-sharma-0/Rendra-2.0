@@ -8,6 +8,8 @@ param(
     [switch]$PlanningIntake,
     [switch]$StructuredContracts,
     [switch]$SmartEngine,
+    [switch]$ClaudeCodeAll,
+    [string]$ClaudeCodeModel = 'sonnet',
     [string]$BenchmarkResultPath,
     [string]$BenchmarkCommit,
     [string]$VerificationDirectory,
@@ -190,6 +192,7 @@ END $codex$;
     $appArgs+='--app.agent.deleted-project-sweep-ms=86400000'
     if($StructuredContracts){$appArgs+='--app.agent.structured-contracts=true'}
     if($SmartEngine){$appArgs+='--app.agent.engine=smart'}
+    if($ClaudeCodeAll){$appArgs+=@('--app.agent.dev.claude-code-all=true',('--app.agent.dev.claude-code-model=' + $ClaudeCodeModel))}
     if ($syntheticGate) {
         # Fixed known destinations and FREE routes; no environment override may select a paid/other provider.
         $planningFixture = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/planner-intake.json') -Raw | ConvertFrom-Json

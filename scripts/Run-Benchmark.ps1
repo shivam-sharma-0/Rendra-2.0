@@ -3,7 +3,9 @@ param(
     [string]$Fixture = 'scripts/fixtures/benchmark.json',
     [string]$OutputDirectory = '',
     [string[]]$Only = @(),
-    [switch]$SmartEngine
+    [switch]$SmartEngine,
+    [switch]$ClaudeCode,
+    [string]$ClaudeCodeModel = 'sonnet'
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -21,7 +23,7 @@ foreach ($case in $cases) {
     $failure = $null
     try {
         & (Join-Path $PSScriptRoot 'Run-RealDevE2E.ps1') -Scenario mern -IsolatedClasses -CodexAll `
-            -VerificationDirectory (Join-Path $repo $VerificationDirectory) -PromptFile $promptFile -BenchmarkName $case.name -SmartEngine:$SmartEngine `
+            -VerificationDirectory (Join-Path $repo $VerificationDirectory) -PromptFile $promptFile -BenchmarkName $case.name -SmartEngine:$SmartEngine -ClaudeCodeAll:$ClaudeCode -ClaudeCodeModel $ClaudeCodeModel `
             *> (Join-Path $out ($case.name + '.log'))
     } catch { $failure = $_.Exception.Message }
     $evidence = Get-ChildItem -LiteralPath $evidenceRoot -Directory -ErrorAction SilentlyContinue |
@@ -35,13 +37,13 @@ foreach ($case in $cases) {
         }
         $appLog = Join-Path $evidence.FullName 'app.log'
         if (Test-Path -LiteralPath $appLog) {
-            $calls = @(Select-String -LiteralPath $appLog -Pattern 'codex_call_finished .*elapsedMs=(\d+) inputTokens=(\d+) cachedTokens=(\d+) outputTokens=(\d+)')
+            $calls = @(Select-String -LiteralPath $appLog -Pattern '(?:codex|claude_code)_call_finished .*elapsedMs=(\d+) inputTokens=(\d+) cachedTokens=(\d+) outputTokens=(\d+)')
             $row.calls = $calls.Count
             $row.modelSeconds = [math]::Round(($calls | ForEach-Object { [long]$_.Matches[0].Groups[1].Value } | Measure-Object -Sum).Sum / 1000)
             $row.inputTokens = ($calls | ForEach-Object { [long]$_.Matches[0].Groups[2].Value } | Measure-Object -Sum).Sum
             $row.cachedTokens = ($calls | ForEach-Object { [long]$_.Matches[0].Groups[3].Value } | Measure-Object -Sum).Sum
             $row.outputTokens = ($calls | ForEach-Object { [long]$_.Matches[0].Groups[4].Value } | Measure-Object -Sum).Sum
-            $row.failedCalls = @(Select-String -LiteralPath $appLog -Pattern 'codex_call_finished .*exit=[1-9]').Count
+            $row.failedCalls = @(Select-String -LiteralPath $appLog -Pattern '(?:codex|claude_code)_call_finished .*exit=[1-9]').Count
         }
         foreach ($shot in @('desktop.png', 'mobile.png')) {
             $source = Join-Path $evidence.FullName $shot

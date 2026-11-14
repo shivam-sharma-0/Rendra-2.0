@@ -349,28 +349,39 @@ public class AgentProperties implements EnvironmentAware {
     }
 
     public void applyCodexEverywhere() {
-        if (!dev.isCodexAll())
+        var first = new ArrayList<String>();
+        if (dev.isClaudeCodeAll()) {
+            dev.setClaudeCodeEnabled(true);
+            first.add("claude-code:" + dev.getClaudeCodeModel());
+        }
+        if (dev.isCodexAll()) {
+            dev.setCodexEnabled(true);
+            first.add("codex:" + dev.getCodexModel());
+        }
+        if (first.isEmpty())
             return;
-        dev.setCodexEnabled(true);
-        String codex = "codex:" + dev.getCodexModel();
-        models.setFreeBuild(codexFirst(codex, models.getFreeBuild()));
-        models.setFreeChat(codexFirst(codex, models.getFreeChat()));
-        models.setFreePlan(codexFirst(codex, models.getFreePlan()));
-        models.setBuild(codexFirst(codex, models.getBuild()));
-        models.setChat(codexFirst(codex, models.getChat()));
-        models.setPlan(codexFirst(codex, models.getPlan()));
-        requirements.setModels(codexFirst(codex, requirements.getModels()));
+        models.setFreeBuild(developerFirst(first, models.getFreeBuild()));
+        models.setFreeChat(developerFirst(first, models.getFreeChat()));
+        models.setFreePlan(developerFirst(first, models.getFreePlan()));
+        models.setBuild(developerFirst(first, models.getBuild()));
+        models.setChat(developerFirst(first, models.getChat()));
+        models.setPlan(developerFirst(first, models.getPlan()));
+        requirements.setModels(developerFirst(first, requirements.getModels()));
         contextBudgetChars = Math.max(contextBudgetChars, dev.getCodexContextChars());
         largeRunTimeoutMs = Math.max(largeRunTimeoutMs, dev.getCodexLargeRunTimeoutMs());
-        log.info("codex_everywhere model={} effort={} contextChars={} largeRunTimeoutMs={}: every text route tries Codex first, configured models remain fallbacks",
-                codex, dev.getCodexReasoningEffort(), contextBudgetChars, largeRunTimeoutMs);
+        log.info("codex_everywhere routes={} effort={} contextChars={} largeRunTimeoutMs={}: every text route tries the developer CLI routes first, configured models remain fallbacks",
+                first, dev.getCodexReasoningEffort(), contextBudgetChars, largeRunTimeoutMs);
     }
 
-    private static List<String> codexFirst(String codex, List<String> configured) {
-        var routes = new ArrayList<String>(List.of(codex));
+    private static List<String> developerFirst(List<String> first, List<String> configured) {
+        var routes = new ArrayList<String>(first);
         if (configured != null)
-            configured.stream().filter(route -> route != null && !route.isBlank() && !route.equals(codex)).forEach(routes::add);
+            configured.stream().filter(route -> route != null && !route.isBlank() && !first.contains(route)).forEach(routes::add);
         return routes;
+    }
+
+    public static boolean developerCli(String provider) {
+        return "codex".equals(provider) || "claude-code".equals(provider);
     }
 
     private void sanitizeModelLists() {
@@ -394,6 +405,8 @@ public class AgentProperties implements EnvironmentAware {
             // The developer Codex route authenticates through the local CLI login, not a configured key.
             if (provider.equals("codex"))
                 return dev.isCodexEnabled();
+            if (provider.equals("claude-code"))
+                return dev.isClaudeCodeEnabled();
             Provider p = providers.get(provider);
             return p != null && !p.resolvedKeys().isEmpty();
         }).toList();
@@ -530,6 +543,14 @@ public class AgentProperties implements EnvironmentAware {
         private long codexLargeRunTimeoutMs = 1_800_000;
         private String codexLightReasoningEffort = "low";
         private String plannerRejectionDirectory = "";
+        private boolean claudeCodeEnabled = false;
+        private String claudeCodeCommand = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")
+                ? "claude.cmd" : "claude";
+        private boolean claudeCodeAll = false;
+        private String claudeCodeModel = "sonnet";
+        private String claudeCodeEffort = "medium";
+        private String claudeCodeLightEffort = "low";
+        private int claudeCodeTimeoutSeconds = 600;
     }
 
     @Getter
@@ -751,13 +772,22 @@ public class AgentProperties implements EnvironmentAware {
     }
 
     public ModelSelection codexFallback(CallPurpose purpose) {
+        return codexFallback(purpose, "codex");
+    }
+
+    public ModelSelection codexFallback(CallPurpose purpose, String failed) {
         List<ModelSelection> routes = switch (purpose == null ? CallPurpose.OTHER : purpose) {
             case REQUIREMENTS -> requirementsRoutes();
             case PLANNER, SCHEMA_CORRECTION -> planningRoutes();
             case SMALL_TALK -> modelRoutes(ProjectType.CHAT);
             default -> modelRoutes(ProjectType.BUILD);
         };
-        return routes.stream().filter(route -> !route.provider().equals("codex")).filter(this::available).findFirst().orElse(null);
+        int failedAt = -1;
+        for (int index = 0; index < routes.size() && failedAt < 0; index++)
+            if (routes.get(index).provider().equals(failed))
+                failedAt = index;
+        return routes.stream().skip(failedAt + 1).filter(route -> !route.provider().equals(failed)).filter(this::available)
+                .findFirst().orElse(null);
     }
 
     private List<ModelSelection> modelRoutes(ProjectType mode) {
@@ -858,7 +888,7 @@ public class AgentProperties implements EnvironmentAware {
         int separator = configured.indexOf(':');
         if (separator > 0) {
             String candidate = configured.substring(0, separator).toLowerCase(Locale.ROOT);
-            if (candidate.equals("openrouter") || candidate.equals("nvidia") || candidate.equals("codex")
+            if (candidate.equals("openrouter") || candidate.equals("nvidia") || developerCli(candidate)
                     || providers.containsKey(candidate)) {
                 return new ModelSelection(candidate, configured.substring(separator + 1));
             }

@@ -64,4 +64,27 @@ class CodexCliClientTest {
         assertEquals(": ERROR: You've hit your usage limit.", CodexCliClient.failure(log));
         assertNull(CodexCliClient.usage(log));
     }
+
+    @Test void claudeCodeRepliesGiveUsageResultAndErrorsAndFollowCodexOnlyForward() {
+        var reply = ClaudeCodeCliClient.reply("warning: slow disk\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,"
+                + "\"result\":\"{\\\"ok\\\":true}\",\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":2,\"cache_creation_input_tokens\":2694,"
+                + "\"cache_read_input_tokens\":9000,\"output_tokens\":14,\"output_tokens_details\":{\"thinking_tokens\":5}}}");
+        assertEquals("{\"ok\":true}", reply.path("result").asString());
+        var usage = ClaudeCodeCliClient.usage(reply);
+        assertEquals(11696, usage.promptTokens());
+        assertEquals(9000, usage.cachedInputTokens());
+        assertEquals(14, usage.completionTokens());
+        var limited = ClaudeCodeCliClient.reply("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"result\":\"Claude AI usage limit reached\"}");
+        assertEquals(": Claude AI usage limit reached", ClaudeCodeCliClient.failure(limited, ""));
+        assertNull(ClaudeCodeCliClient.reply("not json"));
+
+        var properties = new AgentProperties();
+        properties.getDev().setClaudeCodeAll(true);
+        properties.getDev().setCodexAll(true);
+        properties.getModels().setBuild(List.of("mistral:codestral-latest"));
+        properties.applyCodexEverywhere();
+        assertEquals(List.of("claude-code:sonnet", "codex:gpt-5.6-sol", "mistral:codestral-latest"), properties.getModels().getBuild());
+        assertEquals("codex", properties.codexFallback(CallPurpose.UNIT, "claude-code").provider());
+        assertEquals("mistral", properties.codexFallback(CallPurpose.UNIT, "codex").provider());
+    }
 }

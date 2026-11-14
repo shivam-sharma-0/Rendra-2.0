@@ -176,6 +176,11 @@ app:
       codex-timeout-seconds: ${AGENT_CODEX_TIMEOUT_SECONDS:420}
       codex-context-chars: ${AGENT_CODEX_CONTEXT_CHARS:300000}
       codex-large-run-timeout-ms: ${AGENT_CODEX_LARGE_RUN_TIMEOUT_MS:1800000}
+      claude-code-all: ${AGENT_CLAUDE_CODE_ALL:false}
+      claude-code-model: ${AGENT_CLAUDE_CODE_MODEL:sonnet}
+      claude-code-effort: ${AGENT_CLAUDE_CODE_EFFORT:medium}
+      claude-code-light-effort: ${AGENT_CLAUDE_CODE_LIGHT_EFFORT:low}
+      claude-code-timeout-seconds: ${AGENT_CLAUDE_CODE_TIMEOUT_SECONDS:600}
     requirements:
       models: "${AGENT_REQUIREMENTS_MODELS:mistral:codestral-latest,openrouter:nvidia/nemotron-3-ultra-550b-a55b:free}"
       timeout-ms: ${AGENT_REQUIREMENTS_TIMEOUT_MS:90000}
