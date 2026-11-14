@@ -94,6 +94,10 @@ public class AgentWorker {
                 log.warn("Agent worker loop error (retrying in {} ms): {}", backoff, e.getMessage());
                 if (!pause(backoff)) return;
                 backoff = Math.min(MAX_BACKOFF_MS, backoff * 2);
+            } catch (Error fatal) {
+                if (!running) return;
+                log.error("agent_worker_error errorType={}", fatal.getClass().getSimpleName(), fatal);
+                if (!pause(backoff)) return;
             }
         }
     }

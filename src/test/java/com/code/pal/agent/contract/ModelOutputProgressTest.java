@@ -8,6 +8,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -178,6 +179,18 @@ class ModelOutputProgressTest {
         }
         assertEquals(List.of("first", "second", "second"), routes);
         assertEquals(1, progress.wastedCalls());
+    }
+
+    @Test void aLargePageWithAnUnclosedApostropheIsFingerprintedOnAWorkerSizedStack() throws Exception {
+        String page = "<p>Don't miss the next level</p>\n" + "<div className=\"grid\">{items.map(i => <Card key={i.id} />)}</div>\n".repeat(600);
+        var failure = new AtomicReference<Throwable>();
+        var worker = new Thread(null, () -> {
+            try { call(CallPurpose.UNIT, request(Map.of("id", "page")), routed -> result(files(page))); }
+            catch (Throwable error) { failure.set(error); }
+        }, "small-stack", 512 * 1024);
+        worker.start();
+        worker.join();
+        assertNull(failure.get());
     }
 
     @Test void operatorRouteBoundStopsCorrectionWithoutAddingACall() {

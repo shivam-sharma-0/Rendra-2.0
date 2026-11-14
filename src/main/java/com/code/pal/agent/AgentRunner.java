@@ -410,6 +410,9 @@ public class AgentRunner implements AgentRuntime {
             return validationFailed(state, e);
         } catch (Exception e) {
             return failed(state, e);
+        } catch (StackOverflowError overflow) {
+            log.error("agent_stack_overflow runId={}", run.getId(), overflow);
+            return failed(state, new IllegalStateException("Processing ran out of stack space", overflow));
         } finally {
             callContext.close();
             cleanup(state);

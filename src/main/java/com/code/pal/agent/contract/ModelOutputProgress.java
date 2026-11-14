@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
 /** Per-run quality guard at the physical checked-call seam; never refunds a completed transmission. */
 public final class ModelOutputProgress {
     public record Repeated(AgentProperties.ModelSelection route, int wastedCalls) {}
-    private static final Pattern TOKENS = Pattern.compile("\\s+|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`|[\\p{L}\\p{N}_$]+|.", Pattern.DOTALL);
+    private static final Pattern TOKENS = Pattern.compile("\\s+|\"[^\"\\\\]*+(?:\\\\.[^\"\\\\]*+)*+\"|'[^'\\\\]*+(?:\\\\.[^'\\\\]*+)*+'|`[^`\\\\]*+(?:\\\\.[^`\\\\]*+)*+`|[\\p{L}\\p{N}_$]+|.", Pattern.DOTALL);
     static final String UNCHANGED = "Your previous answer changed nothing, so the reported failure is still there. "
             + "Answer again in the same format with a change to the code the failure points to.";
     private static final Set<String> VOLATILE = Set.of("snapshot", "interfaces", "diagnosticsRevision", "expectedVersion", "version", "content", "line", "column");
