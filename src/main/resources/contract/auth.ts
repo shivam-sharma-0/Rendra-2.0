@@ -6,7 +6,11 @@ import { promisify } from 'node:util'
 const scrypt = promisify(scryptCallback)
 const User = mongoose.models.RendraUser ?? mongoose.model('RendraUser', new mongoose.Schema({
   email: {type: String, required: true, unique: true}, salt: {type: String, required: true}, passwordHash: {type: String, required: true},
+  role: {type: String, enum: ['admin', 'member'], default: 'member'},
 }, {collection: '_rendra_users'}))
+const Setting = mongoose.models.RendraSetting ?? mongoose.model('RendraSetting', new mongoose.Schema({
+  _id: String, value: {type: String, required: true},
+}, {collection: '_rendra_settings'}))
 const Key = mongoose.models.RendraSigningKey ?? mongoose.model('RendraSigningKey', new mongoose.Schema({
   _id: String, value: {type: String, required: true},
 }, {collection: '_rendra_signing_keys'}))
@@ -22,10 +26,23 @@ async function signingKey(): Promise<string> {
   if (!row || typeof row.value !== 'string') throw new Error('Session signing unavailable')
   return row.value
 }
-async function session(userId: string) {
+async function session(userId: string, role: 'admin' | 'member' = 'member') {
   const payload = Buffer.from(JSON.stringify({userId, expires:Date.now()+3600000})).toString('base64url')
   const signature = createHmac('sha256',await signingKey()).update(payload).digest('base64url')
-  return {token:`${payload}.${signature}`, userId}
+  return {token:`${payload}.${signature}`, userId, role}
+}
+async function claimFirstAdmin(userId: string): Promise<boolean> {
+  try {
+    const row = await Setting.findOneAndUpdate({_id:'first-admin'}, {$setOnInsert:{value:userId}}, {upsert:true, returnDocument:'after'}).lean()
+    return !!row && row.value === userId
+  } catch (error) {
+    if ((error as {code?:number}).code !== 11000) throw error
+    return false
+  }
+}
+export async function roleOf(accountId: string): Promise<'admin' | 'member'> {
+  const user = await User.findById(accountId).select('role').lean()
+  return user && user.role === 'admin' ? 'admin' : 'member'
 }
 function credentials(req: Request) {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
@@ -40,7 +57,9 @@ authRouter.post('/signup',async(req,res)=>{
     await User.init()
     const salt=randomBytes(16).toString('hex'), hash=await scrypt(value.password,salt,64) as Buffer
     const user=await User.create({email:value.email,salt,passwordHash:hash.toString('hex')})
-    res.status(201).json(await session(String(user._id)))
+    const admin=await claimFirstAdmin(String(user._id))
+    if(admin)await User.updateOne({_id:user._id},{role:'admin'})
+    res.status(201).json(await session(String(user._id),admin?'admin':'member'))
   } catch(error) {
     res.status((error as {code?:number}).code===11000?409:503).json({error:'Account unavailable'})
   }
@@ -53,7 +72,7 @@ authRouter.post('/login',async(req,res)=>{
     const actual=await scrypt(value.password,salt,64) as Buffer
     const expected=user && typeof user.passwordHash==='string'?Buffer.from(user.passwordHash,'hex'):Buffer.alloc(64)
     if(!user || expected.length!==actual.length || !timingSafeEqual(expected,actual)){res.status(401).json({error:'Invalid credentials'});return}
-    res.json(await session(String(user._id)))
+    res.json(await session(String(user._id),user.role==='admin'?'admin':'member'))
   } catch {res.status(503).json({error:'Account unavailable'})}
 })
 export type AccountRequest = Request & {accountId?:string}
@@ -70,3 +89,26 @@ export async function requireAccount(req: AccountRequest,res: Response,next: Nex
     req.accountId=claims.userId;next()
   } catch {res.status(401).json({error:'Sign in required'})}
 }
+export async function requireAdmin(req: AccountRequest,res: Response,next: NextFunction) {
+  if(!req.accountId){res.status(401).json({error:'Sign in required'});return}
+  try {
+    if(await roleOf(req.accountId)!=='admin'){res.status(403).json({error:'Admins only'});return}
+    next()
+  } catch {res.status(503).json({error:'Account unavailable'})}
+}
+authRouter.get('/me',requireAccount,async(req: AccountRequest,res)=>{
+  try {
+    const user=await User.findById(req.accountId).select('email role').lean()
+    if(!user){res.status(401).json({error:'Sign in required'});return}
+    res.json({userId:req.accountId,email:user.email,role:user.role==='admin'?'admin':'member'})
+  } catch {res.status(503).json({error:'Account unavailable'})}
+})
+authRouter.post('/admins',requireAccount,requireAdmin,async(req: AccountRequest,res)=>{
+  const email=typeof req.body?.email==='string'?req.body.email.trim().toLowerCase():''
+  if(!/^[^\s@]{1,120}@[^\s@]{1,120}\.[^\s@]{1,30}$/.test(email)){res.status(400).json({error:'Invalid email'});return}
+  try {
+    const updated=await User.findOneAndUpdate({email},{role:'admin'},{returnDocument:'after'}).select('_id').lean()
+    if(!updated){res.status(404).json({error:'Account not found'});return}
+    res.json({email,role:'admin'})
+  } catch {res.status(503).json({error:'Account unavailable'})}
+})

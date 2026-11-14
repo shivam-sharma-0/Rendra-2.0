@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { AuthSession, Credentials } from './types'
 
-export type Session = Readonly<AuthSession & { email: string }>
+export type Session = Readonly<AuthSession & { email: string; role: 'admin' | 'member' }>
 const storageKey = {{storageKey}}
 const listeners = new Set<() => void>()
 
@@ -11,7 +11,8 @@ function decode(value: unknown): Session | null {
   if (typeof record.token !== 'string' || !record.token || record.token.length > 8192
     || typeof record.userId !== 'string' || !record.userId || record.userId.length > 128
     || typeof record.email !== 'string' || record.email.length > 320) return null
-  return Object.freeze({ token: record.token, userId: record.userId, email: record.email })
+  return Object.freeze({ token: record.token, userId: record.userId, email: record.email,
+    role: record.role === 'admin' ? 'admin' as const : 'member' as const })
 }
 
 function readSession(): Session | null {
@@ -52,8 +53,25 @@ async function authenticate(mode: 'login' | 'signup', credentials: Credentials, 
   return session
 }
 
+async function refreshRole(): Promise<void> {
+  const session = current
+  if (!session) return
+  try {
+    const response = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${session.token}` } })
+    if (response.status === 401) { publish(null); return }
+    if (!response.ok) return
+    const body: unknown = await response.json()
+    const role = body && typeof body === 'object' && (body as Record<string, unknown>).role === 'admin' ? 'admin' : 'member'
+    if (current === session && role !== session.role) publish(Object.freeze({ ...session, role }))
+  } catch {
+    return
+  }
+}
+if (typeof window !== 'undefined') void refreshRole()
+
 export const auth = {
   getSession: (): Session | null => current,
+  isAdmin: (): boolean => current?.role === 'admin',
   getToken: (): string | undefined => current?.token,
   signIn: (credentials: Credentials, signal?: AbortSignal) => authenticate('login', credentials, signal),
   signUp: (credentials: Credentials, signal?: AbortSignal) => authenticate('signup', credentials, signal),

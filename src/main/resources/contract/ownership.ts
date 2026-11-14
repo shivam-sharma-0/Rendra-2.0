@@ -1,13 +1,19 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import mongoose from 'mongoose'
 import type { Response, NextFunction } from 'express'
-import type { AccountRequest } from './auth.js'
+import { roleOf, type AccountRequest } from './auth.js'
 
-const owners = new AsyncLocalStorage<string>()
-function owner() { const value=owners.getStore(); if(!value) throw new Error('Verified account context is required'); return value }
-export function bindRecordOwner(req: AccountRequest,res: Response,next: NextFunction) {
+const owners = new AsyncLocalStorage<{id: string; admin: boolean}>()
+function owner() { const value=owners.getStore(); if(!value) throw new Error('Verified account context is required'); return value.id }
+function isAdmin() { return owners.getStore()?.admin === true }
+export async function bindRecordOwner(req: AccountRequest,res: Response,next: NextFunction) {
   if(!req.accountId){res.status(401).json({error:'Sign in required'});return}
-  owners.run(req.accountId,next)
+  let admin=false
+  try {admin=(await roleOf(req.accountId))==='admin'} catch {res.status(503).json({error:'Account unavailable'});return}
+  owners.run({id:req.accountId,admin},next)
+}
+export class ForbiddenError extends Error {
+  readonly status = 403
 }
 function safeOptions(value: any) {
   if(value && typeof value==='object' && Object.prototype.hasOwnProperty.call(value,'middleware')) throw new Error('Ownership middleware cannot be disabled')
@@ -60,10 +66,10 @@ function result(value:any):any {
     return(...args:any[])=>{args.forEach(safeOptions);return query(member.apply(target,args))}
   }})
 }
-function query(value:any):any {
+function query(value:any, wrap:(value:any)=>any = result):any {
   if(!(value instanceof mongoose.Query) && !(value instanceof mongoose.Aggregate))return value
   let proxy:any
-  const execute=()=>{safeOptions((value as any).getOptions?.()??(value as any).options);return value.exec().then(result)}
+  const execute=()=>{safeOptions((value as any).getOptions?.()??(value as any).options);return value.exec().then(wrap)}
   proxy=new Proxy(value,{get(target,key){
     if(['model','collection','mongooseCollection','constructor','populate','cursor'].includes(String(key)))throw new Error('Unreviewed model access is unavailable')
     if(key==='exec')return execute
@@ -72,7 +78,7 @@ function query(value:any):any {
     if(key==='finally')return(done:any)=>execute().finally(done)
     const member=Reflect.get(target,key,target)
     if(typeof member!=='function')return member
-    return(...args:any[])=>{args.forEach(safeOptions);const next=member.apply(target,args);return next===target?proxy:query(next)}
+    return(...args:any[])=>{args.forEach(safeOptions);const next=member.apply(target,args);return next===target?proxy:query(next, wrap)}
   }});return proxy
 }
 export function ownedModel(model:any):any {
@@ -83,4 +89,55 @@ export function ownedModel(model:any):any {
     if(typeof member!=='function')return member
     return(...args:any[])=>{owner();args.forEach(safeOptions);const value=member.apply(target,args);return value instanceof Promise?value.then(result):query(value)}
   },construct(target,args){owner();return result(Reflect.construct(target,args))}})
+}
+function keepCreator(value: any) {
+  if(Array.isArray(value)) throw new Error('Unreviewed update pipelines are unavailable')
+  const update={...(value??{})}
+  delete update.accountId
+  for(const key of Object.keys(update)) if(key.startsWith('$') && update[key] && typeof update[key]==='object') {
+    update[key]={...update[key]}
+    for(const field of Object.keys(update[key])) if(field==='accountId' || field.startsWith('accountId.') || (key==='$rename' && (update[key][field]==='accountId' || String(update[key][field]).startsWith('accountId.'))))delete update[key][field]
+  }
+  return update
+}
+export function sharedSchema(fields: Record<string,any>, mode: 'shared' | 'admin' = 'shared') {
+  const schema=new mongoose.Schema({...fields,accountId:{type:String,required:true,index:true}}, {timestamps:true,toJSON:{virtuals:true},toObject:{virtuals:true}})
+  Object.defineProperty(schema,'__rendra_shared',{value:mode})
+  const writer=()=>{const accountId=owner();if(mode==='admin' && !isAdmin())throw new ForbiddenError('Admins only');return accountId}
+  schema.pre('validate',function(){const accountId=writer();if(this.isNew)this.set('accountId',accountId)})
+  schema.pre('save',function(){const accountId=writer();if(this.isNew)this.set('accountId',accountId);else if(mode==='shared')this.$where={...(this.$where??{}),accountId}})
+  schema.pre(['find','findOne','countDocuments'],function(this:any){owner();safeOptions(this.getOptions());this.maxTimeMS(5000)})
+  schema.pre(['updateOne','updateMany','findOneAndUpdate','findOneAndDelete','findOneAndReplace','replaceOne','deleteOne','deleteMany'],function(this:any){
+    const accountId=writer();safeOptions(this.getOptions());this.maxTimeMS(5000)
+    if(mode==='shared')this.setQuery({$and:[this.getFilter(),{accountId}]})
+    if(this.getUpdate())this.setUpdate(keepCreator(this.getUpdate()))
+  })
+  schema.pre('insertMany',function(docs:any[]){const accountId=writer();for(const document of docs)document.accountId=accountId})
+  schema.pre('bulkWrite',function(){throw new Error('Use reviewed individual CRUD operations')})
+  schema.pre('deleteOne',{document:true,query:false},function(){throw new Error('Use Model.deleteOne for reviewed deletion')})
+  schema.pre('aggregate',function(){
+    owner();safeOptions(this.options)
+    for(const stage of this.pipeline())if(Object.keys(stage).some(key=>!['$match','$sort','$limit','$skip','$project','$group','$count','$unwind','$addFields','$set','$unset'].includes(key)))throw new Error('Unreviewed cross-collection aggregation is unavailable')
+    this.option({maxTimeMS:5000})
+  })
+  return schema
+}
+function sharedResult(value:any):any {
+  if(Array.isArray(value))return value.map(sharedResult)
+  if(!(value instanceof mongoose.Document))return value
+  return new Proxy(value,{get(target:any,key){
+    if(['collection','db','$model','constructor','populate','deleteOne'].includes(String(key)))throw new Error('Use reviewed model operations')
+    const member=Reflect.get(target,key,target)
+    if(typeof member!=='function')return member
+    return(...args:any[])=>{args.forEach(safeOptions);const next=member.apply(target,args);return next instanceof Promise?next.then(sharedResult):next}
+  }})
+}
+export function sharedModel(model:any):any {
+  if(!model.schema.__rendra_shared)throw new Error('Existing model needs a reviewed sharing migration')
+  return new Proxy(model,{get(target,key){
+    if(['db','collection','$__collection','base','schema','prototype','discriminators','estimatedDocumentCount','bulkWrite','watch','distinct'].includes(String(key)))throw new Error('Use reviewed model operations')
+    const member=Reflect.get(target,key,target)
+    if(typeof member!=='function')return member
+    return(...args:any[])=>{owner();args.forEach(safeOptions);const value=member.apply(target,args);return value instanceof Promise?value.then(sharedResult):query(value, sharedResult)}
+  },construct(target,args){owner();return sharedResult(Reflect.construct(target,args))}})
 }
