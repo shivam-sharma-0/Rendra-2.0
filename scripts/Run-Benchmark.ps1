@@ -32,14 +32,15 @@ foreach ($case in $cases) {
             $result = Get-Content -LiteralPath $build -Raw | ConvertFrom-Json
             $row.status = $result.status; $row.preview = $result.previewStatus; $row.seconds = $result.seconds; $row.error = $result.error
         }
-        $usageFile = Join-Path $evidence.FullName 'model-usage.json'
-        if (Test-Path -LiteralPath $usageFile) {
-            $stages = (Get-Content -LiteralPath $usageFile -Raw | ConvertFrom-Json).stages
-            $row.calls = ($stages | Measure-Object -Property attempts -Sum).Sum
-            $row.inputTokens = ($stages | Measure-Object -Property promptTokens -Sum).Sum
-            $row.cachedTokens = ($stages | Measure-Object -Property cachedInputTokens -Sum).Sum
-            $row.outputTokens = ($stages | Measure-Object -Property completionTokens -Sum).Sum
-            $row.stages = $stages
+        $appLog = Join-Path $evidence.FullName 'app.log'
+        if (Test-Path -LiteralPath $appLog) {
+            $calls = @(Select-String -LiteralPath $appLog -Pattern 'codex_call_finished .*elapsedMs=(\d+) inputTokens=(\d+) cachedTokens=(\d+) outputTokens=(\d+)')
+            $row.calls = $calls.Count
+            $row.modelSeconds = [math]::Round(($calls | ForEach-Object { [long]$_.Matches[0].Groups[1].Value } | Measure-Object -Sum).Sum / 1000)
+            $row.inputTokens = ($calls | ForEach-Object { [long]$_.Matches[0].Groups[2].Value } | Measure-Object -Sum).Sum
+            $row.cachedTokens = ($calls | ForEach-Object { [long]$_.Matches[0].Groups[3].Value } | Measure-Object -Sum).Sum
+            $row.outputTokens = ($calls | ForEach-Object { [long]$_.Matches[0].Groups[4].Value } | Measure-Object -Sum).Sum
+            $row.failedCalls = @(Select-String -LiteralPath $appLog -Pattern 'codex_call_finished .*exit=[1-9]').Count
         }
         foreach ($shot in @('desktop.png', 'mobile.png')) {
             $source = Join-Path $evidence.FullName $shot
