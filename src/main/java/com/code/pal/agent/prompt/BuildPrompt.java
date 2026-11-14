@@ -57,6 +57,7 @@ public final class BuildPrompt {
     }
 
     public static String compose(Stack stack) {
-        return PromptLoader.load(Prompt.MODE_BUILD) + "\n\n" + PromptLoader.load(stack.prompt);
+        String base = PromptLoader.load(Prompt.MODE_BUILD) + "\n\n" + PromptLoader.load(stack.prompt);
+        return stack == Stack.STATIC || stack == Stack.UNDECIDED ? base : base + "\n\n" + PromptLoader.load(Prompt.UI_KIT);
     }
 }

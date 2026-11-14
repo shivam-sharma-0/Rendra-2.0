@@ -24,7 +24,7 @@ public final class BatchUnitGenerator {
     public record Output(List<UnitOutput> units) {
     }
 
-    private static final String SYSTEM = PromptLoader.load(Prompt.BATCH_UNIT_GENERATOR);
+    private static final String SYSTEM = PromptLoader.load(Prompt.BATCH_UNIT_GENERATOR) + "\n\n" + PromptLoader.load(Prompt.UI_KIT);
     private final ObjectMapper mapper;
 
     public BatchUnitGenerator(ObjectMapper mapper) {

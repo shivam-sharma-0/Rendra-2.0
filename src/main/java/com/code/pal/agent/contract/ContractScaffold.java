@@ -204,7 +204,7 @@ public final class ContractScaffold {
     }
 
     public static String revision() {
-        return ContractStore.hash("contract-scaffold-2026-11-14.1/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
+        return ContractStore.hash("contract-scaffold-2026-11-14.2/" + Starter.TEMPLATE_VERSION + "/" + StaticAssets.revision()
                 + "/" + resource("contract/hash-app.tsx"));
     }
 

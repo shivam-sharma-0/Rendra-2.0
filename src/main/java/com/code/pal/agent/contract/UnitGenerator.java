@@ -119,5 +119,5 @@ public final class UnitGenerator {
             throw new IllegalArgumentException("Unit must account for every owned code path");
     }
 
-    private static final String SYSTEM = PromptLoader.load(Prompt.UNIT_GENERATOR);
+    private static final String SYSTEM = PromptLoader.load(Prompt.UNIT_GENERATOR) + "\n\n" + PromptLoader.load(Prompt.UI_KIT);
 }

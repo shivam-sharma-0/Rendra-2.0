@@ -11,6 +11,7 @@ public final class PromptLoader {
     public enum Prompt {
         SYSTEM_BASE("system-base"),
         MODE_BUILD("mode-build"),
+        UI_KIT("ui-kit"),
         MODE_CHAT("mode-chat"),
         MODE_PLAN("mode-plan"),
         CONVERSATIONAL("conversational"),

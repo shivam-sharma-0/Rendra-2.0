@@ -27,9 +27,8 @@ no raw connections/collections, populate, bulkWrite, estimatedDocumentCount, pip
 Delete through Model.deleteOne, not document.deleteOne. Preserve the coordinator ownership helper.
 Import the provided theme.css from the root component. Implement all assigned acceptance criteria, not a placeholder or fake persistence.
 The app shell already renders the app name, navigation and a centred main; the shared design system styles raw headings,
-forms, labels, inputs, buttons, lists, tables and links. Do not add page-wide inline styles or hard-coded colours: lay a
-page out with className="app-stack", put panels and list rows in "app-card", give the primary action "app-button" and
-secondary text "app-muted". Show a heading, a loading line, an empty state and errors with role="alert".
+forms, labels, inputs, buttons, lists, tables and links. Build pages from the UI kit below and never hard-code colours.
+Show a heading, a loading state, an empty state and errors with role="alert".
 Every visible input, select and textarea needs a <label> or aria-label; a placeholder alone is not a name.
 Render the exact attributes your assigned browser selectors name: input[name='title'] needs name="title" (an id is not a name).
 Browser checks run in order from /: a FILL before any route-changing CLICK must be rendered on the / page itself.

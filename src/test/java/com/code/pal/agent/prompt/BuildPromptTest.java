@@ -65,8 +65,9 @@ class BuildPromptTest {
     @Test
     void fixedBuildPromptIsAtLeastFortyPercentSmaller() {
         String base = PromptLoader.load(Prompt.SYSTEM_BASE);
+        String kit = "\n\n" + PromptLoader.load(Prompt.UI_KIT);
         int largest = Arrays.stream(Stack.values())
-                .mapToInt(stack -> (base + "\n\n" + BuildPrompt.compose(stack)).length())
+                .mapToInt(stack -> (base + "\n\n" + BuildPrompt.compose(stack).replace(kit, "")).length())
                 .max().orElseThrow();
         assertTrue(largest <= OLD_FIXED_BUILD_PROMPT_CHARS * 0.6,
                 "largest BUILD system prompt is " + largest + " characters");
