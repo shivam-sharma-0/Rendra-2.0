@@ -220,8 +220,7 @@ public final class BlueprintCompiler {
                 continue;
             String p = entity.plural();
             var steps = new ArrayList<BrowserAction>();
-            if (!list.equals("/"))
-                steps.add(new BrowserAction(p + "_open", BrowserKind.CLICK, "a[href=\"#" + list + "\"]", null));
+            steps.add(new BrowserAction(p + "_open", BrowserKind.CLICK, "a[href=\"#" + list + "\"]", null));
             steps.add(new BrowserAction(p + "_page", BrowserKind.ASSERT_EXISTS, "[data-crud=\"" + p + "\"]", null));
             if (!created) {
                 created = true;

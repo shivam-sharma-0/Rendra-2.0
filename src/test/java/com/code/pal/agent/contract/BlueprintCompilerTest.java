@@ -129,6 +129,9 @@ class BlueprintCompilerTest {
         var contract = BlueprintCompiler.compile(blueprint, UUID.randomUUID(),
                 new BuildDecisions.Choice(1, BuildDecisions.Storage.BROWSER, BuildDecisions.Auth.NONE, null), LIMITS);
         assertEquals(BuildContract.Stack.VITE, contract.stack());
+        var browser = contract.acceptance().browser().stream().map(step -> step.id() + " " + step.selector()).toList();
+        assertTrue(browser.indexOf("habits_open a[href=\"#/\"]") >= 0
+                && browser.indexOf("habits_open a[href=\"#/\"]") < browser.indexOf("habits_page [data-crud=\"habits\"]"), browser.toString());
         assertTrue(contract.api().isEmpty() && contract.acceptance().api().isEmpty());
         var files = new ContractScaffold(MAPPER).render(contract, blueprint.name(), path -> null, UUID.randomUUID());
         assertTrue(files.get(contract.clientRoot() + "entities.ts").contains("localStore<Types.Habit, Types.HabitInput>("));

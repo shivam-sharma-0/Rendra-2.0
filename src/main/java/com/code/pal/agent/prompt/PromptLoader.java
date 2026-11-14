@@ -13,6 +13,7 @@ public final class PromptLoader {
         MODE_BUILD("mode-build"),
         UI_KIT("ui-kit"),
         BLUEPRINT_PLANNER("blueprint-planner"),
+        POLISH_REVIEW("polish-review"),
         MODE_CHAT("mode-chat"),
         MODE_PLAN("mode-plan"),
         CONVERSATIONAL("conversational"),

@@ -65,6 +65,10 @@ public final class GeneratedVisualReview {
 
     /** Single-use evidence; the runner accounts this optional call inside its normal limits. */
     public List<String> review(AgentContext context, String request, Function<LlmRequest, LlmResult> checkedCall) {
+        return review(context, request, checkedCall, Prompt.VISUAL_REVIEW);
+    }
+
+    public List<String> review(AgentContext context, String request, Function<LlmRequest, LlmResult> checkedCall, Prompt prompt) {
         Evidence current = evidence.remove(context.runId());
         var models = properties.visionModels();
         if (!properties.getVisualReview().isEnabled() || current == null || models.isEmpty()
@@ -92,7 +96,7 @@ public final class GeneratedVisualReview {
         String data = mapper.writeValueAsString(Map.of("request", request, "views", List.of("desktop", "mobile")));
         var settings = properties.getVisualReview();
         var result = checkedCall.apply(new LlmRequest(model.provider(), model.model(), List.of(
-                LlmMessage.system(PromptLoader.load(Prompt.VISUAL_REVIEW)), LlmMessage.userWithImages(data, images)),
+                LlmMessage.system(PromptLoader.load(prompt)), LlmMessage.userWithImages(data, images)),
                 List.of(), 0, Duration.ofMillis(Math.max(1, settings.getTimeoutMs())), null,
                 Math.max(1, settings.getMaxOutputTokens())));
         if (result == null || "length".equals(result.finishReason()) || result.content() == null

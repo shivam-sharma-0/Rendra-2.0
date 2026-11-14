@@ -367,6 +367,7 @@ public class AgentProperties implements EnvironmentAware {
         models.setChat(developerFirst(first, models.getChat()));
         models.setPlan(developerFirst(first, models.getPlan()));
         requirements.setModels(developerFirst(first, requirements.getModels()));
+        models.setVision(developerFirst(first, models.getVision()));
         contextBudgetChars = Math.max(contextBudgetChars, dev.getCodexContextChars());
         largeRunTimeoutMs = Math.max(largeRunTimeoutMs, dev.getCodexLargeRunTimeoutMs());
         log.info("codex_everywhere routes={} effort={} contextChars={} largeRunTimeoutMs={}: every text route tries the developer CLI routes first, configured models remain fallbacks",

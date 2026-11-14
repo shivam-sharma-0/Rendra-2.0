@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -36,7 +37,13 @@ final class CodexCliClient {
         try {
             directory = Files.createTempDirectory("rendra-codex-");
             Path last = directory.resolve("last-message.txt");
-            var command = new ArrayList<>(List.of(dev.getCodexCommand(), "exec", "--json", "--skip-git-repo-check", "--sandbox",
+            var command = new ArrayList<>(List.of(dev.getCodexCommand(), "exec"));
+            var images = images(request, directory);
+            if (!images.isEmpty()) {
+                command.add("-i");
+                images.forEach(image -> command.add(image.toString()));
+            }
+            command.addAll(List.of("--json", "--skip-git-repo-check", "--sandbox",
                     "read-only", "--ephemeral", "--ignore-rules", "--color", "never", "-C", directory.toString(), "-o",
                     last.toString(), "-c", "model_reasoning_effort=\"" + effort(dev) + "\""));
             if (request.model() != null && !request.model().isBlank() && !request.model().equals("default"))
@@ -106,6 +113,23 @@ final class CodexCliClient {
             out.append("\n").append(message.content() == null ? "" : message.content()).append("\n");
         }
         return out.toString();
+    }
+
+    static List<Path> images(LlmClient.LlmRequest request, Path directory) throws IOException {
+        var files = new ArrayList<Path>();
+        for (var image : imageUrls(request)) {
+            int comma = image.indexOf(',');
+            String extension = image.startsWith("data:image/png") ? ".png" : ".jpg";
+            Path file = directory.resolve("image-" + (files.size() + 1) + extension);
+            Files.write(file, Base64.getDecoder().decode(image.substring(comma + 1)));
+            files.add(file);
+        }
+        return files;
+    }
+
+    static List<String> imageUrls(LlmClient.LlmRequest request) {
+        return request.messages().stream().filter(message -> message.images() != null).flatMap(message -> message.images().stream())
+                .filter(image -> image != null && image.startsWith("data:image/") && image.contains(";base64,")).toList();
     }
 
     static LlmClient.LlmResult parse(String text, boolean tools) {

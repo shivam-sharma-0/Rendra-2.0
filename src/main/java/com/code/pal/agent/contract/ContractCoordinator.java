@@ -5,6 +5,8 @@ import com.code.pal.agent.config.AgentProperties;
 import com.code.pal.agent.domain.AgentRun;
 import com.code.pal.agent.intent.RequestRouter;
 import com.code.pal.agent.llm.LlmClient;
+import com.code.pal.agent.llm.LlmCancelledException;
+import com.code.pal.agent.llm.LlmException;
 import com.code.pal.agent.plan.AgentPlanState;
 import com.code.pal.agent.starter.Starter;
 import com.code.pal.agent.route.*;
@@ -18,6 +20,8 @@ import com.code.pal.project.capability.BuildDecisions;
 import com.code.pal.project.domain.ProjectType;
 import com.code.pal.project.spec.ApprovedSpec;
 import com.code.pal.project.exception.WorkflowStageException;
+import com.code.pal.agent.vision.GeneratedVisualReview;
+import com.code.pal.agent.prompt.PromptLoader;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 import java.util.*;
@@ -52,10 +56,16 @@ public final class ContractCoordinator {
     private ContractValidation bundleValidation;
     private StructuredRepair structuredRepair;
     private ContractFixes deterministicFixes;
+    private GeneratedVisualReview visualReview;
 
     @Autowired(required = false)
     public void useDeterministicFixes(ContractFixes adapter) {
         this.deterministicFixes = adapter;
+    }
+
+    @Autowired(required = false)
+    public void useVisualReview(GeneratedVisualReview review) {
+        this.visualReview = review;
     }
 
     @Autowired(required = false)
@@ -442,15 +452,84 @@ public final class ContractCoordinator {
                 throw new WorkflowStageException("Required application checks did not pass; staged code was not saved");
             }
             var affected = affected(c, report);
+            if (c.blueprint() != null && !affected.isEmpty()
+                    && affected.stream().allMatch(unit -> unit.ownedPaths().stream().allMatch(path -> ContractScaffold.platformPage(c, path)))) {
+                problem(activity, report);
+                log.warn("platform_check_failed runId={} units={}", run.getId(), affected.stream().map(BuildContract.Unit::id).toList());
+                throw new WorkflowStageException("A platform-generated page failed its required checks; staged code was not saved");
+            }
             repair(ctx, run, c, affected, request, approved.requirementsJson(), common.keySet(), report, checkedCall,
                     beforeIo, activity, planning);
         }
+        if (c.blueprint() != null)
+            polish(ctx, run, c, request, approved.requirementsJson(), common.keySet(), checkedCall, beforeIo, activity);
         int step = 1;
         for (var unit : c.waves().stream().flatMap(List::stream).toList())
             ctx.plan().updateStep(step++, AgentPlanState.StepStatus.COMPLETED, "Required backend checks passed");
         if (unitCheckpoints != null)
             unitCheckpoints.verified(run);
         return new Outcome(c, "The requested application changes passed the required checks.");
+    }
+
+    private void polish(AgentContext ctx, AgentRun run, BuildContract c, String request, String requirements, Set<String> shared,
+            Function<LlmClient.LlmRequest, LlmClient.LlmResult> checkedCall, Runnable beforeIo, Consumer<String> activity) {
+        var home = c.routes().stream().filter(route -> route.path().equals("/")).findFirst().orElse(null);
+        var unit = home == null || !home.owner().startsWith("page_") ? null
+                : c.units().stream().filter(candidate -> candidate.id().equals(home.owner())).findFirst().orElse(null);
+        if (unit == null || visualReview == null) {
+            log.info("visual_polish_skipped runId={} reason={}", run.getId(), unit == null ? "home_not_written" : "review_unavailable");
+            return;
+        }
+        var before = new LinkedHashMap<String, String>();
+        List<UnitGenerator.Delta> polished;
+        try {
+            beforeIo.run();
+            var issues = visualReview.review(ctx, request, checkedCall, PromptLoader.Prompt.POLISH_REVIEW);
+            log.info("visual_polish_review runId={} unit={} issues={} text={}", run.getId(), unit.id(), issues.size(), issues);
+            if (issues.isEmpty())
+                return;
+            activity.accept("Polishing the home page");
+            for (String path : unit.ownedPaths())
+                if (files.regularFile(ctx.projectId(), ctx.root(), path))
+                    before.put(path, bounded(ctx, path));
+            String feedback = mapper.writeValueAsString(Map.of("visualPolish", issues, "instruction",
+                    "Apply these visual improvements to this page only. Keep every route, link, data call, element id,"
+                            + " data attribute and behaviour; change layout, spacing, hierarchy, icons and copy only."));
+            polished = generator.generate(input(ctx, c, unit, request, requirements, shared, feedback),
+                    props.preferredModel(ProjectType.BUILD), checkedCall).files();
+        } catch (LlmCancelledException cancelled) {
+            throw cancelled;
+        } catch (LlmException | IllegalArgumentException unavailable) {
+            log.info("visual_polish_skipped runId={} reason={}", run.getId(), unavailable.getClass().getSimpleName());
+            return;
+        }
+        beforeIo.run();
+        try (var scope = UnitWriteScope.wave(ctx, c, List.of(unit))) {
+            merge(ctx, polished);
+        }
+        resolveRelativeImports(ctx, c, List.of(unit));
+        if (checksPass(ctx, activity)) {
+            log.info("visual_polish_kept runId={} unit={}", run.getId(), unit.id());
+            return;
+        }
+        beforeIo.run();
+        try (var scope = UnitWriteScope.wave(ctx, c, List.of(unit))) {
+            merge(ctx, before.entrySet().stream().map(entry -> new UnitGenerator.Delta(entry.getKey(),
+                    files.version(ctx.projectId(), ctx.root(), entry.getKey()), entry.getValue())).toList());
+        }
+        log.info("visual_polish_reverted runId={} unit={}", run.getId(), unit.id());
+        if (!checksPass(ctx, activity))
+            throw new WorkflowStageException("Required application checks did not pass after restoring the checked page; staged code was not saved");
+    }
+
+    private boolean checksPass(AgentContext ctx, Consumer<String> activity) {
+        activity.accept("Checking required behavior");
+        ValidationReport report;
+        validation.reportProgress(ctx.runId(), activity);
+        try { report = validation.validateAll(ctx); }
+        finally { validation.reportProgress(ctx.runId(), null); }
+        return report.changeValidationPassed() && report.checks().stream()
+                .anyMatch(check -> check.id().equals("RUNTIME") && check.outcome() == ValidationCheck.Outcome.PASS);
     }
 
     static List<BuildContract.Unit> diagnosed(List<BuildContract.Unit> wave, ValidationReport report) {

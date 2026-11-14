@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -33,14 +34,17 @@ final class ClaudeCodeCliClient {
             Path output = directory.resolve("claude.json");
             String model = request.model() == null || request.model().isBlank() || request.model().equals("default")
                     ? dev.getClaudeCodeModel() : request.model();
-            var command = new ArrayList<>(List.of(dev.getClaudeCodeCommand(), "-p", "--output-format", "json", "--tools", "",
+            var images = CodexCliClient.imageUrls(request);
+            var command = new ArrayList<>(List.of(dev.getClaudeCodeCommand(), "-p", "--tools", "",
                     "--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands", "--setting-sources", "",
                     "--effort", effort(dev), "--model", model, "--system-prompt", SYSTEM));
+            command.addAll(images.isEmpty() ? List.of("--output-format", "json")
+                    : List.of("--input-format", "stream-json", "--output-format", "stream-json", "--verbose"));
             process = new ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true)
                     .redirectOutput(output.toFile()).start();
             String prompt = CodexCliClient.prompt(request);
             try (var stdin = process.getOutputStream()) {
-                stdin.write(prompt.getBytes(StandardCharsets.UTF_8));
+                stdin.write((images.isEmpty() ? prompt : message(prompt, images)).getBytes(StandardCharsets.UTF_8));
             }
             long started = System.nanoTime();
             long deadline = started + Duration.ofSeconds(Math.max(30, dev.getClaudeCodeTimeoutSeconds())).toNanos();
@@ -76,6 +80,15 @@ final class ClaudeCodeCliClient {
             if (process != null && process.isAlive()) process.destroyForcibly();
             delete(directory);
         }
+    }
+
+    static String message(String prompt, List<String> images) {
+        var content = new ArrayList<Map<String, Object>>();
+        for (String image : images)
+            content.add(Map.of("type", "image", "source", Map.of("type", "base64",
+                    "media_type", image.substring("data:".length(), image.indexOf(';')), "data", image.substring(image.indexOf(',') + 1))));
+        content.add(Map.of("type", "text", "text", prompt));
+        return JSON.writeValueAsString(Map.of("type", "user", "message", Map.of("role", "user", "content", content))) + "\n";
     }
 
     static String effort(AgentProperties.Dev dev) {
