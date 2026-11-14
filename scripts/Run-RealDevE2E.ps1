@@ -7,6 +7,7 @@ param(
     [switch]$ViteGeneration,
     [switch]$PlanningIntake,
     [switch]$StructuredContracts,
+    [switch]$SmartEngine,
     [string]$BenchmarkResultPath,
     [string]$BenchmarkCommit,
     [string]$VerificationDirectory,
@@ -188,6 +189,7 @@ END $codex$;
     $appArgs=@('-Dspring.devtools.restart.enabled=false','-Xmx256m','-Xss512k','-XX:ActiveProcessorCount=2','-XX:TieredStopAtLevel=1','-XX:ReservedCodeCacheSize=64m','-XX:MaxMetaspaceSize=192m','-cp',$classpath,'com.code.pal.CodePalApplication',"--server.port=$appPort",'--server.address=127.0.0.1','--spring.profiles.active=dev',"--spring.datasource.url=jdbc:postgresql://127.0.0.1:$pgPort/$taskId",'--spring.datasource.username=codepal_codex_it',"--spring.config.import=optional:file:$sourcePath/.secrets/secrets.properties", "--jwt.rsa.private-key=file:$sourcePath/.secrets/jwt-private.pem", "--jwt.rsa.public-key=file:$sourcePath/.secrets/jwt-public.pem", "--spring.data.redis.port=$redisPort", "--app.agent.workspace-base-path=$uncBase", "--app.agent.sandbox.host-workspace-path=$linuxBase",'--app.agent.billing-mode=FREE','--app.agent.worker-concurrency=1',"--app.agent.sandbox.container-prefix=$taskId-",'--app.agent.llm.max-attempts=1','--management.health.mongo.enabled=false','--logging.level.org.springframework.web=INFO','--logging.level.org.hibernate.SQL=INFO','--logging.level.org.springframework.jdbc=INFO')
     $appArgs+='--app.agent.deleted-project-sweep-ms=86400000'
     if($StructuredContracts){$appArgs+='--app.agent.structured-contracts=true'}
+    if($SmartEngine){$appArgs+='--app.agent.engine=smart'}
     if ($syntheticGate) {
         # Fixed known destinations and FREE routes; no environment override may select a paid/other provider.
         $planningFixture = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/planner-intake.json') -Raw | ConvertFrom-Json

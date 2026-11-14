@@ -2,7 +2,8 @@ param(
     [string]$VerificationDirectory = 'target/agent-generation-gate-20261019',
     [string]$Fixture = 'scripts/fixtures/benchmark.json',
     [string]$OutputDirectory = '',
-    [string[]]$Only = @()
+    [string[]]$Only = @(),
+    [switch]$SmartEngine
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -20,7 +21,7 @@ foreach ($case in $cases) {
     $failure = $null
     try {
         & (Join-Path $PSScriptRoot 'Run-RealDevE2E.ps1') -Scenario mern -IsolatedClasses -CodexAll `
-            -VerificationDirectory (Join-Path $repo $VerificationDirectory) -PromptFile $promptFile -BenchmarkName $case.name `
+            -VerificationDirectory (Join-Path $repo $VerificationDirectory) -PromptFile $promptFile -BenchmarkName $case.name -SmartEngine:$SmartEngine `
             *> (Join-Path $out ($case.name + '.log'))
     } catch { $failure = $_.Exception.Message }
     $evidence = Get-ChildItem -LiteralPath $evidenceRoot -Directory -ErrorAction SilentlyContinue |

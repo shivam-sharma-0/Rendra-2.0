@@ -55,6 +55,14 @@ public final class BlueprintCompiler {
     }
 
     public static BuildContract compile(Blueprint blueprint, UUID id, BuildDecisions.Choice choice, BuildContract.Limits limits) {
+        return compile(blueprint, id, choice, limits, List.of("/sign-in"));
+    }
+
+    public static BuildContract compile(Blueprint blueprint, UUID id, BuildDecisions.Choice choice, BuildContract.Limits limits,
+            List<String> signInPaths) {
+        if (signInPaths.isEmpty() || signInPaths.stream().anyMatch(path -> !ApprovedProductScope.signInRoute(path) || path.contains(":")
+                || blueprint.pages().stream().anyMatch(page -> page.path().equals(path))))
+            throw new IllegalArgumentException("Sign-in paths must be free sign-in routes");
         if (choice.storage() == BuildDecisions.Storage.SUPABASE)
             throw new IllegalArgumentException("Blueprint builds do not support connected Supabase storage yet");
         boolean mern = choice.storage() == BuildDecisions.Storage.MERN;
@@ -90,7 +98,8 @@ public final class BlueprintCompiler {
             String signIn = pages + "SignInPage.tsx", settings = pages + "AccountSettingsPage.tsx";
             owned.put(ACCOUNT_UNIT, List.of(signIn, settings));
             objectives.put(ACCOUNT_UNIT, "Platform sign-in and account pages; written by the platform, not the model");
-            routes.add(new BuildContract.Route("/sign-in", signIn, ACCOUNT_UNIT));
+            for (String path : signInPaths)
+                routes.add(new BuildContract.Route(path, signIn, ACCOUNT_UNIT));
             routes.add(new BuildContract.Route(Blueprint.ACCOUNT_PATH, settings, ACCOUNT_UNIT));
         }
         var usedComponents = routes.stream().map(route -> route.componentPath().toLowerCase(Locale.ROOT))

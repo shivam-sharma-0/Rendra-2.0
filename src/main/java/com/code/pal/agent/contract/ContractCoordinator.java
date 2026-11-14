@@ -207,7 +207,11 @@ public final class ContractCoordinator {
             var input = new ContractPlanner.Input(UUID.randomUUID(), request, ApprovedProductScope.planningRequirements(approved, mapper), projectMap,
                     choice, allowed, requiredRoot);
             BuildContract contract;
-            if (planning == null) {
+            if (planning == null && BlueprintPlanner.supports(props, choice, requiredRoot)) {
+                activity.accept("Designing the app");
+                contract = new BlueprintPlanner(mapper, props).plan(input, props.preferredModel(ProjectType.PLAN), checkedCall);
+                store.validateSources(ctx.projectId(), contract);
+            } else if (planning == null) {
                 contract = planner.plan(input, props.preferredModel(ProjectType.PLAN), checkedCall,
                         proposal -> store.validateSources(ctx.projectId(), proposal));
             } else {
@@ -606,7 +610,7 @@ public final class ContractCoordinator {
         paths.addAll(unit.imports());
         c.units().stream().filter(u -> unit.dependsOn().contains(u.id())).forEach(u -> paths.addAll(u.ownedPaths()));
         paths.addAll(shared.stream().filter(p -> p.startsWith(c.clientRoot()) || p.startsWith(c.serverRoot()))
-                .filter(p -> !p.endsWith("contract.json")).toList());
+                .filter(p -> !p.endsWith("contract.json")).filter(p -> CrudScaffold.briefing(c, p)).toList());
         var assets = new HashSet<String>();
         c.assets().forEach(a -> assets.add(a.destination()));
         var bodies = Set.copyOf(paths);

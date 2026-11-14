@@ -12,6 +12,7 @@ public final class PromptLoader {
         SYSTEM_BASE("system-base"),
         MODE_BUILD("mode-build"),
         UI_KIT("ui-kit"),
+        BLUEPRINT_PLANNER("blueprint-planner"),
         MODE_CHAT("mode-chat"),
         MODE_PLAN("mode-plan"),
         CONVERSATIONAL("conversational"),

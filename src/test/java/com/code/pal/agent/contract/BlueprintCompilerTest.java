@@ -136,6 +136,29 @@ class BlueprintCompilerTest {
         export("habit-garden", files, contract);
     }
 
+    @Test
+    void plannerCorrectsOneRejectedBlueprintAndKeepsTheApprovedSignInPath() {
+        var replies = new ArrayDeque<>(List.of("```json\n{\"name\":\"Notes\",\"entities\":[],\"pages\":[{\"path\":\"/\",\"kind\":\"landing\"}]}\n```",
+                "Here it is: {\"name\":\"Notes\",\"entities\":[{\"name\":\"Note\",\"fields\":[{\"name\":\"title\",\"required\":true}]}],"
+                        + "\"pages\":[{\"path\":\"/\",\"kind\":\"landing\"},{\"path\":\"/notes\",\"kind\":\"list\",\"entity\":\"Note\"}]}"));
+        var requests = new ArrayList<com.code.pal.agent.llm.LlmClient.LlmRequest>();
+        var input = new ContractPlanner.Input(UUID.randomUUID(), "A private notes app",
+                "{\"requestedScope\":{\"pages\":[{\"path\":\"/\"},{\"path\":\"/notes\"},{\"path\":\"/login\"}]}}", "", ACCOUNTS, LIMITS, "client/src/App.tsx");
+        var properties = new com.code.pal.agent.config.AgentProperties();
+        properties.setEngine("smart");
+        assertTrue(BlueprintPlanner.supports(properties, ACCOUNTS, "client/src/App.tsx"));
+        assertFalse(BlueprintPlanner.supports(properties, ACCOUNTS, null));
+        var contract = new BlueprintPlanner(MAPPER, properties).plan(input, new com.code.pal.agent.config.AgentProperties.ModelSelection("codex", "gpt"),
+                request -> {
+                    requests.add(request);
+                    return new com.code.pal.agent.llm.LlmClient.LlmResult(replies.removeFirst(), null, List.of(), null, "stop");
+                });
+        assertEquals(2, requests.size());
+        assertTrue(requests.getLast().messages().getLast().content().contains("A server app needs at least one kind of record"));
+        assertTrue(contract.routes().stream().anyMatch(route -> route.path().equals("/login") && route.owner().equals(BlueprintCompiler.ACCOUNT_UNIT)));
+        assertEquals(input.id(), contract.id());
+    }
+
     private static Map<?, ?> json(String text) {
         return MAPPER.readValue(text, Map.class);
     }

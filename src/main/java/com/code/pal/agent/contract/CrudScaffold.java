@@ -21,6 +21,11 @@ final class CrudScaffold {
                 .anyMatch(unit -> unit.ownedPaths().contains(path));
     }
 
+    static boolean briefing(BuildContract c, String path) {
+        return c.blueprint() == null || path.startsWith(c.clientRoot())
+                && Set.of("types.ts", "api.ts", "entities.ts", "auth-client.ts").contains(path.substring(c.clientRoot().length()));
+    }
+
     static boolean hidden(BuildContract c, BuildContract.Route route) {
         return c.blueprint() != null && route.owner().equals(BlueprintCompiler.ACCOUNT_UNIT) && !ApprovedProductScope.signInRoute(route.path());
     }

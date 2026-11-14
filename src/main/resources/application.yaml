@@ -164,6 +164,7 @@ app:
   # api-key is a SECRET â†’ env-only, no default. All models below must support tool/function calling.
   agent:
     structured-contracts: ${AGENT_STRUCTURED_CONTRACTS:false}
+    engine: ${AGENT_ENGINE:contract}
     full-stack-contracts: ${AGENT_FULL_STACK_CONTRACTS:true}
     dev:
       codex-all: ${AGENT_CODEX_ALL:true}

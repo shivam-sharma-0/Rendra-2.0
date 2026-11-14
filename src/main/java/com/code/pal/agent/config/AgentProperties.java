@@ -218,6 +218,7 @@ public class AgentProperties implements EnvironmentAware {
     private int workerConcurrency = 2;
     /** Structured planning/execution is opt-in until its behavioral gates pass. */
     private boolean structuredContracts = false;
+    private String engine = "contract";
     /** Separate rollout switch; never enabled by merely enabling structured contracts. */
     private boolean parallelUnits = false;
     private final Scheduling scheduling = new Scheduling();
