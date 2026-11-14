@@ -5,7 +5,7 @@ import java.util.*;
 public record Blueprint(String name, String icon, String preset, String accent, List<Entity> entities, List<Page> pages,
         List<Feature> features, List<String> later) {
     public static final int ENTITIES = 6;
-    public static final int AGENT_PAGES = 5;
+    public static final int AGENT_PAGES = 8;
     public static final int FIELDS = 16;
     public static final int OPTIONS = 12;
     public static final int FEATURES = 8;

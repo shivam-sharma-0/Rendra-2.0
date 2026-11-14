@@ -104,7 +104,7 @@ class BlueprintCompilerTest {
                   {"path":"/inbox","title":"Inbox","kind":"custom"}]}
                 """));
         assertEquals(Blueprint.ENTITIES, blueprint.entities().size());
-        assertTrue(blueprint.later().containsAll(List.of("Manage invoices", "Invoices page", "Inbox page")), blueprint.later().toString());
+        assertTrue(blueprint.later().containsAll(List.of("Manage invoices", "Invoices page")), blueprint.later().toString());
         assertEquals(List.of("Handshake", "User", "Building2", "Activity", "ListTodo", "StickyNote"),
                 blueprint.entities().stream().map(Blueprint.Entity::icon).toList());
         assertEquals(Map.of("lead", "accent", "qualified", "accent", "proposal", "accent", "won", "success", "lost", "danger"),
@@ -112,7 +112,7 @@ class BlueprintCompilerTest {
         assertFalse(blueprint.entity("Contact").field("photo").required());
         var contract = BlueprintCompiler.compile(blueprint, UUID.randomUUID(), ACCOUNTS, LIMITS);
         assertEquals(30, contract.api().size());
-        assertEquals(12, contract.units().size());
+        assertEquals(13, contract.units().size());
         assertTrue(contract.acceptance().api().size() <= BehaviorCriteria.API_CAP);
         assertTrue(contract.acceptance().browser().size() <= BehaviorCriteria.BROWSER_CAP);
         export("crm", new ContractScaffold(MAPPER).render(contract, blueprint.name(), path -> null, UUID.randomUUID()), contract);

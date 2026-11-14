@@ -399,13 +399,13 @@ public final class ContractCoordinator {
             activity.accept("Checking types");
             var report = validation.run(ctx, ValidationOperation.TYPE_CHECK, null);
             if (report.available() && !report.changeValidationPassed())
-                repair(ctx, run, c, wave, request, approved.requirementsJson(), common.keySet(), report, checkedCall,
+                repair(ctx, run, c, diagnosed(wave, report), request, approved.requirementsJson(), common.keySet(), report, checkedCall,
                         beforeIo, activity, planning);
             beforeIo.run();
             activity.accept("Building the app");
             report = validation.run(ctx, ValidationOperation.BUILD, null);
             if (report.available() && !report.changeValidationPassed())
-                repair(ctx, run, c, wave, request, approved.requirementsJson(), common.keySet(), report, checkedCall,
+                repair(ctx, run, c, diagnosed(wave, report), request, approved.requirementsJson(), common.keySet(), report, checkedCall,
                         beforeIo, activity, planning);
             if (c.schemaVersion() == 2) {
                 completedBatches.add(orderedBatches.get(waveIndex).id());
@@ -451,6 +451,13 @@ public final class ContractCoordinator {
         if (unitCheckpoints != null)
             unitCheckpoints.verified(run);
         return new Outcome(c, "The requested application changes passed the required checks.");
+    }
+
+    static List<BuildContract.Unit> diagnosed(List<BuildContract.Unit> wave, ValidationReport report) {
+        var files = report.introducedDiagnostics().stream().map(diagnostic -> diagnostic.file()).filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        var owners = wave.stream().filter(unit -> unit.ownedPaths().stream().anyMatch(files::contains)).toList();
+        return owners.isEmpty() ? wave : owners;
     }
 
     /** The failed report as the owner reads it, before the repair it starts or the stop it causes. */

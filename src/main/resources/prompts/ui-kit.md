@@ -16,7 +16,8 @@ src/pages imports from '../kit'. Every component follows the theme preset, so ne
 Icons (when package.json lists lucide-react): import named icons from 'lucide-react' (e.g. Plus, Trophy, CalendarDays); put one in every
 button that acts, every stat and every empty state, inside .app-icon-tile for a coloured square. Tones: wrap in .app-tone--success|warning|danger|neutral.
 Classes: app-stack, app-grid, app-card, app-muted, app-eyebrow, app-lead, app-actions, app-fade-in, app-icon-tile, app-meta. Kit inputs and buttons
-pass through name, aria-* and data-* attributes, so required selectors still work.
+pass through name, aria-* and data-* attributes, so required selectors still work. A link that acts as a button uses
+className="app-button" (add app-button--secondary or app-button--ghost for quieter ones).
 Generated record pages: entities.ts exports one spec per record type; render RecordList{spec,title?,description?} or link to
 its pages instead of rebuilding lists, and read data through spec.source (list, get, create, update, remove).
 Design: open each main page with a Hero or PageHeader, show numbers as Stat cards, lists as Cards, DataTable or RankList,

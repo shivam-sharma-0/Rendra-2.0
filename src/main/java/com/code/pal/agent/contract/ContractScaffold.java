@@ -162,7 +162,8 @@ public final class ContractScaffold {
                     : "const APP_MARK = null\n";
             out.put(app, "import " + json(relative(directory, root + "theme.css", true)) + "\nimport { routes } from "
                     + json(relative(directory, root + "routes.ts", true))
-                    + "\nconst APP_NAME = " + json(title == null || title.isBlank() ? "App" : title.strip())
+                    + "\nconst APP_NAME = " + json(c.blueprint() != null ? c.blueprint().name()
+                            : title == null || title.isBlank() ? "App" : title.strip())
                     + "\n" + shell + resource("contract/hash-app.tsx") + accountMenu);
         }
         if (existing.apply(app) == null && !out.containsKey(app))

@@ -67,7 +67,7 @@ public final class BlueprintPlanner {
                     throw new IllegalArgumentException("The blueprint was cut off; keep descriptions short and move extras to later");
                 Map<?, ?> raw = mapper.readerFor(Map.class).with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
                         .readValue(ModelJson.extractObject(result.content()));
-                var blueprint = BlueprintCompiler.normalize(raw);
+                var blueprint = BlueprintCompiler.normalize(raw, approvedPaths(input));
                 var contract = BlueprintCompiler.compile(blueprint, input.id(), choice, input.limits(), signIn);
                 ApprovedProductScope.requirePages(input, contract, mapper);
                 if (contract.units().stream().filter(unit -> unit.id().startsWith("page_")).count() + 1 > input.limits().modelCalls())
@@ -83,11 +83,27 @@ public final class BlueprintPlanner {
                 if (result != null && result.content() != null)
                     messages.add(LlmClient.LlmMessage.assistant(result.content().length() > 24_000
                             ? result.content().substring(0, 24_000) : result.content()));
-                messages.add(LlmClient.LlmMessage.user("That blueprint was rejected: " + reason
+                messages.add(LlmClient.LlmMessage.user("That blueprint was rejected: " + reason + ". Written pages (landing, dashboard,"
+                        + " settings, custom) are capped at " + Blueprint.AGENT_PAGES + " and approved paths are kept first; show records"
+                        + " on generated list pages and move optional screens to later"
                         + ". Reply with the whole corrected JSON object only."));
             }
         }
         throw new IllegalStateException();
+    }
+
+    private Set<String> approvedPaths(ContractPlanner.Input input) {
+        var paths = new HashSet<String>();
+        try {
+            JsonNode approved = input.approvedRequirements() == null ? null : mapper.readTree(input.approvedRequirements());
+            if (approved != null)
+                for (var page : approved.path("requestedScope").path("pages"))
+                    paths.add(page.path("path").asString(""));
+        } catch (RuntimeException unreadable) {
+            log.info("blueprint_requirements_unreadable reason={}", unreadable.getClass().getSimpleName());
+        }
+        paths.remove("");
+        return Set.copyOf(paths);
     }
 
     private List<String> signInPaths(ContractPlanner.Input input) {

@@ -20,7 +20,7 @@ Shape:
  "later":["Features left for a later version"]}
 
 Rules:
-- Build an MVP: at most 6 entities and at most 5 written pages (landing, dashboard, settings, custom). Everything else
+- Build an MVP: at most 6 entities and at most 8 written pages (landing, dashboard, settings, custom), fewer is better. Everything else
   goes to "later" as short items.
 - Field kinds: string (short text), text (long text), number, boolean, date, enum (needs options), image (an https link,
   never required). Every entity needs one required short text field named in "display".

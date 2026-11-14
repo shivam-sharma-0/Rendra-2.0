@@ -28,7 +28,7 @@ export default function App() {
   return <HashRouter>
     <header className="app-header">
       <div className="app-container app-header__bar">
-        <Link to="/" className="app-brand">{APP_MARK && <span className="app-brand__mark" aria-hidden="true">{APP_MARK}</span>}{APP_NAME}</Link>
+        <Link to="/" className="app-brand">{APP_MARK && <span className="app-brand__mark" aria-hidden="true">{APP_MARK}</span>}<span className="app-brand__name">{APP_NAME}</span></Link>
         {navigation.length > 1 && <nav className="app-nav" aria-label="Main">
           {navigation.slice(0, navigation.length > 6 ? 5 : 6).map(route =>
             <NavLink key={route.path} to={route.path} end={route.path === '/'}>{navLabel(route.path)}</NavLink>)}

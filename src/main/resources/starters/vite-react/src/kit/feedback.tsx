@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
+import { createElement, isValidElement, useEffect, useRef, useSyncExternalStore, type ElementType, type ReactNode } from 'react'
 import { CircleAlert, CircleCheck, Info, TriangleAlert, X } from 'lucide-react'
 
 export type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
@@ -14,11 +14,16 @@ export function Notice({ tone = 'accent', title, children }: { tone?: Tone; titl
   </div>
 }
 
+export function iconNode(icon: ReactNode | ElementType, size = 22): ReactNode {
+  return typeof icon === 'function' || (icon !== null && typeof icon === 'object' && !isValidElement(icon) && !Array.isArray(icon) && '$$typeof' in icon)
+    ? createElement(icon as ElementType, { size }) : icon as ReactNode
+}
+
 export function EmptyState({ icon = '✦', title, description, action }: {
-  icon?: ReactNode; title: ReactNode; description?: ReactNode; action?: ReactNode
+  icon?: ReactNode | ElementType; title: ReactNode; description?: ReactNode; action?: ReactNode
 }) {
   return <div className="app-empty">
-    <span className="app-empty__icon" aria-hidden="true">{icon}</span>
+    <span className="app-empty__icon" aria-hidden="true">{iconNode(icon)}</span>
     <h3>{title}</h3>
     {description && <p className="app-muted">{description}</p>}
     {action}

@@ -23,6 +23,10 @@ public final class BlueprintCompiler {
     }
 
     public static Blueprint normalize(Map<?, ?> raw) {
+        return normalize(raw, Set.of());
+    }
+
+    public static Blueprint normalize(Map<?, ?> raw, Set<String> required) {
         var later = new ArrayList<>(texts(raw.get("later"), 160));
         var features = new ArrayList<Blueprint.Feature>();
         for (var value : list(raw.get("features"))) {
@@ -44,7 +48,7 @@ public final class BlueprintCompiler {
             else
                 entities.add(entity);
         }
-        var pages = pages(list(raw.get("pages")), entities, features, later);
+        var pages = pages(list(raw.get("pages")), entities, features, later, required);
         while (later.size() > Blueprint.LATER)
             later.removeLast();
         String preset = DesignPresets.name(text(raw.get("preset"), 40, null));
@@ -391,7 +395,7 @@ public final class BlueprintCompiler {
     }
 
     private static List<Blueprint.Page> pages(List<?> raw, List<Blueprint.Entity> entities, List<Blueprint.Feature> features,
-            List<String> later) {
+            List<String> later, Set<String> required) {
         var proposed = new ArrayList<Blueprint.Page>();
         var detailed = new LinkedHashSet<String>();
         for (var value : raw) {
@@ -434,16 +438,21 @@ public final class BlueprintCompiler {
                 proposed.addFirst(new Blueprint.Page("/", "Home", Blueprint.PageKind.LANDING, null, null, null));
         }
         proposed.sort(Comparator.comparing(page -> !page.path().equals("/")));
+        var priority = new ArrayList<>(proposed);
+        priority.sort(Comparator.comparing((Blueprint.Page page) -> !page.path().equals("/")).thenComparing(page -> !required.contains(page.path())));
+        var kept = Collections.newSetFromMap(new IdentityHashMap<Blueprint.Page, Boolean>());
+        var claimed = new HashSet<String>();
+        int budget = Blueprint.AGENT_PAGES;
+        for (var page : priority)
+            if (claimed.add(page.path()) && (page.kind().generated() || budget-- > 0))
+                kept.add(page);
         var pages = new ArrayList<Blueprint.Page>();
         var paths = new HashSet<String>();
-        int agent = 0;
         for (var page : proposed) {
-            if (!paths.add(page.path()) || !page.kind().generated() && agent == Blueprint.AGENT_PAGES) {
+            if (!kept.contains(page) || !paths.add(page.path())) {
                 later.add(page.title() + " page");
                 continue;
             }
-            if (!page.kind().generated())
-                agent++;
             pages.add(page);
         }
         for (var page : List.copyOf(pages)) {

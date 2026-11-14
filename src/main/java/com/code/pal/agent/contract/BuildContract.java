@@ -154,13 +154,13 @@ public record BuildContract(int schemaVersion, UUID id, Stack stack, BuildDecisi
             bad("Contract acceptance cannot opt into server-owned model-spec advisory provenance");
         }
         theme = Map.copyOf(theme);
-        routes = bounded(routes, 20);
+        routes = bounded(routes, 24);
         types = bounded(types, 16);
         models = bounded(models, 12);
         api = bounded(api, 32);
         assets = bounded(assets, 16);
         envNames = Set.copyOf(envNames);
-        units = bounded(units, 12);
+        units = bounded(units, 16);
         if (units.isEmpty() || theme.isEmpty() || theme.size() > 8 || envNames.size() > 8)
             bad("Contract size invalid");
         for (var token : theme.entrySet()) {
