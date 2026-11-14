@@ -611,6 +611,8 @@ public final class ContractCoordinator {
         c.units().stream().filter(u -> unit.dependsOn().contains(u.id())).forEach(u -> paths.addAll(u.ownedPaths()));
         paths.addAll(shared.stream().filter(p -> p.startsWith(c.clientRoot()) || p.startsWith(c.serverRoot()))
                 .filter(p -> !p.endsWith("contract.json")).filter(p -> CrudScaffold.briefing(c, p)).toList());
+        if (c.blueprint() != null && feedback != null && !feedback.isBlank())
+            CrudScaffold.kitSources(c).stream().filter(path -> files.regularFile(ctx.projectId(), ctx.root(), path)).forEach(paths::add);
         var assets = new HashSet<String>();
         c.assets().forEach(a -> assets.add(a.destination()));
         var bodies = Set.copyOf(paths);

@@ -38,8 +38,8 @@ export function Section({ title, description, actions, children }: Slots & { chi
   </section>
 }
 
-export function Grid({ min = 16, children }: { min?: number; children?: ReactNode }) {
-  return <div className="app-grid" style={{ '--app-grid-min': `${min}rem` } as CSSProperties}>{children}</div>
+export function Grid({ min = 16, children }: { min?: number | string; children?: ReactNode }) {
+  return <div className="app-grid" style={{ '--app-grid-min': typeof min === 'number' ? `${min}rem` : min } as CSSProperties}>{children}</div>
 }
 
 export function Card({ title, description, actions, footer, children, onClick }: Slots & {

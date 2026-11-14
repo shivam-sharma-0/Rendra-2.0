@@ -140,7 +140,8 @@ class BlueprintCompilerTest {
     void plannerCorrectsOneRejectedBlueprintAndKeepsTheApprovedSignInPath() {
         var replies = new ArrayDeque<>(List.of("```json\n{\"name\":\"Notes\",\"entities\":[],\"pages\":[{\"path\":\"/\",\"kind\":\"landing\"}]}\n```",
                 "Here it is: {\"name\":\"Notes\",\"entities\":[{\"name\":\"Note\",\"fields\":[{\"name\":\"title\",\"required\":true}]}],"
-                        + "\"pages\":[{\"path\":\"/\",\"kind\":\"landing\"},{\"path\":\"/notes\",\"kind\":\"list\",\"entity\":\"Note\"}]}"));
+                        + "\"pages\":[{\"path\":\"/\",\"kind\":\"landing\"},{\"path\":\"/notes\",\"kind\":\"list\",\"entity\":\"Note\"},"
+                        + "{\"path\":\"/notes/:id\",\"title\":\"Note details\",\"kind\":\"custom\",\"entity\":\"Note\"}]}"));
         var requests = new ArrayList<com.code.pal.agent.llm.LlmClient.LlmRequest>();
         var input = new ContractPlanner.Input(UUID.randomUUID(), "A private notes app",
                 "{\"requestedScope\":{\"pages\":[{\"path\":\"/\"},{\"path\":\"/notes\"},{\"path\":\"/login\"}]}}", "", ACCOUNTS, LIMITS, "client/src/App.tsx");
@@ -157,6 +158,8 @@ class BlueprintCompilerTest {
         assertTrue(requests.getLast().messages().getLast().content().contains("A server app needs at least one kind of record"));
         assertTrue(contract.routes().stream().anyMatch(route -> route.path().equals("/login") && route.owner().equals(BlueprintCompiler.ACCOUNT_UNIT)));
         assertEquals(input.id(), contract.id());
+        assertTrue(contract.routes().stream().anyMatch(route -> route.path().equals("/notes/:id") && route.owner().equals("crud_notes")));
+        assertTrue(contract.units().stream().noneMatch(unit -> unit.id().equals("page_noteDetails")));
     }
 
     private static Map<?, ?> json(String text) {

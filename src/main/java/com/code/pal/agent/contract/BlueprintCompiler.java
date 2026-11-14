@@ -16,6 +16,7 @@ public final class BlueprintCompiler {
     public static final String ACCOUNT_UNIT = "platform_account";
     static final String LOGIN_TOKEN = "platformLoginToken";
     private static final Map<String, Blueprint.Kind> KINDS = kinds();
+    private static final Pattern DETAIL_WORDS = Pattern.compile("(?i)\\b(?:details?|edit|editor|view|record|info)\\b");
     private static final Map<String, Blueprint.PageKind> PAGE_KINDS = pageKinds();
 
     private BlueprintCompiler() {
@@ -422,7 +423,7 @@ public final class BlueprintCompiler {
             String wanted = slug(text(item.get("feature"), 40, null));
             String feature = wanted != null && features.stream().anyMatch(f -> f.id().equals(wanted)) ? wanted : null;
             proposed.add(new Blueprint.Page(path, text(item.get("title"), 60, fallback.isBlank() ? "Page" : fallback), kind,
-                    entity == null ? null : entity.name(), feature, text(item.get("description"), 160, null)));
+                    entity == null ? null : entity.name(), feature, sentence(item.get("description"), 140)));
         }
         if (proposed.stream().noneMatch(page -> page.path().equals("/"))) {
             var landing = proposed.stream().filter(page -> page.kind() == Blueprint.PageKind.LANDING).findFirst();
@@ -445,9 +446,21 @@ public final class BlueprintCompiler {
                 agent++;
             pages.add(page);
         }
-        for (var page : List.copyOf(pages))
+        for (var page : List.copyOf(pages)) {
             if (page.kind() == Blueprint.PageKind.LIST)
                 detailed.add(page.entity());
+            if (page.kind() != Blueprint.PageKind.CUSTOM || page.entity() == null
+                    || !DETAIL_WORDS.matcher(page.title() + " " + Objects.toString(page.feature(), "")).find())
+                continue;
+            var entity = entities.stream().filter(e -> e.name().equals(page.entity())).findFirst().orElseThrow();
+            String list = pages.stream().filter(p -> p.kind() == Blueprint.PageKind.LIST && p.entity().equals(entity.name()))
+                    .map(Blueprint.Page::path).findFirst().orElse(null);
+            if (page.path().equals(Blueprint.detailPath(list, entity))) {
+                pages.remove(page);
+                paths.remove(page.path());
+                detailed.add(entity.name());
+            }
+        }
         for (String name : detailed) {
             var entity = entities.stream().filter(e -> e.name().equals(name)).findFirst().orElseThrow();
             String list = pages.stream().filter(page -> page.kind() == Blueprint.PageKind.LIST && page.entity().equals(name))
@@ -589,6 +602,17 @@ public final class BlueprintCompiler {
             return fallback;
         String clean = text.strip().replaceAll("\\s+", " ");
         return clean.length() <= max ? clean : clean.substring(0, max).strip();
+    }
+
+    private static String sentence(Object value, int max) {
+        String clean = text(value, 2000, null);
+        if (clean == null || clean.length() <= max)
+            return clean;
+        int stop = clean.lastIndexOf(". ", max);
+        if (stop > 20)
+            return clean.substring(0, stop + 1);
+        int space = clean.lastIndexOf(' ', max - 1);
+        return (space > 20 ? clean.substring(0, space) : clean.substring(0, max - 1)).replaceAll("[,;:]+$", "") + "…";
     }
 
     private static List<String> texts(Object value, int max) {

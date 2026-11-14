@@ -28,9 +28,17 @@ Rules:
   only the creator edits (posts, reviews, scores); admin = everyone reads, only admins write (products, levels, catalog).
 - tones per enum option: success, warning, danger, neutral or accent (done or won green, pending amber, lost or overdue red).
 - layout: table for record types people compare by numbers and dates (deals, invoices), grid for the rest.
-- Pages: "/" comes first. A list page shows one entity at a plain path. Its detail page is generated at that path plus
-  "/:id", unless you place a custom page there (for example a play screen). Never add sign-in, sign-up or /account pages.
-- Every custom page names a feature. The feature description is the build agent's whole brief, so keep it concrete:
+- Pages: "/" comes first. Generated pages are the default for records: a page whose main job is to show, search,
+  create, edit or delete one entity's records is a "list" page of that entity, even when the request calls it a
+  dashboard or a board of tasks. Its detail page (view, edit, delete) is generated at the list path plus "/:id", so never
+  write a custom page for an entity's details or editing. Only place a custom page at that path when the record opens
+  into a different experience, such as a play screen. When the request asks for a detail page at /tasks/:id, put the
+  task list at /tasks or at "/" with plural "tasks" so the generated detail lands on that exact path.
+- Written pages are for what generated pages cannot do: a landing page, a dashboard of totals and charts across
+  entities, a game screen, a kanban board, settings that change how the app behaves. Never add sign-in, sign-up or
+  /account pages.
+- A page description is one short sentence shown to people under the page title (at most 90 characters), never a
+  spec. Every custom page names a feature. The feature description is the build agent's whole brief, so keep it concrete:
   what the person sees and does, and which entities it reads or writes.
 - Every path in approvedRequirements.requestedScope.pages must appear in pages with that exact path.
 - preset: one of {{presets}}. midnight for games, night and neon; graphite for developer tools and pro dark apps; clean

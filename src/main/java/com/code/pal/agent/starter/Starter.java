@@ -24,7 +24,7 @@ public enum Starter {
     MERN("mern");
 
     private static final String BASE = "starters/";
-    public static final String TEMPLATE_VERSION = "2026-11-14.3";
+    public static final String TEMPLATE_VERSION = "2026-11-14.4";
     public static final String RUNTIME_IMAGE = "node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c";
     private static final List<String> VITE_FILES = List.of("package.json", "package-lock.json", "tsconfig.json", "vite.config.ts",
             "index.html", "src/main.tsx", "src/index.css", "src/router.tsx", "src/kit/index.ts", "src/kit/layout.tsx",

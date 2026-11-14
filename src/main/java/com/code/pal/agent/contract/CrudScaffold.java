@@ -26,6 +26,11 @@ final class CrudScaffold {
                 && Set.of("types.ts", "api.ts", "entities.ts", "auth-client.ts").contains(path.substring(c.clientRoot().length()));
     }
 
+    static List<String> kitSources(BuildContract c) {
+        String kit = (c.stack() == BuildContract.Stack.MERN ? "client/src/" : "src/") + "kit/";
+        return List.of(kit + "index.ts", kit + "layout.tsx", kit + "controls.tsx", kit + "feedback.tsx", kit + "data.tsx");
+    }
+
     static boolean hidden(BuildContract c, BuildContract.Route route) {
         return c.blueprint() != null && route.owner().equals(BlueprintCompiler.ACCOUNT_UNIT) && !ApprovedProductScope.signInRoute(route.path());
     }
