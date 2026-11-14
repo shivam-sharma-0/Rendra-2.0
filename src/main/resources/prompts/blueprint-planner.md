@@ -33,7 +33,9 @@ Rules:
   dashboard or a board of tasks. Its detail page (view, edit, delete) is generated at the list path plus "/:id", so never
   write a custom page for an entity's details or editing. Only place a custom page at that path when the record opens
   into a different experience, such as a play screen. When the request asks for a detail page at /tasks/:id, put the
-  task list at /tasks or at "/" with plural "tasks" so the generated detail lands on that exact path.
+  task list at /tasks or at "/" with plural "tasks" so the generated detail lands on that exact path. The generated detail
+  takes any parameter name, so an approved /companies/:companyId is covered by the Company list at /companies; never
+  write a custom page for it.
 - Written pages are for what generated pages cannot do: a landing page, a dashboard of totals and charts across
   entities, a game screen, a kanban board, settings that change how the app behaves. Never add sign-in, sign-up or
   /account pages.

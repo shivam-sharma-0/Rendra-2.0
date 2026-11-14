@@ -455,6 +455,7 @@ public final class BlueprintCompiler {
             }
             pages.add(page);
         }
+        var chosen = new HashMap<String, String>();
         for (var page : List.copyOf(pages)) {
             if (page.kind() == Blueprint.PageKind.LIST)
                 detailed.add(page.entity());
@@ -464,17 +465,22 @@ public final class BlueprintCompiler {
             var entity = entities.stream().filter(e -> e.name().equals(page.entity())).findFirst().orElseThrow();
             String list = pages.stream().filter(p -> p.kind() == Blueprint.PageKind.LIST && p.entity().equals(entity.name()))
                     .map(Blueprint.Page::path).findFirst().orElse(null);
-            if (page.path().equals(Blueprint.detailPath(list, entity))) {
+            if (Blueprint.detailOf(page.path(), Blueprint.detailBase(list, entity)) && !chosen.containsKey(entity.name())) {
                 pages.remove(page);
                 paths.remove(page.path());
                 detailed.add(entity.name());
+                chosen.put(entity.name(), page.path());
             }
         }
         for (String name : detailed) {
             var entity = entities.stream().filter(e -> e.name().equals(name)).findFirst().orElseThrow();
             String list = pages.stream().filter(page -> page.kind() == Blueprint.PageKind.LIST && page.entity().equals(name))
                     .map(Blueprint.Page::path).findFirst().orElse(null);
-            String detail = Blueprint.detailPath(list, entity);
+            String base = Blueprint.detailBase(list, entity);
+            if (pages.stream().anyMatch(page -> Blueprint.detailOf(page.path(), base)))
+                continue;
+            String detail = chosen.getOrDefault(name, required.stream().filter(path -> Blueprint.detailOf(path, base)).sorted()
+                    .findFirst().orElse(base + "/:id"));
             if (paths.add(detail))
                 pages.add(new Blueprint.Page(detail, entity.label(), Blueprint.PageKind.DETAIL, entity.name(), null, null));
         }

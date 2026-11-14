@@ -47,9 +47,30 @@ public final class UnitGenerator {
         this.properties = properties;
     }
 
+    static Map<String, Object> stableFirst(Input input) {
+        var owned = new HashSet<>(input.unit().ownedPaths());
+        var snapshot = new LinkedHashMap<String, FileView>();
+        input.snapshot().forEach((path, view) -> {
+            if (!owned.contains(path))
+                snapshot.put(path, view);
+        });
+        input.snapshot().forEach((path, view) -> {
+            if (owned.contains(path))
+                snapshot.put(path, view);
+        });
+        var data = new LinkedHashMap<String, Object>();
+        data.put("contract", input.contract());
+        data.put("request", input.request());
+        data.put("approvedRequirements", input.approvedRequirements());
+        data.put("snapshot", snapshot);
+        data.put("unit", input.unit());
+        data.put("repairFeedback", input.repairFeedback());
+        return data;
+    }
+
     public Output generate(Input input, AgentProperties.ModelSelection model,
             Function<LlmClient.LlmRequest, LlmClient.LlmResult> checkedCall) {
-        String data = mapper.writeValueAsString(input);
+        String data = mapper.writeValueAsString(stableFirst(input));
         String policy = SYSTEM + ContractImports.policy(input.contract());
         if (data.length() + policy.length() > Math.max(1, properties.getContextBudgetChars()))
             throw new IllegalArgumentException("Focused unit context exceeds capacity; split this unit");

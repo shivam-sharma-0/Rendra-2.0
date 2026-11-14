@@ -193,11 +193,11 @@ public record Blueprint(String name, String icon, String preset, String accent, 
                 continue;
             var entity = entities.stream().filter(e -> e.name().equals(page.entity())).findFirst().orElseThrow();
             var list = pages.stream().filter(p -> p.kind() == PageKind.LIST && entity.name().equals(p.entity())).findFirst();
-            String detail = detailPath(list.map(Page::path).orElse(null), entity);
-            if (page.kind() == PageKind.DETAIL && !page.path().equals(detail))
-                bad("Detail page of " + entity.name() + " must be " + detail);
-            if (page.kind() == PageKind.LIST && pages.stream().noneMatch(p -> p.path().equals(detail)))
-                bad("List page " + page.path() + " needs a page at " + detail);
+            String base = detailBase(list.map(Page::path).orElse(null), entity);
+            if (page.kind() == PageKind.DETAIL && !detailOf(page.path(), base))
+                bad("Detail page of " + entity.name() + " must be " + base + "/:id");
+            if (page.kind() == PageKind.LIST && pages.stream().noneMatch(p -> detailOf(p.path(), base)))
+                bad("List page " + page.path() + " needs a page at " + base + "/:id");
         }
     }
 
@@ -214,12 +214,16 @@ public record Blueprint(String name, String icon, String preset, String accent, 
         return list == null ? null : list.path();
     }
 
-    public String detailPath(Entity entity) {
-        return detailPath(listPath(entity), entity);
+    public String recordBase(Entity entity) {
+        return detailBase(listPath(entity), entity);
     }
 
-    static String detailPath(String listPath, Entity entity) {
-        return (listPath == null || listPath.equals("/") ? "/" + kebab(entity.plural()) : listPath) + "/:id";
+    static String detailBase(String listPath, Entity entity) {
+        return listPath == null || listPath.equals("/") ? "/" + kebab(entity.plural()) : listPath;
+    }
+
+    static boolean detailOf(String path, String base) {
+        return path.startsWith(base + "/:") && path.substring(base.length() + 2).matches("[A-Za-z][A-Za-z0-9_]{0,40}");
     }
 
     public Feature feature(String id) {

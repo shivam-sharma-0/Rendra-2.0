@@ -76,7 +76,7 @@ final class CrudScaffold {
                                 + json(page.title()) + "}" + (page.description() == null ? "" : " description={" + json(page.description()) + "}")
                                 + " />\n}\n"
                         : "export default function " + component + "({ params }: { params: Record<string, string> }) {\n  return <RecordDetail spec={"
-                                + entity.plural() + "} id={params.id ?? ''} />\n}\n"));
+                                + entity.plural() + "} id={params[" + json(route.path().substring(route.path().lastIndexOf(':') + 1)) + "] ?? ''} />\n}\n"));
             }
         }
         return out;
@@ -151,14 +151,14 @@ final class CrudScaffold {
             b.append("import { auth } from './auth-client'\n");
         for (var entity : blueprint.entities()) {
             String type = "Types." + entity.name(), input = "Types." + entity.name() + "Input";
-            String list = blueprint.listPath(entity), detail = blueprint.detailPath(entity);
+            String list = blueprint.listPath(entity);
             b.append("\nexport const ").append(entity.plural()).append(": EntitySpec<").append(type).append(", ").append(input).append("> = {\n")
                     .append("  label: ").append(json(entity.label())).append(",\n")
                     .append("  pluralLabel: ").append(json(entity.pluralLabel())).append(",\n")
                     .append("  plural: ").append(json(entity.plural())).append(",\n")
                     .append("  icon: ").append(entity.name()).append("Icon,\n")
                     .append("  layout: ").append(json(entity.layout())).append(",\n")
-                    .append("  recordPath: ").append(json(detail.substring(0, detail.length() - "/:id".length()))).append(",\n");
+                    .append("  recordPath: ").append(json(blueprint.recordBase(entity))).append(",\n");
             if (list != null)
                 b.append("  listPath: ").append(json(list)).append(",\n");
             b.append("  display: ").append(json(entity.display())).append(",\n  fields: [\n");

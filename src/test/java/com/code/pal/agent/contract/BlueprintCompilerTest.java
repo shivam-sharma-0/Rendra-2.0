@@ -37,7 +37,7 @@ class BlueprintCompilerTest {
         assertEquals(List.of("title", "difficulty", "story"), level.fields().stream().map(Blueprint.Field::name).toList());
         assertTrue(level.field("title").required());
         assertEquals(List.of("easy", "hard"), level.field("difficulty").options());
-        assertEquals("/levels/:id", blueprint.detailPath(level));
+        assertEquals("/levels/:id", blueprint.page("Level", Blueprint.PageKind.DETAIL).path());
         assertEquals("maze-play", blueprint.pages().stream().filter(page -> page.path().equals("/play/:id")).findFirst().orElseThrow().feature());
         assertTrue(blueprint.pages().stream().noneMatch(page -> page.path().equals("/login")));
 
@@ -125,7 +125,7 @@ class BlueprintCompilerTest {
                  {"name":"done","kind":"boolean"},{"name":"category","options":["health","mind"]}]}],
                  "pages":[{"path":"/","kind":"list","entity":"Habit","title":"My habits","description":"Small steps, every day."}]}
                 """));
-        assertEquals("/habits/:id", blueprint.detailPath(blueprint.entity("Habit")));
+        assertEquals("/habits/:id", blueprint.page("Habit", Blueprint.PageKind.DETAIL).path());
         var contract = BlueprintCompiler.compile(blueprint, UUID.randomUUID(),
                 new BuildDecisions.Choice(1, BuildDecisions.Storage.BROWSER, BuildDecisions.Auth.NONE, null), LIMITS);
         assertEquals(BuildContract.Stack.VITE, contract.stack());
@@ -141,10 +141,10 @@ class BlueprintCompilerTest {
         var replies = new ArrayDeque<>(List.of("```json\n{\"name\":\"Notes\",\"entities\":[],\"pages\":[{\"path\":\"/\",\"kind\":\"landing\"}]}\n```",
                 "Here it is: {\"name\":\"Notes\",\"entities\":[{\"name\":\"Note\",\"fields\":[{\"name\":\"title\",\"required\":true}]}],"
                         + "\"pages\":[{\"path\":\"/\",\"kind\":\"landing\"},{\"path\":\"/notes\",\"kind\":\"list\",\"entity\":\"Note\"},"
-                        + "{\"path\":\"/notes/:id\",\"title\":\"Note details\",\"kind\":\"custom\",\"entity\":\"Note\"}]}"));
+                        + "{\"path\":\"/notes/:noteId\",\"title\":\"Note details\",\"kind\":\"custom\",\"entity\":\"Note\"}]}"));
         var requests = new ArrayList<com.code.pal.agent.llm.LlmClient.LlmRequest>();
         var input = new ContractPlanner.Input(UUID.randomUUID(), "A private notes app",
-                "{\"requestedScope\":{\"pages\":[{\"path\":\"/\"},{\"path\":\"/notes\"},{\"path\":\"/login\"}]}}", "", ACCOUNTS, LIMITS, "client/src/App.tsx");
+                "{\"requestedScope\":{\"pages\":[{\"path\":\"/\"},{\"path\":\"/notes\"},{\"path\":\"/notes/:noteId\"},{\"path\":\"/login\"}]}}", "", ACCOUNTS, LIMITS, "client/src/App.tsx");
         var properties = new com.code.pal.agent.config.AgentProperties();
         properties.setEngine("smart");
         assertTrue(BlueprintPlanner.supports(properties, ACCOUNTS, "client/src/App.tsx"));
@@ -158,8 +158,33 @@ class BlueprintCompilerTest {
         assertTrue(requests.getLast().messages().getLast().content().contains("A server app needs at least one kind of record"));
         assertTrue(contract.routes().stream().anyMatch(route -> route.path().equals("/login") && route.owner().equals(BlueprintCompiler.ACCOUNT_UNIT)));
         assertEquals(input.id(), contract.id());
-        assertTrue(contract.routes().stream().anyMatch(route -> route.path().equals("/notes/:id") && route.owner().equals("crud_notes")));
+        assertTrue(contract.routes().stream().anyMatch(route -> route.path().equals("/notes/:noteId") && route.owner().equals("crud_notes")));
+        assertTrue(contract.routes().stream().noneMatch(route -> route.path().equals("/notes/:id")));
+        assertTrue(new ContractScaffold(MAPPER).render(contract, "Notes", path -> null, UUID.randomUUID())
+                .get("client/src/pages/NoteDetailPage.tsx").contains("id={params[\"noteId\"] ?? ''}"));
         assertTrue(contract.units().stream().noneMatch(unit -> unit.id().equals("page_noteDetails")));
+    }
+
+    @Test
+    void writtenPagesShareOnePromptPrefixSoProvidersCanCacheIt() {
+        var blueprint = BlueprintCompiler.normalize(json("""
+                {"name":"Arcade","entities":[{"name":"Score","fields":[{"name":"player","required":true}]}],
+                 "pages":[{"path":"/","kind":"landing"},{"path":"/play","title":"Play","kind":"custom"},{"path":"/scores","kind":"list","entity":"Score"}]}
+                """));
+        var contract = BlueprintCompiler.compile(blueprint, UUID.randomUUID(), ACCOUNTS, LIMITS);
+        var shared = Map.of(contract.clientRoot() + "types.ts", new UnitGenerator.FileView("sha256:" + "a".repeat(64), "export {}"));
+        var prefixes = new ArrayList<String>();
+        for (var unit : contract.units().stream().filter(unit -> unit.id().startsWith("page_")).toList()) {
+            var snapshot = new HashMap<>(shared);
+            unit.ownedPaths().forEach(path -> snapshot.put(path, new UnitGenerator.FileView("sha256:" + "b".repeat(64), "export default function P() { return null }")));
+            String data = MAPPER.writeValueAsString(UnitGenerator.stableFirst(new UnitGenerator.Input(contract, unit, "Build it", "{}", snapshot, "")));
+            int files = data.indexOf("\"snapshot\":");
+            int owned = data.indexOf("\"client/src/pages/", files);
+            assertTrue(files > 0 && owned > data.indexOf("types.ts", files) && data.indexOf("types.ts", files) > 0, data);
+            prefixes.add(data.substring(0, owned));
+        }
+        assertEquals(2, prefixes.size());
+        assertEquals(prefixes.getFirst(), prefixes.getLast());
     }
 
     private static Map<?, ?> json(String text) {
