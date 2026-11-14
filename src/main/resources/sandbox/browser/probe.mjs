@@ -176,7 +176,10 @@ listeners.push((message) => {
     case "Network.responseReceived":
       if (p.response?.status >= 400 && sameOrigin(p.response.url) && !ignored(p.response.url)
           && !preAccountRefusal(p.response.status, p.response.url)) {
-        add("asset", `${p.response.status} ${p.response.url}`, null);
+        const api = (p.response.url ?? "").startsWith(siteUrl + "api/");
+        if (!api) add("asset", `${p.response.status} ${p.response.url}`, null);
+        else if (![400, 401, 403, 409, 422, 429].includes(p.response.status))
+          add("api", `The app's request to ${p.response.url} returned ${p.response.status}`, null);
       }
       break;
     case "Network.loadingFailed": {
@@ -239,6 +242,14 @@ if (loaded && acceptanceData.authSetup) {
     for (let waited=0; !loaded && waited<10000; waited+=100) await new Promise(resolve=>setTimeout(resolve,100));
     await new Promise(resolve=>setTimeout(resolve,settleMs));
   }
+}
+
+const browseRoute = typeof acceptanceData.browse?.route === 'string' && /^\/[A-Za-z0-9/_-]{0,200}$/.test(acceptanceData.browse.route)
+  ? acceptanceData.browse.route : null;
+if (acceptanceData.browse && !browseRoute) add('load', 'The requested route is not a local app route', null);
+if (loaded && browseRoute && browseRoute !== '/') {
+  await send('Runtime.evaluate', { expression: `location.hash = ${JSON.stringify('#' + browseRoute)}` }, sessionId);
+  await new Promise((resolve) => setTimeout(resolve, settleMs));
 }
 
 // A page that rendered nothing visible is broken even without an error (for example an empty #root).
@@ -378,6 +389,17 @@ const auditContrast = async (where) => {
 };
 if (loaded && !blank) await measureMobile("on load");
 if (loaded && !blank) await auditContrast("on load");
+if (acceptanceData.browse) {
+  const seen = loaded ? await send('Runtime.evaluate', { returnByValue: true, expression: `({
+    route: location.hash.startsWith('#/') ? location.hash.slice(1) : location.pathname,
+    title: document.title,
+    text: (document.body?.innerText ?? '').replace(/[ \\t]+/g, ' ').replace(/\\n\\s*\\n+/g, '\\n').trim().slice(0, 6000)
+  })` }, sessionId) : null;
+  clearTimeout(timer);
+  chrome.kill("SIGKILL");
+  server.close();
+  finish({ loaded, page, interactions: [], acceptance: [], outcomes: [], browse: seen?.result?.result?.value ?? null });
+}
 
 // Exercise each visible control once. Links are not followed (that would leave the page); a control
 // is found again by its position each time, since the page may re-render after every action.

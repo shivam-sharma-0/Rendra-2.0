@@ -94,20 +94,22 @@ public final class ApiBehaviorProbe {
                         if (bytes.length > 65_536)
                             throw new IllegalStateException("Response limit exceeded");
                         if (response.statusCode() != step.status())
-                            throw new IllegalStateException("Unexpected response status");
+                            throw new IllegalStateException("expected status " + step.status() + ", got " + response.statusCode());
                         if (step.assertPointer() != null || step.captureVariable() != null) {
                             var json = mapper.readTree(new String(bytes, StandardCharsets.UTF_8));
                             if (step.assertPointer() != null) {
                                 var asserted = json.at(step.assertPointer());
                                 if (!asserted.isValueNode() || asserted.isNull() || !asserted.asText()
                                         .equals(expand(step.assertValue() == null ? "" : step.assertValue(), values)))
-                                    throw new IllegalStateException("Expected response value missing");
+                                    throw new IllegalStateException((asserted.isMissingNode() || asserted.isNull()
+                                            ? "the response has no value at " : "the response has a different value at ")
+                                            + step.assertPointer());
                             }
                             if (step.captureVariable() != null) {
                                 var value = json.at(step.capturePointer());
                                 if (!value.isValueNode() || value.isNull() || value.asString().isBlank()
                                         || value.asString().length() > 8192)
-                                    throw new IllegalStateException("Expected fixture value missing");
+                                    throw new IllegalStateException("the response has no usable value at " + step.capturePointer());
                                 values.put(step.captureVariable(), value.asString());
                             }
                         }
@@ -125,7 +127,9 @@ public final class ApiBehaviorProbe {
                 if (RunCancellation.current().isCancelled())
                     throw new CancellationException("Validation cancelled");
                 checks.add(new ValidationCheck("API_" + step.id(), ValidationCheck.Outcome.FAIL, true,
-                        "Candidate acceptance did not pass"));
+                        step.method() + " " + step.path() + " did not pass: " + (failure instanceof IllegalStateException
+                                && failure.getMessage() != null ? failure.getMessage()
+                                : "the request failed (" + failure.getClass().getSimpleName() + ")")));
                 break;
             }
         }

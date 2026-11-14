@@ -17,6 +17,13 @@ Runtime check: after type-check and build pass, a headless browser loads the sit
 and selects each visible control once. RUNTIME_EXCEPTION, CONSOLE_ERROR, MISSING_ASSET and BLANK_PAGE
 name the failing function or control. Fix the code that fails, not the check.
 
+Looking at the app: browse({route}) opens one route of the staged app (signed in when it has accounts) and
+returns the route reached, its visible text and any crash, console error, invisible text or mobile overflow.
+Browse a page you created or changed, or the route a failed check names, instead of guessing; each call
+builds the app, so browse once per page after its code is complete. checkApi({method, path, body, signedIn})
+sends one request to the staged server on a scratch database and returns its status and JSON body; use it
+for an endpoint whose behaviour is not obvious from the code or that a failed API check names.
+
 Dependencies: declare packages in package.json with versions that exist on npm. The backend installs them
 with the project's own package manager (lifecycle scripts disabled). Never create node_modules, never
 write or edit a lockfile, never ask for install commands. After changing dependencies, call

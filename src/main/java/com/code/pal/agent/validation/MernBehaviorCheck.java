@@ -95,6 +95,40 @@ public final class MernBehaviorCheck {
         return List.copyOf(checks);
     }
 
+    public record ApiView(boolean reached, Integer status, String body, String problem) {
+    }
+
+    public ApiView request(AgentContext ctx, String method, String path, String body, boolean signedIn) {
+        String root = ".codepal/api-check/" + ctx.runId() + "/" + UUID.randomUUID();
+        String name = "api-" + UUID.randomUUID().toString().replace("-", "");
+        String candidate = null;
+        GeneratedDatabaseService.ValidationDatabase db = null;
+        try {
+            candidate = changes.createValidationCandidate(ctx, "api-check");
+            String failure = servers.build(ctx.projectId(), candidate, root);
+            if (failure != null)
+                return new ApiView(false, null, null, "The server did not build: " + failure);
+            db = databases.openValidation(ctx.projectId(), ctx.runId(), sandbox.databaseAddress());
+            var lease = db;
+            sandbox.startServer(ctx.projectId(), name, root, List.of("node", servers.entry(ctx.projectId(), root)),
+                    Map.of("MONGODB_URI", lease.uri(), "NODE_ENV", "test"), 3000);
+            return ApiRequestProbe.send(() -> sandbox.server(ctx.projectId(), name), method, path, body, signedIn);
+        } catch (CancellationException cancelled) {
+            throw cancelled;
+        } catch (RuntimeException unavailable) {
+            return new ApiView(false, null, null, "The API check could not run: " + unavailable.getClass().getSimpleName());
+        } finally {
+            try {
+                sandbox.stopServer(ctx.projectId(), name);
+                databases.closeValidation(db);
+                if (candidate != null)
+                    sandbox.removeTree(ctx.projectId(), candidate);
+                sandbox.removeTree(ctx.projectId(), root);
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
     private static final class CandidateBuildFailed extends RuntimeException {
     }
 }

@@ -722,7 +722,8 @@ public class DockerProjectEnvironment implements SandboxPort {
             args.addAll(List.of("-e", "CODEPAL_SUPABASE_ORIGIN=" + DockerSupabaseScratch.BROWSER_ORIGIN));
         }
         if (properties.getVisualReview().isEnabled() && RunCancellation.current().runId() != null) {
-            String evidence = prepareBrowserEvidence(projectId);
+            String evidence = prepareBrowserEvidence(projectId,
+                    acceptanceJson != null && acceptanceJson.contains("\"browse\":{") ? "browse" : "current");
             args.addAll(List.of("--mount", "type=bind,source=" + environment(projectId).hostPath()
                     + "/" + evidence + ",target=/evidence", "-e", "CODEPAL_BROWSER_EVIDENCE_DIR=/evidence"));
         }
@@ -738,8 +739,8 @@ public class DockerProjectEnvironment implements SandboxPort {
     }
 
     /** At most two current captures per project; no image history or publicly served files. */
-    private String prepareBrowserEvidence(UUID projectId) {
-        String relative = ".codepal/browser-evidence/current";
+    private String prepareBrowserEvidence(UUID projectId, String folder) {
+        String relative = ".codepal/browser-evidence/" + folder;
         try {
             requirePlainCommandRoot(projectId, ".");
             Path parent = storage.projectDir(projectId);

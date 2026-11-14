@@ -19,7 +19,9 @@ public class ValidateChangesTool implements AgentTool {
 
     @Override
     public String description() {
-        return "Run the required structural, TypeScript, and build validation gate for the current staged revision. Must pass after the last mutation before finishing.";
+        return "Run every required check on the current staged revision: structure, type check, build, the browser "
+                + "check and, for apps with a server, the API behaviour checks. Failures name the file, step or route. "
+                + "Must pass after the last mutation before finishing.";
     }
 
     @Override

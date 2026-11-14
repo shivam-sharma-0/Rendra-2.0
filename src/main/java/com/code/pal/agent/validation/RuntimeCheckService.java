@@ -352,6 +352,57 @@ public class RuntimeCheckService {
         return probe;
     }
 
+    public record BrowseView(boolean loaded, String route, String title, String text, List<String> problems,
+            List<String> warnings, List<String> screenshots) {
+    }
+
+    public BrowseView browseRoute(AgentContext context, String route) {
+        UUID projectId = context.projectId();
+        String copy = changeSets.createValidationCandidate(context, "browse");
+        try {
+            String site = site(context, copy, null);
+            if (site == null)
+                return new BrowseView(false, route, null, null,
+                        List.of("The app did not build; fix the type check and build before browsing"), List.of(), List.of());
+            BehaviorCriteria criteria = behaviorCriteria == null ? null : behaviorCriteria.current(context);
+            if (criteria == null && behaviorCriteria != null)
+                criteria = behaviorCriteria.regression(context);
+            boolean mern = "mern".equals(stacks.detect(files, projectId, copy).id());
+            var auth = mern ? AccountAcceptance.browserSession(criteria, projectId) : Map.<String, String>of();
+            var data = new LinkedHashMap<String, Object>(Map.of("schema", 1, "actions", List.of(), "browse", Map.of("route", route)));
+            if (!auth.isEmpty())
+                data.put("authSetup", auth);
+            var result = browse(context, copy, site, objectMapper.writeValueAsString(data), mern, null);
+            String json = readable(result) ? result.stdout().lines().filter(line -> line.startsWith("{"))
+                    .reduce((first, last) -> last).orElse(null) : null;
+            if (json == null || json.length() > 64_000)
+                return new BrowseView(false, route, null, null, List.of("The browser could not open the app"), List.of(), List.of());
+            JsonNode report = objectMapper.readTree(json);
+            var problems = new ArrayList<String>();
+            if (report.hasNonNull("error"))
+                problems.add("The browser stopped: " + report.path("error").asString(""));
+            for (JsonNode issue : report.path("issues"))
+                if (!"visual".equals(issue.path("kind").asString("")))
+                    problems.add(issue.path("message").asString(""));
+            var warnings = new ArrayList<String>();
+            report.path("visual").path("warnings").forEach(warning -> warnings.add(warning.asString("")));
+            var screenshots = new ArrayList<String>();
+            report.path("visual").path("captures").forEach(capture ->
+                    screenshots.add(".codepal/browser-evidence/browse/" + capture.path("name").asString("") + ".png"));
+            JsonNode seen = report.path("browse");
+            log.info("browse_tool runId={} route={} loaded={} problems={}", context.runId(), route,
+                    report.path("loaded").asBoolean(false), problems.size());
+            return new BrowseView(report.path("loaded").asBoolean(false), seen.path("route").asString(route),
+                    seen.path("title").asString(null), seen.path("text").asString(null), List.copyOf(problems),
+                    List.copyOf(warnings), List.copyOf(screenshots));
+        } finally {
+            try {
+                sandbox.removeTree(projectId, copy);
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
     private SandboxPort.CommandResult browse(AgentContext context, String copy, String site, String acceptance, boolean mern,
             SupabaseScratch.Session cloud) {
         if (cloud != null) return sandbox.browseWithSupabase(context.projectId(), site,
@@ -470,6 +521,7 @@ public class RuntimeCheckService {
         case "acceptance" -> "BROWSER_ACCEPTANCE_FAILED";
         case "layout" -> "MOBILE_OVERFLOW";
         case "contrast" -> "TEXT_CONTRAST";
+        case "api" -> "API_REQUEST_FAILED";
         case "visual" -> "UI_ACCESSIBILITY";
         default -> "CONSOLE_ERROR";
         };

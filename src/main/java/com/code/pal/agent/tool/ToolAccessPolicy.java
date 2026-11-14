@@ -14,7 +14,7 @@ public final class ToolAccessPolicy {
     private static final Set<String> PLAN = Set.of("setPlan", "updatePlanStep");
     private static final Set<String> BUILD = Set.of("startProject", "createFile", "createFiles", "patchFile", "deleteFile",
             "renameFile", "copyFile", "refreshDependencies", "getDiagnostics", "runTypeCheck", "runBuild", "runTests",
-            "validateChanges", "finishBuild", "retireAcceptanceCheck");
+            "validateChanges", "finishBuild", "retireAcceptanceCheck", "browse", "checkApi");
 
     private ToolAccessPolicy() {}
 
