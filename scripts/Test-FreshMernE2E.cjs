@@ -9,24 +9,31 @@ async function renew(){const response=await fetch(base+'/api/auth/refresh',{meth
 async function api(route,method='GET',body){let response=await send(route,method,body);if(response.status===401&&refreshCookie&&!route.startsWith('/api/auth/')&&await renew())response=await send(route,method,body);const text=await response.text();const result=text?JSON.parse(text):{};if(!response.ok)throw Error('HTTP '+response.status+' at '+route+': '+(result.message||result.error||'refused'));return result;}
 const fixture=require('./fixtures/planner-intake.json');
 const personal=scenario==='personal-todo';
-const prompt=personal?fixture.prompt:fixture.fullStackPrompt;
+const custom=process.env.CODEPAL_E2E_PROMPT;
+const prompt=custom||(personal?fixture.prompt:fixture.fullStackPrompt);
 (async()=>{
     const id=crypto.randomUUID().replaceAll('-','');const auth=await api('/api/auth/signup','POST',{email:'codex-fresh-'+id+'@example.invalid',password:crypto.randomBytes(16).toString('hex'),name:'Fresh app E2E'});token=auth.accessToken;
     const workspaces=await api('/api/workspaces');const project=await api('/api/workspaces/'+workspaces[0].id+'/projects','POST',{name:'Fresh Todo E2E',type:'BUILD',pendingPrompt:prompt});
     fs.writeFileSync(path.join(evidence,'project.json'),JSON.stringify({id:project.id}));
     const prefix='/api/projects/'+project.id+'/requirements';let requirements=await api(prefix+'/start','POST');
+    if(custom)for(const question of requirements.questions.filter(q=>q.required&&!q.selectedOption&&!q.otherText))
+        requirements=await api(prefix+'/questions/'+question.id,'PUT',{selectedOption:question.recommendedOption||question.options?.[0]?.id,otherText:null,revision:requirements.revision});
     fs.writeFileSync(path.join(evidence,'requirements-intake.json'),JSON.stringify(requirements,null,2));
     fs.writeFileSync(path.join(evidence,'model-usage.json'),JSON.stringify(await api('/api/projects/'+project.id+'/model-usage'),null,2));
-    if(!requirements.complete||requirements.questions.some(q=>!q.key.startsWith('platform_'))
+    if(!custom&&(!requirements.complete||requirements.questions.some(q=>!q.key.startsWith('platform_'))
             ||requirements.questions.some(q=>q.required&&!q.selectedOption&&!q.otherText)
             ||requirements.questions.find(q=>q.key==='platform_storage')?.selectedOption!=='MERN'
             ||!(personal?['NONE','ACCOUNTS']:['ACCOUNTS']).includes(requirements.questions.find(q=>q.key==='platform_auth')?.selectedOption)
-            ||(!personal&&(requirements.review?.pages?.length||0)<3))throw Error('Complete server-backed task scope was not inferred without redundant questions');
+            ||(!personal&&(requirements.review?.pages?.length||0)<3)))throw Error('Complete server-backed task scope was not inferred without redundant questions');
+    const buildStarted=Date.now();
     requirements=await api(prefix+'/approve','POST',{revision:requirements.revision});
     fs.writeFileSync(path.join(evidence,'requirements.json'),JSON.stringify(requirements,null,2));
     // Wait out the run's own 15-minute contract limit (plus a minute) instead of reporting a live run as failed.
-    let run;for(let until=Date.now()+960000;Date.now()<until;){const runs=await api('/api/projects/'+project.id+'/agent-runs');run=runs[0];if(run&&!fs.existsSync(path.join(evidence,'build.json')))fs.writeFileSync(path.join(evidence,'build.json'),JSON.stringify({projectId:project.id,runId:run.id,status:run.status,evidence:'initial run identity; final result pending'}));if(run&&['DONE','FAILED','CANCELLED','AWAITING_INPUT'].includes(run.status))break;await new Promise(resolve=>setTimeout(resolve,1000));}
+    let run;for(let until=Date.now()+(custom?1_900_000:960000);Date.now()<until;){const runs=await api('/api/projects/'+project.id+'/agent-runs');run=runs[0];if(run&&!fs.existsSync(path.join(evidence,'build.json')))fs.writeFileSync(path.join(evidence,'build.json'),JSON.stringify({projectId:project.id,runId:run.id,status:run.status,evidence:'initial run identity; final result pending'}));if(run&&['DONE','FAILED','CANCELLED','AWAITING_INPUT'].includes(run.status))break;await new Promise(resolve=>setTimeout(resolve,1000));}
     const root=path.join(workspace,project.id);const result={projectId:project.id,runId:run?.id,status:run?.status,error:run?.error,codeSavedAt:run?.codeSavedAt,previewStatus:run?.previewStatus,promptTokens:run?.promptTokens,completionTokens:run?.completionTokens,changed:fs.existsSync(path.join(root,'client/src/App.tsx'))&&fs.existsSync(path.join(root,'server/src/index.ts')),provider:'configured FREE routes',scenario:(personal?'personal Todo; ':'account-backed Todo; ')+'actual requirements approval/planner/unit generation/browser API/CRUD/restart/save'};
+    result.benchmark=process.env.CODEPAL_E2E_NAME||null;result.seconds=Math.round((Date.now()-buildStarted)/1000);
+    const shots=path.join(root,'.codepal/browser-evidence/current');
+    if(fs.existsSync(shots))for(const name of fs.readdirSync(shots).filter(file=>file.endsWith('.png')))fs.copyFileSync(path.join(shots,name),path.join(evidence,name));
     fs.writeFileSync(path.join(evidence,'build.json'),JSON.stringify(result,null,2));
     fs.writeFileSync(path.join(evidence,'model-usage.json'),JSON.stringify(await api('/api/projects/'+project.id+'/model-usage'),null,2));
     if(run?.id)await require('./AgentRunEvidence.cjs').retainRunEvidence(api,project.id,run,evidence);

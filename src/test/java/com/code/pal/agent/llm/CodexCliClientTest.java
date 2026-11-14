@@ -55,4 +55,13 @@ class CodexCliClientTest {
         assertEquals("plain text answer", CodexCliClient.parse("plain text answer", true).content(), "a non-protocol reply is the reply");
         assertEquals("{\"files\":[]}", CodexCliClient.parse("{\"files\":[]}", false).content(), "tool-free calls keep the raw JSON");
     }
+    @Test void theJsonEventLogGivesUsageAndTheProviderError() throws Exception {
+        var log = java.nio.file.Files.createTempFile("codex", ".log");
+        java.nio.file.Files.writeString(log, String.join("\n", "{\"type\":\"thread.started\"}",
+                "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":14206,\"cached_input_tokens\":14080,\"output_tokens\":5,\"reasoning_output_tokens\":0}}"));
+        assertEquals(new LlmClient.Usage(14206, 5, 14080, 0), CodexCliClient.usage(log));
+        java.nio.file.Files.writeString(log, "{\"type\":\"error\",\"message\":\"You've hit your usage limit.\"}\n");
+        assertEquals(": ERROR: You've hit your usage limit.", CodexCliClient.failure(log));
+        assertNull(CodexCliClient.usage(log));
+    }
 }

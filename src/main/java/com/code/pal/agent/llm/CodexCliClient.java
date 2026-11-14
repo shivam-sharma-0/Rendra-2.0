@@ -36,7 +36,7 @@ final class CodexCliClient {
         try {
             directory = Files.createTempDirectory("rendra-codex-");
             Path last = directory.resolve("last-message.txt");
-            var command = new ArrayList<>(List.of(dev.getCodexCommand(), "exec", "--skip-git-repo-check", "--sandbox",
+            var command = new ArrayList<>(List.of(dev.getCodexCommand(), "exec", "--json", "--skip-git-repo-check", "--sandbox",
                     "read-only", "--ephemeral", "--ignore-rules", "--color", "never", "-C", directory.toString(), "-o",
                     last.toString(), "-c", "model_reasoning_effort=\"" + effort(dev) + "\""));
             if (request.model() != null && !request.model().isBlank() && !request.model().equals("default"))
@@ -60,12 +60,15 @@ final class CodexCliClient {
                     throw new LlmException("The developer Codex route timed out");
                 }
             }
-            log.info("codex_call_finished model={} exit={} elapsedMs={}", request.model(), process.exitValue(),
-                    (System.nanoTime() - started) / 1_000_000);
+            var usage = usage(directory.resolve("codex.log"));
+            log.info("codex_call_finished model={} exit={} elapsedMs={} inputTokens={} cachedTokens={} outputTokens={}", request.model(),
+                    process.exitValue(), (System.nanoTime() - started) / 1_000_000, usage == null ? null : usage.promptTokens(),
+                    usage == null ? null : usage.cachedInputTokens(), usage == null ? null : usage.completionTokens());
             if (process.exitValue() != 0 || !Files.isRegularFile(last))
                 throw new LlmException("The developer Codex route failed with exit " + process.exitValue()
                         + failure(directory.resolve("codex.log")));
-            return parse(Files.readString(last, StandardCharsets.UTF_8).strip(), request.tools() != null && !request.tools().isEmpty());
+            var result = parse(Files.readString(last, StandardCharsets.UTF_8).strip(), request.tools() != null && !request.tools().isEmpty());
+            return new LlmClient.LlmResult(result.content(), result.reasoning(), result.toolCalls(), usage, result.finishReason());
         } catch (IOException unavailable) {
             throw new LlmException("The developer Codex route could not start", unavailable);
         } catch (InterruptedException interrupted) {
@@ -136,10 +139,38 @@ final class CodexCliClient {
 
     static String failure(Path log) {
         try (Stream<String> lines = Files.lines(log, StandardCharsets.UTF_8)) {
-            return lines.map(String::strip).filter(line -> line.startsWith("ERROR:")).reduce((first, second) -> second)
-                    .map(line -> ": " + line.substring(0, Math.min(200, line.length()))).orElse("");
+            return lines.map(String::strip).map(CodexCliClient::errorText).filter(text -> !text.isEmpty())
+                    .reduce((first, second) -> second)
+                    .map(text -> ": " + text.substring(0, Math.min(200, text.length()))).orElse("");
         } catch (IOException | RuntimeException unreadable) {
             return "";
+        }
+    }
+
+    private static String errorText(String line) {
+        if (line.startsWith("ERROR:"))
+            return line;
+        if (!line.startsWith("{") || !line.contains("\"type\":\"error\"") && !line.contains("\"type\":\"turn.failed\""))
+            return "";
+        try {
+            var event = JSON.readTree(line);
+            String message = event.path("message").asString(event.path("error").path("message").asString(""));
+            return message.isBlank() ? "" : "ERROR: " + message;
+        } catch (RuntimeException notJson) {
+            return "";
+        }
+    }
+
+    static LlmClient.Usage usage(Path log) {
+        try (Stream<String> lines = Files.lines(log, StandardCharsets.UTF_8)) {
+            return lines.filter(line -> line.startsWith("{") && line.contains("\"type\":\"turn.completed\""))
+                    .reduce((first, second) -> second).map(line -> JSON.readTree(line).path("usage"))
+                    .filter(JsonNode::isObject)
+                    .map(usage -> new LlmClient.Usage(usage.path("input_tokens").asInt(0), usage.path("output_tokens").asInt(0),
+                            usage.path("cached_input_tokens").asInt(0), usage.path("reasoning_output_tokens").asInt(0)))
+                    .orElse(null);
+        } catch (IOException | RuntimeException unreadable) {
+            return null;
         }
     }
 

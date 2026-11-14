@@ -1,0 +1,20 @@
+{
+  "cases": [
+    {
+      "name": "todo",
+      "prompt": "Build a complete, polished personal Todo application with private user accounts. Include sign-up, sign-in and sign-out, a task dashboard at /, task details/edit at /tasks/:id, and settings at /settings with working navigation. Users can create, view, edit, complete and delete their own tasks, search and filter them, and keep saved data after refresh and server restart. Include all required frontend pages, backend APIs, persistent database behavior and account ownership. Make the design cohesive, responsive and accessible, with helpful loading, empty, validation, error and success states. Choose sensible implementation defaults without generic use-case or technology questions. Build the real application rather than a demo or static mockup; prepare it for eventual one-click publishing without claiming deployment is already supported."
+    },
+    {
+      "name": "shadow-maze",
+      "prompt": "Game Idea: Shadow Maze – The Ultimate Puzzle Challenge\n\nEk modern, interactive puzzle-adventure web application banao jisme player ko har level par unique mazes, hidden traps, logical puzzles aur limited time ke andar exit find karna ho. Har next level progressively harder ho, with intelligent obstacles, power-ups, achievements, stars, hints aur boss challenges.\n\nApplication mein user authentication, player dashboard, 30+ levels, XP & ranking system, global leaderboard, progress auto-save, sound effects, animations, dark/light mode, responsive UI, game statistics aur admin panel ho. Design premium gaming experience jaisa ho, with smooth transitions, polished UI, proper error handling aur fully functional end-to-end features."
+    },
+    {
+      "name": "store",
+      "prompt": "Build a complete online store with customer accounts. Customers browse a product catalog with categories, search and price filters, view product details with images and reviews, add items to a cart, check out with a shipping address, and see their order history and order status. Include a wishlist, product ratings and reviews, and an admin panel where store staff manage products, categories, stock levels, orders and order status, and see sales statistics. Responsive premium UI with loading, empty and error states."
+    },
+    {
+      "name": "crm",
+      "prompt": "Build a sales CRM for a small team with user accounts. Track companies, contacts, deals with pipeline stages (lead, qualified, proposal, won, lost), tasks with due dates, and notes on every record. Include a kanban pipeline board, a dashboard with deal value per stage and upcoming tasks, search and filters on every list, activity history per contact, and CSV-style export of deals. Data must persist and each user sees their own team's records."
+    }
+  ]
+}

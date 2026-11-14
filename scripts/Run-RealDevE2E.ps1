@@ -19,7 +19,9 @@ param(
     # Codex first on every text route (requirements, planning, units, repair, chat, tool-loop edits); free models stay fallbacks.
     [switch]$CodexAll,
     [ValidateSet('gpt-5.6-luna','gpt-5.6-sol')][string]$CodexModel='gpt-5.6-sol',
-    [string]$FollowUp
+    [string]$FollowUp,
+    [string]$PromptFile,
+    [string]$BenchmarkName
 )
 $ErrorActionPreference='Stop'
 $selectedGates = @(@($PhaseOneGate, $PhaseTwoGate, $AgentBenchmark, $ViteGeneration, $PlanningIntake) | Where-Object { $_ })
@@ -262,6 +264,8 @@ END $codex$;
     }
     # mern only: after the saved build, the driver sends this change and checks it patched the app.
     $env:CODEPAL_E2E_FOLLOW_UP=$FollowUp
+    $env:CODEPAL_E2E_PROMPT=if($PromptFile){(Get-Content -LiteralPath $PromptFile -Raw | ConvertFrom-Json).prompt}else{''}
+    $env:CODEPAL_E2E_NAME=$BenchmarkName
     $priorNativePreference=$ErrorActionPreference
     try {
         # Native stderr must not skip durable usage export; the explicit exit code still fails the gate below.
