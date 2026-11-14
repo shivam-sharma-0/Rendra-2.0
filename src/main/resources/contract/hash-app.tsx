@@ -7,7 +7,7 @@ function Page({ component: Component }: { component: ComponentType<{params: Reco
   return <Component params={params} />
 }
 
-const navigation = routes.filter(route => !route.path.includes(':')
+const navigation = routes.filter(route => !route.hidden && !route.path.includes(':')
   && !/(^|\/)(auth|log-?in|sign-?in|sign-?up|register)(\/|$)/i.test(route.path))
 
 function label(path: string, full = false): string {
@@ -28,7 +28,7 @@ export default function App() {
   return <HashRouter>
     <header className="app-header">
       <div className="app-container app-header__bar">
-        <Link to="/" className="app-brand">{APP_NAME}</Link>
+        <Link to="/" className="app-brand">{APP_MARK && <span className="app-brand__mark" aria-hidden="true">{APP_MARK}</span>}{APP_NAME}</Link>
         {navigation.length > 1 && <nav className="app-nav" aria-label="Main">
           {navigation.slice(0, navigation.length > 6 ? 5 : 6).map(route =>
             <NavLink key={route.path} to={route.path} end={route.path === '/'}>{navLabel(route.path)}</NavLink>)}
@@ -48,5 +48,6 @@ export default function App() {
         <Route path="*" element={<section className="app-card app-stack"><h1>Page not found</h1><p className="app-muted">The page you requested does not exist.</p><Link to="/">Go to the homepage</Link></section>} />
       </Routes>
     </div>
+    <Toaster />
   </HashRouter>
 }

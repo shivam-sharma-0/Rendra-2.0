@@ -9,6 +9,7 @@ import com.code.pal.project.capability.BuildDecisions;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 public final class BlueprintCompiler {
@@ -46,7 +47,10 @@ public final class BlueprintCompiler {
         while (later.size() > Blueprint.LATER)
             later.removeLast();
         String preset = DesignPresets.name(text(raw.get("preset"), 40, null));
-        return new Blueprint(text(raw.get("name"), 60, "App"), preset == null ? "clean" : preset, color(raw.get("accent")),
+        String name = text(raw.get("name"), 60, "App");
+        String icon = Blueprint.ICONS.contains(text(raw.get("icon"), 40, "")) ? text(raw.get("icon"), 40, "")
+                : iconFor(name, entities.isEmpty() ? "Sparkles" : entities.getFirst().icon());
+        return new Blueprint(name, icon, preset == null ? "clean" : preset, color(raw.get("accent")),
                 entities, pages, features, later.stream().distinct().limit(Blueprint.LATER).toList());
     }
 
@@ -83,10 +87,11 @@ public final class BlueprintCompiler {
             }
         }
         if (accounts) {
-            String signIn = pages + "SignInPage.tsx";
-            owned.put(ACCOUNT_UNIT, List.of(signIn));
-            objectives.put(ACCOUNT_UNIT, "Platform sign-in page; written by the platform, not the model");
+            String signIn = pages + "SignInPage.tsx", settings = pages + "AccountSettingsPage.tsx";
+            owned.put(ACCOUNT_UNIT, List.of(signIn, settings));
+            objectives.put(ACCOUNT_UNIT, "Platform sign-in and account pages; written by the platform, not the model");
             routes.add(new BuildContract.Route("/sign-in", signIn, ACCOUNT_UNIT));
+            routes.add(new BuildContract.Route(Blueprint.ACCOUNT_PATH, settings, ACCOUNT_UNIT));
         }
         var usedComponents = routes.stream().map(route -> route.componentPath().toLowerCase(Locale.ROOT))
                 .collect(Collectors.toCollection(HashSet::new));
@@ -214,7 +219,7 @@ public final class BlueprintCompiler {
                         steps.add(new BrowserAction(p + "_fill" + index++, BrowserKind.FILL, "#" + p + "-" + field.name(),
                                 field.name().equals(entity.display()) ? value : "Browser " + Blueprint.words(field.name()).toLowerCase(Locale.ROOT)));
                 steps.add(new BrowserAction(p + "_save", BrowserKind.CLICK, "#" + p + "-save", null));
-                steps.add(new BrowserAction(p + "_created", BrowserKind.ASSERT_TEXT, "[data-crud=\"" + p + "\"] .app-grid", value));
+                steps.add(new BrowserAction(p + "_created", BrowserKind.ASSERT_TEXT, "[data-crud=\"" + p + "\"] [data-records]", value));
             }
             groups.add(Map.entry(crudUnit(entity), steps));
         }
@@ -253,6 +258,7 @@ public final class BlueprintCompiler {
             case BOOLEAN -> "true";
             case DATE -> quote("2026-01-15");
             case ENUM -> quote(field.options().getFirst());
+            case IMAGE -> quote("https://images.example/sample.jpg");
             };
             body.add(quote(field.name()) + ":" + value);
         }
@@ -334,8 +340,9 @@ public final class BlueprintCompiler {
                 kind = Blueprint.Kind.ENUM;
             if (kind == Blueprint.Kind.ENUM && options.isEmpty())
                 kind = Blueprint.Kind.STRING;
-            fields.add(new Blueprint.Field(field.substring(0, Math.min(40, field.length())), kind,
-                    Boolean.TRUE.equals(item.get("required")), kind == Blueprint.Kind.ENUM ? options : List.of()));
+            String fieldName = field.substring(0, Math.min(40, field.length()));
+            fields.add(new Blueprint.Field(fieldName, kind, kind != Blueprint.Kind.IMAGE && Boolean.TRUE.equals(item.get("required")),
+                    kind == Blueprint.Kind.ENUM ? options : List.of(), kind == Blueprint.Kind.ENUM ? tones(options, item.get("tones")) : Map.of()));
         }
         String requested = Blueprint.lower(identifierWords(text(raw.get("display"), 80, "")));
         var display = fields.stream().filter(field -> field.name().equals(requested) && field.textual()).findFirst()
@@ -345,11 +352,11 @@ public final class BlueprintCompiler {
             if (fields.size() == Blueprint.FIELDS)
                 fields.removeLast();
             display = new Blueprint.Field(fields.stream().anyMatch(field -> field.name().equals("name")) ? "title" : "name",
-                    Blueprint.Kind.STRING, true, List.of());
+                    Blueprint.Kind.STRING, true, List.of(), Map.of());
             fields.addFirst(display);
         } else if (!display.required()) {
             int index = fields.indexOf(display);
-            display = new Blueprint.Field(display.name(), display.kind(), true, List.of());
+            display = new Blueprint.Field(display.name(), display.kind(), true, List.of(), Map.of());
             fields.set(index, display);
         }
         String shown = display.name();
@@ -366,7 +373,11 @@ public final class BlueprintCompiler {
                         && (field.kind() == Blueprint.Kind.ENUM || field.kind() == Blueprint.Kind.BOOLEAN)).map(Blueprint.Field::name)
                 .findFirst().orElseGet(() -> fields.stream().filter(field -> field.kind() == Blueprint.Kind.ENUM)
                         .map(Blueprint.Field::name).findFirst().orElse(null));
-        return new Blueprint.Entity(name, plural, access(text(raw.get("access"), 40, "owner")), fields, shown, search, filter);
+        String icon = Blueprint.ICONS.contains(text(raw.get("icon"), 40, "")) ? text(raw.get("icon"), 40, "") : iconFor(name + " " + plural, "Layers");
+        long facts = fields.stream().filter(field -> !field.textual() && field.kind() != Blueprint.Kind.IMAGE).count();
+        String layout = Blueprint.LAYOUTS.contains(text(raw.get("layout"), 20, "")) ? text(raw.get("layout"), 20, "")
+                : facts >= 4 && fields.stream().noneMatch(field -> field.kind() == Blueprint.Kind.IMAGE) ? "table" : "grid";
+        return new Blueprint.Entity(name, plural, icon, layout, access(text(raw.get("access"), 40, "owner")), fields, shown, search, filter);
     }
 
     private static List<Blueprint.Page> pages(List<?> raw, List<Blueprint.Entity> entities, List<Blueprint.Feature> features,
@@ -379,8 +390,13 @@ public final class BlueprintCompiler {
             var entity = entityFor(text(item.get("entity"), 80, null), entities);
             var kind = PAGE_KINDS.getOrDefault(Objects.toString(item.get("kind"), "custom").strip().toLowerCase(Locale.ROOT),
                     Blueprint.PageKind.CUSTOM);
-            if (kind.generated() && entity == null)
+            if (kind.generated() && entity == null) {
+                if (item.get("entity") != null) {
+                    later.add(text(item.get("title"), 60, Objects.toString(item.get("entity"))) + " page");
+                    continue;
+                }
                 kind = Blueprint.PageKind.CUSTOM;
+            }
             if (kind == Blueprint.PageKind.DETAIL) {
                 detailed.add(entity.name());
                 continue;
@@ -390,7 +406,7 @@ public final class BlueprintCompiler {
                 kind = Blueprint.PageKind.CUSTOM;
             else if (kind == Blueprint.PageKind.LIST && (path == null || path.contains(":")))
                 path = "/" + Blueprint.kebab(entity.plural());
-            if (path == null || ApprovedProductScope.signInRoute(path))
+            if (path == null || ApprovedProductScope.signInRoute(path) || path.equals(Blueprint.ACCOUNT_PATH))
                 continue;
             String fallback = kind == Blueprint.PageKind.LIST ? entity.pluralLabel()
                     : path.equals("/") ? "Home" : Blueprint.words(identifierWords(path));
@@ -440,6 +456,55 @@ public final class BlueprintCompiler {
         String wanted = identifierWords(text).toLowerCase(Locale.ROOT);
         return entities.stream().filter(entity -> entity.name().toLowerCase(Locale.ROOT).equals(wanted)
                 || entity.plural().toLowerCase(Locale.ROOT).equals(wanted)).findFirst().orElse(null);
+    }
+
+    private static final List<Map.Entry<String, String>> ICON_HINTS = List.of(
+            Map.entry("task|todo|chore|checklist", "ListTodo"), Map.entry("habit|plant|garden", "Sprout"),
+            Map.entry("note|memo", "StickyNote"), Map.entry("deal|opportunit", "Handshake"),
+            Map.entry("company|organi[sz]ation|business|vendor|supplier|firm", "Building2"),
+            Map.entry("invoice|bill|payment|expense|transaction", "Receipt"), Map.entry("budget|wallet|saving|finance", "Wallet"),
+            Map.entry("order|cart|purchase", "ShoppingCart"), Map.entry("product|item|inventory|stock|sku", "Package"),
+            Map.entry("event|meeting|appointment|booking|schedule|session|calendar", "CalendarDays"),
+            Map.entry("score|leaderboard|rank|award|achievement|trophy", "Trophy"), Map.entry("level|maze|map|world|stage|quest", "Map"),
+            Map.entry("game|play", "Gamepad2"), Map.entry("post|article|blog|news|story", "Newspaper"),
+            Map.entry("comment|message|chat|review|feedback", "MessageSquare"), Map.entry("recipe|meal|food|dish|menu|kitchen", "ChefHat"),
+            Map.entry("workout|exercise|fitness|gym", "Dumbbell"), Map.entry("book|course|lesson|class|quiz", "BookOpen"),
+            Map.entry("project|campaign|goal|okr|milestone", "Target"), Map.entry("ticket|issue|bug|incident|support", "Ticket"),
+            Map.entry("file|document|report|doc", "FileText"), Map.entry("photo|image|gallery|album", "Image"),
+            Map.entry("song|music|track|playlist", "Music"), Map.entry("trip|travel|flight", "Plane"),
+            Map.entry("pet|animal|dog|cat", "PawPrint"), Map.entry("job|position|hire|candidate|career", "Briefcase"),
+            Map.entry("store|shop|seller|market", "Store"), Map.entry("shipment|delivery|shipping", "Truck"),
+            Map.entry("video|movie|film", "Film"), Map.entry("category|tag|label", "Tag"), Map.entry("activit|log|history", "Activity"),
+            Map.entry("team|group|club", "Users"),
+            Map.entry("contact|customer|client|lead|person|people|member|user|player|student|patient|employee|profile", "User"));
+    private static final List<Map.Entry<String, String>> TONE_HINTS = List.of(
+            Map.entry("done|complete|completed|won|active|published|paid|approved|easy|resolved|delivered|healthy|success|live|yes|in stock", "success"),
+            Map.entry("pending|in progress|in-progress|medium|draft|review|waiting|scheduled|on hold|normal|processing|trial|low stock", "warning"),
+            Map.entry("lost|cancell?ed|failed|hard|overdue|blocked|urgent|high|critical|rejected|expired|out of stock|refunded", "danger"),
+            Map.entry("new|todo|to do|backlog|low|archived|inactive|closed|paused|none|no", "neutral"));
+
+    static String iconFor(String text, String fallback) {
+        String words = String.join(" ", text.replaceAll("([a-z0-9])([A-Z])", "$1 $2").toLowerCase(Locale.ROOT).split("[^a-z0-9]+"));
+        for (var hint : ICON_HINTS)
+            if (Pattern.compile("\\b(?:" + hint.getKey() + ")").matcher(words).find())
+                return hint.getValue();
+        return fallback;
+    }
+
+    private static Map<String, String> tones(List<String> options, Object proposed) {
+        var tones = new LinkedHashMap<String, String>();
+        var given = map(proposed);
+        for (String option : options) {
+            String wanted = text(given.get(option), 20, "").toLowerCase(Locale.ROOT);
+            if (Blueprint.TONES.contains(wanted)) {
+                tones.put(option, wanted);
+                continue;
+            }
+            String plain = option.toLowerCase(Locale.ROOT).replace('_', ' ').strip();
+            tones.put(option, TONE_HINTS.stream().filter(hint -> plain.matches("(?:" + hint.getKey() + ")")).map(Map.Entry::getValue)
+                    .findFirst().orElse("accent"));
+        }
+        return tones;
     }
 
     private static Blueprint.Access access(String text) {
@@ -531,7 +596,7 @@ public final class BlueprintCompiler {
 
     private static Map<String, Blueprint.Kind> kinds() {
         var kinds = new HashMap<String, Blueprint.Kind>();
-        for (String alias : List.of("string", "str", "short", "title", "name", "email", "url", "link", "phone", "image", "color"))
+        for (String alias : List.of("string", "str", "short", "title", "name", "email", "url", "link", "phone", "color"))
             kinds.put(alias, Blueprint.Kind.STRING);
         for (String alias : List.of("text", "longtext", "long_text", "textarea", "description", "markdown", "richtext", "notes"))
             kinds.put(alias, Blueprint.Kind.TEXT);
@@ -541,6 +606,8 @@ public final class BlueprintCompiler {
             kinds.put(alias, Blueprint.Kind.BOOLEAN);
         for (String alias : List.of("date", "datetime", "timestamp", "time", "day"))
             kinds.put(alias, Blueprint.Kind.DATE);
+        for (String alias : List.of("image", "photo", "picture", "avatar", "thumbnail", "cover", "logo", "image_url", "imageurl"))
+            kinds.put(alias, Blueprint.Kind.IMAGE);
         for (String alias : List.of("enum", "select", "choice", "status", "options", "category", "tag"))
             kinds.put(alias, Blueprint.Kind.ENUM);
         return Map.copyOf(kinds);

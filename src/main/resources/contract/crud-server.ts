@@ -1,10 +1,10 @@
 import { Router, type RequestHandler, type Response } from 'express'
 
-export type FieldKind = 'string' | 'text' | 'number' | 'boolean' | 'date' | 'enum'
+export type FieldKind = 'string' | 'text' | 'number' | 'boolean' | 'date' | 'enum' | 'image'
 export type FieldSpec = { name: string; kind: FieldKind; required: boolean; options?: string[] }
 export type EntitySpec = { display: string; fields: FieldSpec[]; search: string[]; filter?: string }
 
-const LENGTH: Record<FieldKind, number> = { string: 200, text: 5000, number: 0, boolean: 0, date: 10, enum: 40 }
+const LENGTH: Record<FieldKind, number> = { string: 200, text: 5000, number: 0, boolean: 0, date: 10, enum: 40, image: 2000 }
 
 class InvalidInput extends Error {
   readonly status = 400
@@ -35,6 +35,10 @@ function parse(field: FieldSpec, raw: unknown): unknown {
     if (typeof raw !== 'string' || !(field.options ?? []).includes(raw))
       throw new InvalidInput(`${field.name} must be one of: ${(field.options ?? []).join(', ')}`)
     return raw
+  }
+  if (field.kind === 'image') {
+    if (typeof raw !== 'string' || raw.length > LENGTH.image || !/^https?:\/\/\S+$/i.test(raw.trim())) throw new InvalidInput(`${field.name} must be a web address starting with https://`)
+    return raw.trim()
   }
   if (typeof raw !== 'string' && typeof raw !== 'number') throw new InvalidInput(`${field.name} must be text`)
   const text = String(raw).trim()

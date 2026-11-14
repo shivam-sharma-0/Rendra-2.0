@@ -103,6 +103,27 @@ authRouter.get('/me',requireAccount,async(req: AccountRequest,res)=>{
     res.json({userId:req.accountId,email:user.email,role:user.role==='admin'?'admin':'member'})
   } catch {res.status(503).json({error:'Account unavailable'})}
 })
+authRouter.post('/password',requireAccount,async(req: AccountRequest,res)=>{
+  const current=typeof req.body?.current==='string'?req.body.current:''
+  const next=typeof req.body?.next==='string'?req.body.next:''
+  if(next.length<8 || next.length>1024 || current.length>1024){res.status(400).json({error:'Use at least 8 characters'});return}
+  try {
+    const user=await User.findById(req.accountId).lean()
+    if(!user || typeof user.salt!=='string' || typeof user.passwordHash!=='string'){res.status(401).json({error:'Sign in required'});return}
+    const actual=await scrypt(current,user.salt,64) as Buffer
+    const expected=Buffer.from(user.passwordHash,'hex')
+    if(expected.length!==actual.length || !timingSafeEqual(expected,actual)){res.status(403).json({error:'Current password is wrong'});return}
+    const salt=randomBytes(16).toString('hex'), hash=await scrypt(next,salt,64) as Buffer
+    await User.updateOne({_id:user._id},{salt,passwordHash:hash.toString('hex')})
+    res.json({ok:true})
+  } catch {res.status(503).json({error:'Account unavailable'})}
+})
+authRouter.get('/users',requireAccount,requireAdmin,async(_req: AccountRequest,res)=>{
+  try {
+    const users=await User.find().select('email role').sort({_id:1}).limit(200).lean()
+    res.json(users.map(user=>({id:String(user._id),email:user.email,role:user.role==='admin'?'admin':'member'})))
+  } catch {res.status(503).json({error:'Account unavailable'})}
+})
 authRouter.post('/admins',requireAccount,requireAdmin,async(req: AccountRequest,res)=>{
   const email=typeof req.body?.email==='string'?req.body.email.trim().toLowerCase():''
   if(!/^[^\s@]{1,120}@[^\s@]{1,120}\.[^\s@]{1,30}$/.test(email)){res.status(400).json({error:'Invalid email'});return}

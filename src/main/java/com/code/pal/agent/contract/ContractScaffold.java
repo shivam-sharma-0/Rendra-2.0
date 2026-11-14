@@ -56,10 +56,13 @@ public final class ContractScaffold {
     }
 
     static boolean platformPage(BuildContract c, String componentPath) {
+        return signInPage(c, componentPath) || CrudScaffold.generated(c, componentPath);
+    }
+
+    static boolean signInPage(BuildContract c, String componentPath) {
         return c.stack() == BuildContract.Stack.MERN && c.auth() == BuildDecisions.Auth.ACCOUNTS
                 && c.routes().stream().anyMatch(route -> route.componentPath().equals(componentPath)
-                        && ApprovedProductScope.signInRoute(route.path()))
-                || CrudScaffold.generated(c, componentPath);
+                        && ApprovedProductScope.signInRoute(route.path()));
     }
 
     public Map<String, String> render(BuildContract c, String title, Function<String, String> existing, UUID projectId) {
@@ -129,30 +132,38 @@ public final class ContractScaffold {
             var route = c.routes().get(i);
             routes.append("import Route").append(i).append(" from ")
                     .append(json(relative(root, route.componentPath(), true))).append("\n");
-            if (accounts && platformPage(c, route.componentPath()))
+            if (accounts && signInPage(c, route.componentPath()))
                 out.put(route.componentPath(), "export { default } from " + json(relative(
                         route.componentPath().substring(0, route.componentPath().lastIndexOf('/') + 1), root + "AccountPage", true)) + "\n");
             else if (existing.apply(route.componentPath()) == null)
                 out.put(route.componentPath(), "export default function PendingRoute() { return null }\n");
         }
-        routes.append("export const routes: {path: string; component: ComponentType<{params: Record<string,string>}>}[] = [\n");
+        routes.append("export const routes: {path: string; component: ComponentType<{params: Record<string,string>}>; hidden?: boolean}[] = [\n");
         for (int i = 0; i < c.routes().size(); i++)
             routes.append("{path:").append(json(c.routes().get(i).path())).append(",component: Route").append(i)
-                    .append("},\n");
+                    .append(CrudScaffold.hidden(c, c.routes().get(i)) ? ",hidden: true" : "").append("},\n");
         out.put(root + "routes.ts", routes.append("]\n").toString());
         String app = c.stack() == BuildContract.Stack.MERN ? "client/src/App.tsx" : "src/App.tsx";
         if (existing.apply(app) == null && !c.ownership().containsKey(app) && !c.routes().isEmpty()) {
             String directory = app.substring(0, app.lastIndexOf('/') + 1);
             String signIn = c.routes().stream().map(BuildContract.Route::path).filter(ApprovedProductScope::signInRoute)
                     .filter(path -> !path.contains(":")).findFirst().orElse("/login");
+            String accountPage = c.routes().stream().filter(route -> CrudScaffold.hidden(c, route)).map(route -> "#" + route.path())
+                    .findFirst().map(this::json).orElse("null");
             String accountMenu = accounts
                     ? "import { auth, useSession } from " + json(relative(directory, root + "auth-client", true)) + "\n"
-                            + resource("contract/account-menu.tsx").replace("{{signIn}}", "#" + signIn)
+                            + resource("contract/account-menu.tsx").replace("{{signIn}}", "#" + signIn).replace("{{accountPage}}", accountPage)
                     : "function AccountMenu() { return null }\n";
+            String kit = directory + "kit/index.ts";
+            boolean kitted = existing.apply(kit) != null || out.containsKey(kit);
+            String shell = kitted ? "import { Toaster } from './kit'\n" : "function Toaster() { return null }\n";
+            shell += kitted && c.blueprint() != null
+                    ? "import { " + c.blueprint().icon() + " as AppMark } from 'lucide-react'\nconst APP_MARK = <AppMark size={18} strokeWidth={2.4} />\n"
+                    : "const APP_MARK = null\n";
             out.put(app, "import " + json(relative(directory, root + "theme.css", true)) + "\nimport { routes } from "
                     + json(relative(directory, root + "routes.ts", true))
                     + "\nconst APP_NAME = " + json(title == null || title.isBlank() ? "App" : title.strip())
-                    + "\n" + resource("contract/hash-app.tsx") + accountMenu);
+                    + "\n" + shell + resource("contract/hash-app.tsx") + accountMenu);
         }
         if (existing.apply(app) == null && !out.containsKey(app))
             out.put(app, "export default function PendingApp() { return null }\n");

@@ -1,6 +1,7 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
+import { CircleAlert, CircleCheck, Info, TriangleAlert, X } from 'lucide-react'
 
-type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
+export type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
 
 export function Badge({ tone = 'neutral', children }: { tone?: Tone; children?: ReactNode }) {
   return <span className={`app-badge app-badge--${tone}`}>{children}</span>
@@ -62,4 +63,44 @@ export function Modal({ open, title, onClose, children, actions }: {
     <div className="app-stack">{children}</div>
     {actions && <div className="app-modal__actions">{actions}</div>}
   </dialog>
+}
+
+type ToastItem = { id: number; tone: Tone; message: ReactNode }
+let toasts: ToastItem[] = []
+let lastToast = 0
+const toastListeners = new Set<() => void>()
+const announce = () => toastListeners.forEach(listener => listener())
+
+export function dismissToast(id: number) {
+  toasts = toasts.filter(item => item.id !== id)
+  announce()
+}
+
+export function toast(message: ReactNode, tone: Tone = 'success') {
+  const id = ++lastToast
+  toasts = [...toasts.slice(-2), { id, tone, message }]
+  announce()
+  window.setTimeout(() => dismissToast(id), 4000)
+  return id
+}
+
+function subscribeToasts(listener: () => void) {
+  toastListeners.add(listener)
+  return () => { toastListeners.delete(listener) }
+}
+
+const TOAST_ICONS = { neutral: Info, accent: Info, success: CircleCheck, warning: TriangleAlert, danger: CircleAlert }
+
+export function Toaster() {
+  const items = useSyncExternalStore(subscribeToasts, () => toasts, () => toasts)
+  return <div className="app-toaster" aria-live="polite">
+    {items.map(item => {
+      const Icon = TOAST_ICONS[item.tone]
+      return <div key={item.id} className={`app-toast app-toast--${item.tone}`} role={item.tone === 'danger' ? 'alert' : 'status'}>
+        <Icon size={18} aria-hidden="true" />
+        <span>{item.message}</span>
+        <button type="button" className="app-toast__close" aria-label="Dismiss" onClick={() => dismissToast(item.id)}><X size={16} /></button>
+      </div>
+    })}
+  </div>
 }

@@ -5,6 +5,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.util.*;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 final class CrudScaffold {
     private final ObjectMapper mapper;
@@ -15,8 +16,13 @@ final class CrudScaffold {
 
     static boolean generated(BuildContract c, String path) {
         return c.blueprint() != null && c.units().stream()
-                .filter(unit -> c.blueprint().entities().stream().anyMatch(entity -> unit.id().equals(BlueprintCompiler.crudUnit(entity))))
+                .filter(unit -> unit.id().equals(BlueprintCompiler.ACCOUNT_UNIT)
+                        || c.blueprint().entities().stream().anyMatch(entity -> unit.id().equals(BlueprintCompiler.crudUnit(entity))))
                 .anyMatch(unit -> unit.ownedPaths().contains(path));
+    }
+
+    static boolean hidden(BuildContract c, BuildContract.Route route) {
+        return c.blueprint() != null && route.owner().equals(BlueprintCompiler.ACCOUNT_UNIT) && !ApprovedProductScope.signInRoute(route.path());
     }
 
     Map<String, String> render(BuildContract c, UUID projectId, Function<String, String> existing) {
@@ -25,14 +31,23 @@ final class CrudScaffold {
         if (blueprint == null)
             return out;
         boolean mern = c.stack() == BuildContract.Stack.MERN;
-        String root = c.clientRoot(), kit = (mern ? "client/src/" : "src/") + "kit/index.ts";
-        out.put(root + "crud.tsx", ContractScaffold.resource("contract/crud.tsx").replace("{{kit}}", ContractScaffold.relative(root, kit, true)));
+        String root = c.clientRoot(), kit = ContractScaffold.relative(root, (mern ? "client/src/" : "src/") + "kit/index.ts", true);
+        out.put(root + "crud.tsx", ContractScaffold.resource("contract/crud.tsx").replace("{{kit}}", kit));
         out.put(root + "entities.ts", clientEntities(c, projectId));
         if (!mern)
             out.put(root + "local-store.ts", ContractScaffold.resource("contract/local-store.ts"));
         if (mern) {
             out.put(c.serverRoot() + "crud.ts", ContractScaffold.resource("contract/crud-server.ts"));
             out.put(c.serverRoot() + "entities.ts", serverEntities(blueprint));
+        }
+        if (c.auth() == BuildDecisions.Auth.ACCOUNTS) {
+            out.put(root + "ProfilePage.tsx", ContractScaffold.resource("contract/ProfilePage.tsx").replace("{{kit}}", kit));
+            for (var route : c.routes())
+                if (hidden(c, route)) {
+                    String directory = route.componentPath().substring(0, route.componentPath().lastIndexOf('/') + 1);
+                    fresh(out, existing, route.componentPath(), "export { default } from "
+                            + json(ContractScaffold.relative(directory, root + "ProfilePage.tsx", true)) + "\n");
+                }
         }
         for (var entity : blueprint.entities()) {
             if (mern)
@@ -76,8 +91,8 @@ final class CrudScaffold {
                 }).append(", required: ").append(field.required());
                 if (field.kind() == Blueprint.Kind.ENUM)
                     b.append(", enum: ").append(mapper.writeValueAsString(field.options()));
-                if (field.textual())
-                    b.append(", maxlength: ").append(field.kind() == Blueprint.Kind.TEXT ? 5000 : 200);
+                if (field.textual() || field.kind() == Blueprint.Kind.IMAGE)
+                    b.append(", maxlength: ").append(field.kind() == Blueprint.Kind.TEXT ? 5000 : field.kind() == Blueprint.Kind.IMAGE ? 2000 : 200);
                 b.append(" },\n");
             }
             if (owned == null)
@@ -120,6 +135,8 @@ final class CrudScaffold {
         boolean mern = c.stack() == BuildContract.Stack.MERN, accounts = c.auth() == BuildDecisions.Auth.ACCOUNTS;
         var b = new StringBuilder("import type * as Types from './types'\nimport type { EntitySpec } from './crud'\n");
         b.append(mern ? "import { api } from './api'\n" : "import { localStore } from './local-store'\n");
+        b.append("import { ").append(blueprint.entities().stream().map(entity -> entity.icon() + " as " + entity.name() + "Icon")
+                .collect(Collectors.joining(", "))).append(" } from 'lucide-react'\n");
         if (accounts)
             b.append("import { auth } from './auth-client'\n");
         for (var entity : blueprint.entities()) {
@@ -129,6 +146,8 @@ final class CrudScaffold {
                     .append("  label: ").append(json(entity.label())).append(",\n")
                     .append("  pluralLabel: ").append(json(entity.pluralLabel())).append(",\n")
                     .append("  plural: ").append(json(entity.plural())).append(",\n")
+                    .append("  icon: ").append(entity.name()).append("Icon,\n")
+                    .append("  layout: ").append(json(entity.layout())).append(",\n")
                     .append("  recordPath: ").append(json(detail.substring(0, detail.length() - "/:id".length()))).append(",\n");
             if (list != null)
                 b.append("  listPath: ").append(json(list)).append(",\n");
@@ -136,7 +155,8 @@ final class CrudScaffold {
             for (var field : entity.fields())
                 b.append("    { name: ").append(json(field.name())).append(", label: ").append(json(Blueprint.words(field.name())))
                         .append(", kind: ").append(json(kind(field))).append(", required: ").append(field.required())
-                        .append(field.options().isEmpty() ? "" : ", options: " + mapper.writeValueAsString(field.options())).append(" },\n");
+                        .append(field.options().isEmpty() ? "" : ", options: " + mapper.writeValueAsString(field.options()))
+                        .append(field.tones().isEmpty() ? "" : ", tones: " + mapper.writeValueAsString(field.tones())).append(" },\n");
             b.append("  ],\n  search: ").append(!entity.search().isEmpty()).append(",\n");
             if (entity.filter() != null)
                 b.append("  filter: ").append(json(entity.filter())).append(",\n");

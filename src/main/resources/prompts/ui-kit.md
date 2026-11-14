@@ -9,11 +9,15 @@ src/pages imports from '../kit'. Every component follows the theme preset, so ne
   Tabs{tabs:[{value,label}],value,onChange,label?}
 - Feedback: Badge{tone?:'neutral'|'accent'|'success'|'warning'|'danger'} · Notice{tone?,title?,children} ·
   EmptyState{icon?,title,description?,action?} · Skeleton{lines?} · Spinner{label?} · ProgressBar{value,max?,label?} ·
-  Modal{open,title,onClose,actions?,children}
+  Modal{open,title,onClose,actions?,children} · toast(message, tone?) shows a confirmation; the app shell already renders Toaster
 - Data: DataTable{columns:[{key,header,render?,align?}],rows,rowKey,empty?,onRowClick?} · RankList{entries:[{id,name,score,detail?,highlight?}],empty?} ·
   Avatar{name,src?,size?}
-Classes: app-stack, app-grid, app-card, app-muted, app-eyebrow, app-lead, app-actions, app-fade-in. Kit inputs and buttons
+Icons (when package.json lists lucide-react): import named icons from 'lucide-react' (e.g. Plus, Trophy, CalendarDays); put one in every
+button that acts, every stat and every empty state, inside .app-icon-tile for a coloured square. Tones: wrap in .app-tone--success|warning|danger|neutral.
+Classes: app-stack, app-grid, app-card, app-muted, app-eyebrow, app-lead, app-actions, app-fade-in, app-icon-tile, app-meta. Kit inputs and buttons
 pass through name, aria-* and data-* attributes, so required selectors still work.
+Generated record pages: entities.ts exports one spec per record type; render RecordList{spec,title?,description?} or link to
+its pages instead of rebuilding lists, and read data through spec.source (list, get, create, update, remove).
 Design: open each main page with a Hero or PageHeader, show numbers as Stat cards, lists as Cards, DataTable or RankList,
 and give every list an EmptyState and a Skeleton while loading. Write CSS only for what the kit lacks (a game board,
 a chart, an illustration), using var(--app-accent|surface|surface-2|text|muted|border|radius|shadow), never fixed colours.

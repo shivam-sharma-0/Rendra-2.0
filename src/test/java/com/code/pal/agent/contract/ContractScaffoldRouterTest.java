@@ -31,7 +31,7 @@ class ContractScaffoldRouterTest {
         assertTrue(app.contains("window.location.hash"));
         assertTrue(app.contains("<HashRouter>") && app.contains("<Routes>"), "Use the preinstalled reactive hash router");
         // The shell names the app and links the plain pages (2026-10-29 review: pages had no header or navigation).
-        assertTrue(app.contains("const APP_NAME = \"Fixture\"") && app.contains("className=\"app-brand\">{APP_NAME}"));
+        assertTrue(app.contains("const APP_NAME = \"Fixture\"") && app.contains("className=\"app-brand\">") && app.contains("{APP_NAME}</Link>"));
         assertTrue(app.contains("className=\"app-nav\"") && app.contains("!route.path.includes(':')"));
         assertTrue(app.contains("useParams()"), "Keep dynamic route params available to generated pages");
         assertTrue(app.contains("replaceState"), "The initial home hash must replace history, not add a duplicate entry");

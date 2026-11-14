@@ -62,24 +62,54 @@ class BlueprintCompilerTest {
         assertTrue(files.get(contract.clientRoot() + "api.ts").contains("listLevels: (params: Record<string,string> = {}, body?: undefined, token?: string, query?: Record<string, string>)"));
         assertEquals("export default function PendingRoute() { return null }\n", files.get("client/src/pages/PlayPage.tsx"));
         assertTrue(files.get("client/src/pages/LevelListPage.tsx").contains("<RecordList spec={levels} title={\"Levels\"} />"));
+        assertEquals("Map", blueprint.icon());
+        assertEquals("Map", level.icon());
+        assertEquals(Map.of("easy", "success", "hard", "danger"), level.field("difficulty").tones());
+        assertTrue(files.get(contract.clientRoot() + "entities.ts").contains("import { Map as LevelIcon, Trophy as ScoreIcon } from 'lucide-react'"));
+        assertTrue(files.get(contract.clientRoot() + "routes.ts").contains("{path:\"/account\",component: Route6,hidden: true}"),
+                files.get(contract.clientRoot() + "routes.ts"));
+        assertTrue(files.get("client/src/pages/AccountSettingsPage.tsx").contains("ProfilePage"));
+        assertTrue(files.get("client/src/App.tsx").contains("import { Map as AppMark } from 'lucide-react'"));
+        var retry = new ContractScaffold(MAPPER).render(contract, blueprint.name(), files::get, UUID.randomUUID());
+        assertFalse(retry.containsKey("client/src/pages/LevelListPage.tsx"));
+        assertFalse(retry.containsKey("client/src/pages/AccountSettingsPage.tsx"));
         export("shadow-maze", files, contract);
     }
 
     @Test
     void largestCrmBlueprintFitsEveryContractBound() throws Exception {
-        var entities = new ArrayList<Map<String, Object>>();
-        var pages = new ArrayList<Map<String, Object>>();
-        for (String name : List.of("Contact", "Company", "Deal", "Activity", "Task", "Note", "Invoice")) {
-            entities.add(Map.of("name", name, "fields", List.of(Map.of("name", "name", "kind", "string", "required", true),
-                    Map.of("name", "stage", "kind", "enum", "options", List.of("new", "active", "closed")),
-                    Map.of("name", "value", "kind", "number"), Map.of("name", "due", "kind", "date"), Map.of("name", "notes", "kind", "text"))));
-            pages.add(Map.of("path", "/" + name.toLowerCase(Locale.ROOT), "kind", "list", "entity", name));
-        }
-        for (String title : List.of("Home", "Dashboard", "Reports", "Settings", "Pipeline", "Calendar"))
-            pages.add(Map.of("path", title.equals("Home") ? "/" : "/" + title.toLowerCase(Locale.ROOT), "title", title, "kind", title.toLowerCase(Locale.ROOT)));
-        var blueprint = BlueprintCompiler.normalize(Map.of("name", "Pipeline CRM", "preset", "corporate", "entities", entities, "pages", pages));
+        var blueprint = BlueprintCompiler.normalize(json("""
+                {"name":"Pipeline CRM","preset":"corporate","accent":"#2563eb",
+                 "entities":[
+                  {"name":"Deal","access":"shared","fields":[{"name":"title","required":true},{"name":"company"},
+                    {"name":"stage","options":["lead","qualified","proposal","won","lost"],"required":true},{"name":"value","kind":"currency"},
+                    {"name":"closeDate","kind":"date"},{"name":"notes","kind":"text"}],"filter":"stage","search":["title","company"]},
+                  {"name":"Contact","fields":[{"name":"fullName","required":true},{"name":"email","kind":"email"},{"name":"phone"},
+                    {"name":"company"},{"name":"status","options":["new","active","inactive"]},{"name":"photo","kind":"image","required":true}]},
+                  {"name":"Company","plural":"companies","fields":[{"name":"name","required":true},{"name":"industry","options":["software","retail","health","finance"]},
+                    {"name":"employees","kind":"number"},{"name":"website","kind":"url"}]},
+                  {"name":"Activity","fields":[{"name":"subject","required":true},{"name":"type","options":["call","email","meeting"]},
+                    {"name":"due","kind":"date"},{"name":"done","kind":"boolean"}]},
+                  {"name":"Task","fields":[{"name":"title","required":true},{"name":"priority","options":["low","medium","high","urgent"]},
+                    {"name":"dueDate","kind":"date"},{"name":"completed","kind":"boolean"},{"name":"details","kind":"text"}]},
+                  {"name":"Note","fields":[{"name":"title","required":true},{"name":"body","kind":"text"}]},
+                  {"name":"Invoice","fields":[{"name":"number","required":true},{"name":"amount","kind":"money"}]}],
+                 "pages":[{"path":"/","title":"Dashboard","kind":"dashboard"},
+                  {"path":"/deals","kind":"list","entity":"Deal","title":"Deals","description":"Every opportunity from first call to signature."},
+                  {"path":"/contacts","kind":"list","entity":"Contact"},{"path":"/companies","kind":"list","entity":"Company"},
+                  {"path":"/activities","kind":"list","entity":"Activity"},{"path":"/tasks","kind":"list","entity":"Task"},
+                  {"path":"/notes","kind":"list","entity":"Note"},{"path":"/invoices","kind":"list","entity":"Invoice","title":"Invoices"},
+                  {"path":"/reports","title":"Reports","kind":"stats"},{"path":"/settings","title":"Settings","kind":"settings"},
+                  {"path":"/pipeline","title":"Pipeline","kind":"custom"},{"path":"/calendar","title":"Calendar","kind":"custom"},
+                  {"path":"/inbox","title":"Inbox","kind":"custom"}]}
+                """));
         assertEquals(Blueprint.ENTITIES, blueprint.entities().size());
-        assertTrue(blueprint.later().contains("Manage invoices") && blueprint.later().contains("Calendar page"), blueprint.later().toString());
+        assertTrue(blueprint.later().containsAll(List.of("Manage invoices", "Invoices page", "Inbox page")), blueprint.later().toString());
+        assertEquals(List.of("Handshake", "User", "Building2", "Activity", "ListTodo", "StickyNote"),
+                blueprint.entities().stream().map(Blueprint.Entity::icon).toList());
+        assertEquals(Map.of("lead", "accent", "qualified", "accent", "proposal", "accent", "won", "success", "lost", "danger"),
+                blueprint.entity("Deal").field("stage").tones());
+        assertFalse(blueprint.entity("Contact").field("photo").required());
         var contract = BlueprintCompiler.compile(blueprint, UUID.randomUUID(), ACCOUNTS, LIMITS);
         assertEquals(30, contract.api().size());
         assertEquals(12, contract.units().size());
