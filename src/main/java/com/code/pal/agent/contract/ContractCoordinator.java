@@ -182,6 +182,19 @@ public final class ContractCoordinator {
                 stored = store.attach(run, reuse, allowed);
             }
         }
+        boolean retryDraft = false;
+        if (stored == null && run.getMode() == ProjectType.BUILD && run.getRetrySourceRunId() != null) {
+            var source = store.forRun(ctx.projectId(), run.getRetrySourceRunId());
+            if (source != null && "APPROVED".equals(source.state()) && source.binding().equals(basis)
+                    && source.contract().limits().within(allowed) && source.contract().schemaVersion() == 1) {
+                stored = store.attach(run, source, allowed);
+                retryDraft = true;
+                log.info("retry_contract_reused runId={} source={} contract={}", run.getId(), run.getRetrySourceRunId(),
+                        source.contract().id());
+            } else {
+                log.info("retry_contract_replanned runId={} source={}", run.getId(), run.getRetrySourceRunId());
+            }
+        }
         if (stored == null) {
             activity.accept("Planning implementation");
             var choice = decisions.state(ctx.projectId()).choice();
@@ -230,6 +243,10 @@ public final class ContractCoordinator {
         checkpoints.restrict(run, c.limits(), size);
         ctx.plan().revise(c.waves().stream().flatMap(List::stream).map(BuildContract.Unit::objective).toList(),
                 "Approved immutable build contract");
+        Set<String> drafted = retryDraft ? Set.copyOf(changes.view(ctx).touchedPaths()) : Set.of();
+        if (retryDraft)
+            log.info("retry_draft_units_kept runId={} kept={}", run.getId(), c.units().stream()
+                    .filter(unit -> drafted.containsAll(unit.ownedPaths())).map(BuildContract.Unit::id).toList());
         beforeIo.run();
         activity.accept("Preparing shared interfaces");
         Map<String, String> common = render(ctx, c);
@@ -259,7 +276,9 @@ public final class ContractCoordinator {
                 .map(id -> c.units().stream().filter(unit -> unit.id().equals(id)).findFirst().orElseThrow()).toList()).toList() : c.waves();
         for (int waveIndex = 0; waveIndex < executionWaves.size(); waveIndex++) {
             var wave = c.schemaVersion() == 1 ? executionWaves.get(waveIndex).stream()
-                    .filter(unit -> !unit.ownedPaths().stream().allMatch(path -> ContractScaffold.platformPage(c, path))).toList()
+                    .filter(unit -> !unit.ownedPaths().stream().allMatch(path -> ContractScaffold.platformPage(c, path)))
+                    .filter(unit -> drafted.isEmpty() || !drafted.containsAll(unit.ownedPaths()))
+                    .toList()
                     : executionWaves.get(waveIndex);
             if (wave.isEmpty())
                 continue;
