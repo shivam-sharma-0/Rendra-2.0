@@ -9,7 +9,8 @@ param(
     [switch]$StructuredContracts,
     [switch]$SmartEngine,
     [switch]$ClaudeCodeAll,
-    [string]$ClaudeCodeModel = 'sonnet',
+    [string]$ClaudeCodeModel = 'claude-sonnet-5-5',
+    [ValidateSet('low','medium','high')][string]$ClaudeCodeEffort = 'high',
     [string]$BenchmarkResultPath,
     [string]$BenchmarkCommit,
     [string]$VerificationDirectory,
@@ -150,7 +151,7 @@ END $codex$;
         Wsl-Check @('psql','-h','127.0.0.1','-p',"$pgPort",'-U','codepal_codex_it','-d',$taskId,'-w','-v','ON_ERROR_STOP=1','-c',$sanitizeCopy)
         $evidence.copiedApplicationRowsRemovedBeforeBoot = $true
         $evidence.modelPayload = 'Synthetic test prompts/history, fixture/generated source and platform prompts/tool schemas only; Phase Two also uses one synthetic pixel'
-        $evidence.modelDestinations = @('https://openrouter.ai/api/v1', 'https://api.mistral.ai/v1', 'https://integrate.api.nvidia.com/v1', 'https://api.groq.com/openai/v1') + @(if ($CodexRoute -or $CodexAll) { 'local Codex CLI (operator ChatGPT login)' })
+        $evidence.modelDestinations = @('https://openrouter.ai/api/v1', 'https://api.mistral.ai/v1', 'https://integrate.api.nvidia.com/v1', 'https://api.groq.com/openai/v1') + @(if ($CodexRoute -or $CodexAll) { 'local Codex CLI (operator ChatGPT login)' }) + @(if ($ClaudeCodeAll) { 'local Claude Code CLI (operator Claude login)' })
     }
     # Never execute copied active jobs or retain their live queue/outbox ownership.
     Wsl-Check @('psql','-h','127.0.0.1','-p',"$pgPort",'-U','codepal_codex_it','-d',$taskId,'-w','-c',"update agent_runs set status='FAILED' where status in ('RUNNING','QUEUED','COMMITTING');")
@@ -192,7 +193,9 @@ END $codex$;
     $appArgs+='--app.agent.deleted-project-sweep-ms=86400000'
     if($StructuredContracts){$appArgs+='--app.agent.structured-contracts=true'}
     if($SmartEngine){$appArgs+='--app.agent.engine=smart'}
-    if($ClaudeCodeAll){$appArgs+=@('--app.agent.dev.claude-code-all=true',('--app.agent.dev.claude-code-model=' + $ClaudeCodeModel))}
+    $appArgs+=('--app.agent.dev.claude-code-all=' + ([bool]$ClaudeCodeAll).ToString().ToLower())
+    if(-not $syntheticGate){$appArgs+=('--app.agent.dev.codex-all=' + ([bool]$CodexAll).ToString().ToLower())}
+    if($ClaudeCodeAll){$appArgs+=@(('--app.agent.dev.claude-code-model=' + $ClaudeCodeModel),('--app.agent.dev.claude-code-effort=' + $ClaudeCodeEffort))}
     if ($syntheticGate) {
         # Fixed known destinations and FREE routes; no environment override may select a paid/other provider.
         $planningFixture = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/planner-intake.json') -Raw | ConvertFrom-Json

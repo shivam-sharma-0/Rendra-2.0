@@ -371,7 +371,7 @@ public class AgentProperties implements EnvironmentAware {
         contextBudgetChars = Math.max(contextBudgetChars, dev.getCodexContextChars());
         largeRunTimeoutMs = Math.max(largeRunTimeoutMs, dev.getCodexLargeRunTimeoutMs());
         log.info("codex_everywhere routes={} effort={} contextChars={} largeRunTimeoutMs={}: every text route tries the developer CLI routes first, configured models remain fallbacks",
-                first, dev.getCodexReasoningEffort(), contextBudgetChars, largeRunTimeoutMs);
+                first, dev.isClaudeCodeAll() ? dev.getClaudeCodeEffort() : dev.getCodexReasoningEffort(), contextBudgetChars, largeRunTimeoutMs);
     }
 
     private static List<String> developerFirst(List<String> first, List<String> configured) {

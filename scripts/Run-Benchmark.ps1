@@ -4,8 +4,9 @@ param(
     [string]$OutputDirectory = '',
     [string[]]$Only = @(),
     [switch]$SmartEngine,
-    [switch]$ClaudeCode,
-    [string]$ClaudeCodeModel = 'sonnet'
+    [switch]$Codex,
+    [string]$ClaudeCodeModel = 'claude-sonnet-5-5',
+    [string]$ClaudeCodeEffort = 'high'
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -22,8 +23,9 @@ foreach ($case in $cases) {
     $before = @(Get-ChildItem -LiteralPath $evidenceRoot -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name)
     $failure = $null
     try {
-        & (Join-Path $PSScriptRoot 'Run-RealDevE2E.ps1') -Scenario mern -IsolatedClasses -CodexAll `
-            -VerificationDirectory (Join-Path $repo $VerificationDirectory) -PromptFile $promptFile -BenchmarkName $case.name -SmartEngine:$SmartEngine -ClaudeCodeAll:$ClaudeCode -ClaudeCodeModel $ClaudeCodeModel `
+        & (Join-Path $PSScriptRoot 'Run-RealDevE2E.ps1') -Scenario mern -IsolatedClasses -CodexAll:$Codex `
+            -VerificationDirectory (Join-Path $repo $VerificationDirectory) -PromptFile $promptFile -BenchmarkName $case.name -SmartEngine:$SmartEngine `
+            -ClaudeCodeAll:(-not $Codex) -ClaudeCodeModel $ClaudeCodeModel -ClaudeCodeEffort $ClaudeCodeEffort `
             *> (Join-Path $out ($case.name + '.log'))
     } catch { $failure = $_.Exception.Message }
     $evidence = Get-ChildItem -LiteralPath $evidenceRoot -Directory -ErrorAction SilentlyContinue |

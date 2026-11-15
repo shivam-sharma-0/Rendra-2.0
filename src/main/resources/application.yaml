@@ -167,7 +167,7 @@ app:
     engine: ${AGENT_ENGINE:contract}
     full-stack-contracts: ${AGENT_FULL_STACK_CONTRACTS:true}
     dev:
-      codex-all: ${AGENT_CODEX_ALL:true}
+      codex-all: ${AGENT_CODEX_ALL:false}
       codex-model: ${AGENT_CODEX_MODEL:gpt-5.6-sol}
       codex-enabled: ${AGENT_CODEX_ENABLED:false}
       codex-reasoning-effort: ${AGENT_CODEX_REASONING_EFFORT:medium}
@@ -175,10 +175,10 @@ app:
       planner-rejection-directory: ${AGENT_PLANNER_REJECTION_DIRECTORY:target/planner-rejections}
       codex-timeout-seconds: ${AGENT_CODEX_TIMEOUT_SECONDS:420}
       codex-context-chars: ${AGENT_CODEX_CONTEXT_CHARS:300000}
-      codex-large-run-timeout-ms: ${AGENT_CODEX_LARGE_RUN_TIMEOUT_MS:1800000}
-      claude-code-all: ${AGENT_CLAUDE_CODE_ALL:false}
-      claude-code-model: ${AGENT_CLAUDE_CODE_MODEL:sonnet}
-      claude-code-effort: ${AGENT_CLAUDE_CODE_EFFORT:medium}
+      codex-large-run-timeout-ms: ${AGENT_CODEX_LARGE_RUN_TIMEOUT_MS:2700000}
+      claude-code-all: ${AGENT_CLAUDE_CODE_ALL:true}
+      claude-code-model: ${AGENT_CLAUDE_CODE_MODEL:claude-sonnet-5-5}
+      claude-code-effort: ${AGENT_CLAUDE_CODE_EFFORT:high}
       claude-code-light-effort: ${AGENT_CLAUDE_CODE_LIGHT_EFFORT:low}
       claude-code-timeout-seconds: ${AGENT_CLAUDE_CODE_TIMEOUT_SECONDS:600}
     requirements:
