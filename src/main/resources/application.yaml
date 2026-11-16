@@ -76,7 +76,7 @@ spring:
         registration:
           google:
             # client-id is public (appears in the browser during the OAuth flow) â†’ safe to default.
-            client-id: ${GOOGLE_CLIENT_ID:350758092723-3qbbd44a1bh1nd9rmglftst6hadjlfvq.apps.googleusercontent.com}
+            client-id: ${GOOGLE_CLIENT_ID:26723876633-l7vf4tcjlpolbohtvl4thnu93mmuje9g.apps.googleusercontent.com}
             # SECRET â€” env-only, no default. Set GOOGLE_CLIENT_SECRET from a secret manager.
             # (A previously committed value has been removed; rotate it in the Google console.)
             client-secret: ${GOOGLE_CLIENT_SECRET:}
