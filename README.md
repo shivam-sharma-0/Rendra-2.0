@@ -6,7 +6,19 @@ Rendra is an AI application builder in the same space as Lovable, Bolt and v0, b
 
 > Status: active development, single-developer project. It runs end to end locally; it is not yet a hosted service. See the [roadmap](docs/ROADMAP.md).
 
-<!-- Rendra workspace screenshots: add docs/screenshots/rendra-*.png here -->
+![The Rendra workspace: the prompt on the left, and the live app it built running in the preview on the right](docs/screenshots/rendra-workspace-preview.jpg)
+
+*One prompt on the left. The finished, working app runs in a live preview on the right, in the same tab.*
+
+## A quick tour
+
+| Describe what you want | Follow every step of the build |
+|---|---|
+| ![Rendra home with the prompt box](docs/screenshots/rendra-home.png) | ![Build steps: planning, writing each page, checks and the home-page polish](docs/screenshots/rendra-build-steps.jpg) |
+
+| Read the generated code | Use the generated app in the preview |
+|---|---|
+| ![Code view with the generated client and server files](docs/screenshots/rendra-code.jpg) | ![A Snakes and Ladders game running inside the preview](docs/screenshots/rendra-preview-game.jpg) |
 
 ## Apps built by Rendra
 
